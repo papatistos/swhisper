@@ -1,0 +1,229 @@
+"""File conversion and management utilities."""
+
+import os
+import shutil
+import subprocess
+import soundfile as sf
+from typing import List, Tuple, Optional
+
+from .config import TranscriptionConfig
+
+
+class AudioConverter:
+    """Handle audio file format conversion."""
+    
+    def __init__(self, config: TranscriptionConfig):
+        self.config = config
+        self.supported_formats = ['.wav', '.m4a', '.mp3', '.mov', '.mp4', '.flac', '.aac', '.ogg']
+    
+    def convert_to_wav(self, input_path: str, output_path: str, target_sr: int = 16000) -> bool:
+        """Convert various audio/video formats to 16kHz mono WAV using ffmpeg."""
+        # Check if ffmpeg is available
+        if not shutil.which('ffmpeg'):
+            raise Exception("ffmpeg not found. Please install ffmpeg: brew install ffmpeg")
+        
+        try:
+            # Use ffmpeg to convert to 16kHz mono WAV
+            cmd = [
+                'ffmpeg',
+                '-i', input_path,           # Input file
+                '-ar', str(target_sr),      # Sample rate: 16000 Hz
+                '-ac', '1',                 # Channels: 1 (mono)
+                '-c:a', 'pcm_s16le',       # Codec: 16-bit PCM
+                '-y',                       # Overwrite output file
+                '-hide_banner',             # Suppress banner for cleaner logs
+                '-loglevel', 'error',       # Only show errors
+                output_path                 # Output file
+            ]
+            
+            # Run ffmpeg with a timeout to prevent hanging
+            result = subprocess.run(
+                cmd, 
+                capture_output=True, 
+                text=True, 
+                check=True,
+                timeout=300,  # 5-minute timeout
+                encoding='utf-8',
+                errors='replace'
+            )
+            return True
+            
+        except subprocess.TimeoutExpired as e:
+            print(f"❌ FFmpeg timed out converting '{os.path.basename(input_path)}'.")
+            print("   This often happens if the file is very large or not fully synced from cloud storage.")
+            print("   SOLUTION: In Finder, right-click the folder and select 'Always Keep on This Device', then retry.")
+            print(f"   FFmpeg stderr: {e.stderr or 'No output'}")
+            return False
+        except subprocess.CalledProcessError as e:
+            print(f"❌ FFmpeg failed to convert '{os.path.basename(input_path)}'. This could be due to a corrupt file or path issues.")
+            print(f"   FFmpeg stderr: {e.stderr}")
+            return False
+        except Exception as e:
+            print(f"❌ An unexpected error occurred during conversion: {e}")
+            return False
+    
+    def is_wav_ready(self, wav_path: str) -> bool:
+        """Check if WAV file is ready for processing (16kHz mono)."""
+        try:
+            with sf.SoundFile(wav_path) as f:
+                return f.samplerate == 16000 and f.channels == 1
+        except Exception:
+            return False
+
+
+class FileManager:
+    """Manage file discovery and organization."""
+    
+    def __init__(self, config: TranscriptionConfig):
+        self.config = config
+        self.converter = AudioConverter(config)
+    
+    def find_audio_files(self, audio_dir: str) -> List[str]:
+        """Find all supported audio/video files in directory."""
+        try:
+            files_in_dir = os.listdir(audio_dir)
+            
+            audio_files = []
+            for f in files_in_dir:
+                if any(f.lower().endswith(ext) for ext in self.converter.supported_formats):
+                    # Check if it has at least 4 alphabetic characters
+                    if sum(1 for char in f if char.isalpha()) >= 4:
+                        audio_files.append(f)
+            
+            return audio_files
+            
+        except FileNotFoundError:
+            print(f"Error: The directory '{audio_dir}' was not found.")
+            return []
+    
+    def find_and_convert_audio_files(self, audio_dir: str, output_dir: str) -> List[str]:
+        """Find audio files and convert them to WAV if needed."""
+        audio_files = self.find_audio_files(audio_dir)
+        print(f"Found {len(audio_files)} audio/video files")
+        
+        # Separate WAV files from non-WAV files
+        wav_files = [f for f in audio_files if f.lower().endswith('.wav')]
+        non_wav_files = [f for f in audio_files if not f.lower().endswith('.wav')]
+        
+        ready_wav_files = []
+        wav_files_to_convert = []
+        converted_files = []
+        
+        # Process existing WAV files
+        for wav_file in wav_files:
+            input_path = os.path.join(audio_dir, wav_file)
+            base_name = os.path.splitext(wav_file)[0]
+            
+            # Check if already processed
+            json_output = os.path.join(output_dir, f"{base_name}.json")
+            if os.path.exists(json_output):
+                print(f"  ⏩ {wav_file} (already processed)")
+                continue
+            
+            if self.converter.is_wav_ready(input_path):
+                ready_wav_files.append(wav_file)
+                print(f"  ✅ {wav_file} (ready)")
+            else:
+                wav_files_to_convert.append(wav_file)
+                print(f"  🔄 {wav_file} (needs format conversion)")
+        
+        # Check non-WAV files
+        non_wavs_to_convert = []
+        for audio_file in non_wav_files:
+            base_name = os.path.splitext(audio_file)[0]
+            json_output = os.path.join(output_dir, f"{base_name}.json")
+            
+            # Skip if already processed
+            if os.path.exists(json_output):
+                print(f"  ⏩ {audio_file} (already processed)")
+                continue
+                
+            non_wavs_to_convert.append(audio_file)
+            print(f"  🔄 {audio_file} (needs conversion to WAV)")
+        
+        # Smart conversion logic
+        total_available = len(ready_wav_files) + len(wav_files_to_convert) + len(non_wavs_to_convert)
+        files_needed = min(self.config.file_limit, total_available)
+        
+        print(f"\n📊 File Status Summary:")
+        print(f"   Ready WAV files: {len(ready_wav_files)}")
+        print(f"   WAV files needing format conversion: {len(wav_files_to_convert)}")
+        print(f"   Non-WAV files needing conversion: {len(non_wavs_to_convert)}")
+        print(f"   FILE_LIMIT: {self.config.file_limit}")
+        
+        final_wav_files = ready_wav_files.copy()
+        
+        if len(ready_wav_files) >= files_needed:
+            print(f"\n✨ Sufficient ready WAV files available")
+            final_wav_files = ready_wav_files[:files_needed]
+        else:
+            remaining_needed = files_needed - len(ready_wav_files)
+            print(f"\n🔄 Need to convert {remaining_needed} more files...")
+            
+            # Convert WAV format issues first (faster)
+            for wav_file in wav_files_to_convert[:remaining_needed]:
+                if self._convert_wav_file(audio_dir, wav_file):
+                    final_wav_files.append(wav_file)
+                    converted_files.append(wav_file)
+                    remaining_needed -= 1
+                    if remaining_needed <= 0:
+                        break
+            
+            # Convert non-WAV files if still needed
+            for audio_file in non_wavs_to_convert[:remaining_needed]:
+                if self._convert_non_wav_file(audio_dir, audio_file):
+                    base_name = os.path.splitext(audio_file)[0]
+                    wav_filename = f"{base_name}.wav"
+                    final_wav_files.append(wav_filename)
+                    converted_files.append(wav_filename)
+                    remaining_needed -= 1
+                    if remaining_needed <= 0:
+                        break
+        
+        # Remove duplicates while preserving order
+        final_wav_files = list(dict.fromkeys(final_wav_files))
+        
+        if converted_files:
+            print(f"\n📁 Converted {len(converted_files)} files:")
+            for f in converted_files:
+                print(f"  ✅ {f}")
+        
+        if not final_wav_files:
+            print(f"❌ No suitable audio files found or converted in '{audio_dir}'")
+            return []
+        
+        print(f"\n🎵 Ready to process {len(final_wav_files)} WAV files:")
+        for f in sorted(final_wav_files):
+            print(f"  - {f}")
+        
+        return final_wav_files
+    
+    def _convert_wav_file(self, audio_dir: str, wav_file: str) -> bool:
+        """Convert WAV file to correct format."""
+        input_path = os.path.join(audio_dir, wav_file)
+        output_path = input_path  # Overwrite the same file
+        print(f"🔄 Converting WAV format: {wav_file}")
+        
+        if self.converter.convert_to_wav(input_path, output_path):
+            print(f"  ✅ {wav_file} ✓ converted to 16kHz mono")
+            return True
+        else:
+            print(f"  ❌ {wav_file} failed format conversion")
+            return False
+    
+    def _convert_non_wav_file(self, audio_dir: str, audio_file: str) -> bool:
+        """Convert non-WAV file to WAV format."""
+        input_path = os.path.join(audio_dir, audio_file)
+        base_name = os.path.splitext(audio_file)[0]
+        wav_filename = f"{base_name}.wav"
+        wav_path = os.path.join(audio_dir, wav_filename)
+        
+        ext = os.path.splitext(audio_file)[1]
+        print(f"🔄 Converting {ext} to WAV: {audio_file}")
+        
+        if self.converter.convert_to_wav(input_path, wav_path):
+            print(f"  ✅ {audio_file} successfully converted to {wav_filename}")
+            return True
+        else:
+            print(f"  ❌ {audio_file} failed conversion")
+            return False

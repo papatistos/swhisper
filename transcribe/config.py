@@ -1,0 +1,117 @@
+"""Configuration settings for the transcription system."""
+
+import os
+from dataclasses import dataclass
+from typing import List, Optional, Dict, Any
+
+from path_settings import get_path_settings
+
+_PATH_SETTINGS = get_path_settings()
+
+DEFAULT_AUDIO_DIR = str(_PATH_SETTINGS.audio_dir) if _PATH_SETTINGS.audio_dir else os.getenv(
+    "TRANSCRIBE_AUDIO_DIR", "audio"
+)
+DEFAULT_TEMP_DIR = str(_PATH_SETTINGS.temp_dir) if _PATH_SETTINGS.temp_dir else os.getenv(
+    "SWHISPER_TEMP_DIR"
+)
+
+@dataclass
+class TranscriptionConfig:
+    """Main configuration for transcription settings."""
+    
+    # Audio directories
+    audio_dir: str = DEFAULT_AUDIO_DIR
+    json_dir: str = "whisper-json-output"
+    
+    # Model settings  
+    model_str: str = "KBLab/kb-whisper-large"
+    revision: str = "strict"
+    device: str = "mps"
+    
+    # Processing limits
+    file_limit: int = 3
+    
+    # Temporary directory configuration
+    custom_temp_dir: Optional[str] = DEFAULT_TEMP_DIR
+    preserve_checkpoints: bool = True
+    
+    # Chunking configuration
+    target_chunk_duration: int = 180  # 3 minutes
+    min_silence_duration: float = 0.5  # 0.5 seconds
+    overlap_duration: float = 1.0  # 1 second
+    
+    # Environment checks
+    check_revision: bool = False
+    check_environment: bool = True
+
+@dataclass 
+class WhisperSettings:
+    """Whisper-specific transcription settings."""
+    
+    language: str = 'sv'
+    task: str = 'transcribe'
+    remove_punctuation_from_words: bool = False
+    compute_word_confidence: bool = True
+    include_punctuation_in_confidence: bool = False
+    refine_whisper_precision: float = 0.5
+    min_word_duration: float = 0.02
+    plot_word_alignment: bool = False
+    word_alignment_most_top_layers: Optional[int] = None
+    remove_empty_words: bool = False
+    seed: int = 1234
+    vad: str = 'auditok'
+    detect_disfluencies: bool = True
+    trust_whisper_timestamps: bool = False
+    naive_approach: bool = False
+    beam_size: int = 5
+    best_of: int = 5
+    temperature: List[float] = None
+    compression_ratio_threshold: float = 2.4
+    logprob_threshold: float = -1.0
+    no_speech_threshold: float = 0.6
+    fp16: Optional[bool] = None
+    condition_on_previous_text: bool = False
+    initial_prompt: str = 'Mm. Jag tror öhm Jag ser um vad du menar. Ehm Du ja du öh Asså du säger liksom att'
+    suppress_tokens: str = '50364'
+    sample_len: Optional[int] = None
+    verbose: bool = True
+    
+    def __post_init__(self):
+        if self.temperature is None:
+            self.temperature = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for whisper.transcribe()."""
+        return {
+            "language": self.language,
+            "task": self.task,
+            "remove_punctuation_from_words": self.remove_punctuation_from_words,
+            "compute_word_confidence": self.compute_word_confidence,
+            "include_punctuation_in_confidence": self.include_punctuation_in_confidence,
+            "refine_whisper_precision": self.refine_whisper_precision,
+            "min_word_duration": self.min_word_duration,
+            "plot_word_alignment": self.plot_word_alignment,
+            "word_alignment_most_top_layers": self.word_alignment_most_top_layers,
+            "remove_empty_words": self.remove_empty_words,
+            "seed": self.seed,
+            "vad": self.vad,
+            "detect_disfluencies": self.detect_disfluencies,
+            "trust_whisper_timestamps": self.trust_whisper_timestamps,
+            "naive_approach": self.naive_approach,
+            "beam_size": self.beam_size,
+            "best_of": self.best_of,
+            "temperature": self.temperature,
+            "compression_ratio_threshold": self.compression_ratio_threshold,
+            "logprob_threshold": self.logprob_threshold,
+            "no_speech_threshold": self.no_speech_threshold,
+            "fp16": self.fp16,
+            "condition_on_previous_text": self.condition_on_previous_text,
+            "initial_prompt": self.initial_prompt,
+            "suppress_tokens": self.suppress_tokens,
+            "sample_len": self.sample_len,
+            "verbose": self.verbose
+        }
+
+# Default instances
+DEFAULT_CONFIG = TranscriptionConfig()
+DEFAULT_WHISPER_SETTINGS = WhisperSettings()

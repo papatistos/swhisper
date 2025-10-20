@@ -1,0 +1,14 @@
+# Local environment overrides
+.swhisper.env
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# macOS
+.DS_Store
+diarize/parameter_tester.py
+download_strict_model.py
+trascribe_w_strict_model.py
+diarize/enhanced_pipeline.py
+transcribe/minimal-diarizen-test.py

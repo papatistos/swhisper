@@ -1,0 +1,335 @@
+"""Utility classes for diarization processing."""
+
+import gc
+import sys
+import torch
+import signal
+import atexit
+from typing import Optional, List, Dict, Any
+from contextlib import contextmanager
+
+
+class DeviceManager:
+    """Manages device memory and cleanup operations."""
+    
+    @staticmethod
+    def clear_device_memory() -> None:
+        """Frees up GPU/MPS memory and forces garbage collection."""
+        print("Freeing up memory...")
+        
+        # Force garbage collection multiple times
+        for _ in range(3):
+            gc.collect()
+        
+        # Clear PyTorch caches
+        if hasattr(torch, "mps") and torch.backends.mps.is_built():
+            torch.mps.empty_cache()
+            torch.mps.synchronize()
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        
+        # Force another garbage collection
+        gc.collect()
+
+
+class Logger:
+    """Custom logger that writes to both terminal and file."""
+    
+    def __init__(self, log_file_path: str):
+        self.terminal = sys.stdout
+        self.log_file = open(log_file_path, 'w', encoding='utf-8')
+    
+    def write(self, message: str) -> None:
+        self.terminal.write(message)
+        self.log_file.write(message)
+        self.log_file.flush()
+    
+    def flush(self) -> None:
+        self.terminal.flush()
+        self.log_file.flush()
+    
+    def close(self) -> None:
+        self.log_file.close()
+
+
+class LoggerManager:
+    """Manages logger lifecycle and cleanup."""
+    
+    def __init__(self):
+        self.current_logger: Optional[Logger] = None
+        self.original_stdout = None
+        self._setup_signal_handlers()
+        self._setup_cleanup()
+    
+    def _setup_signal_handlers(self) -> None:
+        """Setup signal handlers for graceful cleanup."""
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+        if hasattr(signal, 'SIGQUIT'):
+            signal.signal(signal.SIGQUIT, self._signal_handler)
+    
+    def _setup_cleanup(self) -> None:
+        """Register cleanup function to run at exit."""
+        atexit.register(self.cleanup_resources)
+    
+    def _signal_handler(self, signum: int, frame) -> None:
+        """Handle interrupt signals gracefully."""
+        print(f"\n🛑 Received signal {signum}. Cleaning up...")
+        self.cleanup_resources()
+        sys.exit(0)
+    
+    def cleanup_resources(self) -> None:
+        """Clean up all resources before exit."""
+        print("🧹 Cleaning up resources...")
+        
+        # Restore stdout
+        if self.current_logger and self.original_stdout:
+            sys.stdout = self.original_stdout
+            self.current_logger.close()
+        
+        # Clear device memory
+        DeviceManager.clear_device_memory()
+        
+        print("✅ Cleanup completed")
+    
+    @contextmanager
+    def safe_logger(self, log_file_path: str):
+        """Context manager for safe logger handling."""
+        logger = None
+        
+        try:
+            logger = Logger(log_file_path)
+            self.current_logger = logger
+            self.original_stdout = sys.stdout
+            sys.stdout = logger
+            yield logger
+        finally:
+            if logger:
+                sys.stdout = self.original_stdout
+                logger.close()
+                self.current_logger = None
+
+
+class WordProcessor:
+    """Processes words and segments for speaker assignment."""
+    
+    @staticmethod
+    def create_paragraph_text_from_words(segment: Dict[str, Any]) -> str:
+        """
+        Reconstruct segment text from words to preserve discontinuity markers AND silence markers.
+        """
+        words = segment.get('words', [])
+        if not words:
+            return segment.get('text', '').strip()
+        
+        word_texts = []
+        for word in words:
+            word_text = word.get('word', word.get('text', ''))
+            if word_text:  # This will include [*] markers AND (1.2) silence markers
+                word_texts.append(word_text)
+        
+        return ' '.join(word_texts).strip()
+    
+    @staticmethod
+    def should_smooth_word(current_word: Dict, prev_word: Dict, next_word: Dict) -> bool:
+        """
+        Determine if a word should be smoothed, with special handling for markers.
+        """
+        # Don't smooth discontinuity markers - they might legitimately have different speakers
+        word_text = current_word.get('word', current_word.get('text', ''))
+        if word_text in ['[*]', '[DISCONTINUITY]', '[SILENCE]', '[OVERLAP]']:
+            return False
+        
+        # Standard smoothing logic
+        return (current_word['speaker'] != prev_word['speaker'] and 
+                current_word['speaker'] != next_word['speaker'] and
+                prev_word['speaker'] == next_word['speaker'] and
+                prev_word['speaker'] != "UNKNOWN")
+
+
+class SpeakerAssigner:
+    """Handles speaker assignment logic."""
+    
+    @staticmethod
+    def find_speaker_for_word(word_start: float, word_end: float, diarization_result) -> str:
+        """
+        Find speaker for a single word using its timestamps.
+        """
+        # Check multiple points in the word for robustness
+        word_mid = word_start + (word_end - word_start) / 2
+        check_points = [word_start + 0.01, word_mid, word_end - 0.01]
+        
+        speaker_votes = {}
+        
+        for check_time in check_points:
+            for turn, _, speaker_label in diarization_result.itertracks(yield_label=True):
+                if turn.start <= check_time < turn.end:
+                    speaker_votes[speaker_label] = speaker_votes.get(speaker_label, 0) + 1
+                    break
+        
+        if speaker_votes:
+            return max(speaker_votes.items(), key=lambda x: x[1])[0]
+        return "UNKNOWN"
+    
+    @staticmethod
+    def assign_segment_speaker_from_words(segment: Dict[str, Any]) -> tuple[str, float]:
+        """
+        Assign segment speaker based on majority vote of its words.
+        """
+        try:
+            word_speakers = [word.get('speaker', 'UNKNOWN') for word in segment.get('words', [])]
+            
+            if not word_speakers:
+                return "UNKNOWN", 0.0
+            
+            # Count speaker votes (excluding UNKNOWN)
+            speaker_counts = {}
+            for speaker in word_speakers:
+                if speaker != "UNKNOWN":
+                    speaker_counts[speaker] = speaker_counts.get(speaker, 0) + 1
+            
+            if speaker_counts:
+                # Return speaker with most words
+                segment_speaker = max(speaker_counts.items(), key=lambda x: x[1])[0]
+                
+                # Calculate confidence
+                total_known_words = sum(speaker_counts.values())
+                confidence = speaker_counts[segment_speaker] / total_known_words
+                
+                return segment_speaker, confidence
+            
+            return "UNKNOWN", 0.0
+        
+        except Exception as e:
+            print(f"  Warning: Error in assign_segment_speaker_from_words: {e}")
+            print(f"  Segment: {segment.get('start', '?'):.1f}s-{segment.get('end', '?'):.1f}s")
+            return "UNKNOWN", 0.0
+    
+    @staticmethod
+    def smooth_word_level_transitions(segments: List[Dict], min_speaker_words: int = 3) -> List[Dict]:
+        """
+        Smooth out very short speaker changes at word level.
+        """
+        total_smoothed = 0
+        markers_preserved = 0
+        
+        for segment in segments:
+            words = segment.get('words', [])
+            if len(words) < min_speaker_words * 2:
+                continue
+            
+            # Look for isolated speaker words
+            for i in range(1, len(words) - 1):
+                current_word = words[i]
+                prev_word = words[i-1]
+                next_word = words[i+1]
+                
+                word_text = current_word.get('word', current_word.get('text', '[no_text]'))
+                
+                # Check if this is a discontinuity marker
+                if word_text in ['[*]', '[DISCONTINUITY]', '[SILENCE]', '[OVERLAP]']:
+                    markers_preserved += 1
+                    continue  # Don't smooth markers - they might legitimately change speakers
+                
+                # Apply standard smoothing logic
+                if WordProcessor.should_smooth_word(current_word, prev_word, next_word):
+                    word_time = current_word.get('start', 0)
+                    print(f"  Smoothing word '{word_text}' at {word_time:.1f}s: {current_word['speaker']} -> {prev_word['speaker']}")
+                    words[i]['speaker'] = prev_word['speaker']
+                    total_smoothed += 1
+            
+            # Reassign segment speaker after smoothing
+            segment_speaker, confidence = SpeakerAssigner.assign_segment_speaker_from_words(segment)
+            segment['speaker'] = segment_speaker
+            segment['speaker_confidence'] = confidence
+        
+        print(f"Smoothed {total_smoothed} isolated word assignments")
+        if markers_preserved > 0:
+            print(f"Preserved {markers_preserved} discontinuity markers without smoothing")
+        return segments
+
+
+class SilenceMarkerProcessor:
+    """Handles silence marker detection and insertion."""
+    
+    @staticmethod
+    def add_word_level_silence_markers(segments: List[Dict], min_silence_duration: float = 0.2) -> List[Dict]:
+        """
+        Add silence markers between words where gaps are longer than min_silence_duration.
+        Also adds silence markers after [*] disfluency markers IF there's a significant gap.
+        
+        Args:
+            segments: List of transcript segments
+            min_silence_duration: Minimum silence duration in seconds to mark
+        
+        Returns:
+            List of segments with silence markers inserted at word level
+        """
+        if not segments:
+            return segments
+        
+        enhanced_segments = []
+        
+        for segment in segments:
+            words = segment.get('words', [])
+            if not words:
+                # If no words, just add the segment as-is
+                enhanced_segments.append(segment)
+                continue
+            
+            # Create a new segment with word-level silence detection
+            new_segment = segment.copy()
+            enhanced_words = []
+            
+            for i, word in enumerate(words):
+                # Add the current word
+                enhanced_words.append(word)
+                
+                # Check if current word is a [*] marker
+                word_text = word.get('word', word.get('text', ''))
+                is_disfluency_marker = word_text.strip() in ['[*]', '[DISCONTINUITY]', '[SILENCE]', '[OVERLAP]']
+                
+                # Check if there's a next word to compare with
+                if i + 1 < len(words):
+                    next_word = words[i + 1]
+                    
+                    # Calculate gap between current word end and next word start
+                    current_end = word.get('end', word.get('start', 0))
+                    next_start = next_word.get('start', next_word.get('end', current_end))
+                    
+                    gap_duration = next_start - current_end
+                    
+                    # Only add silence marker if gap meets minimum threshold
+                    # Whether it's after a [*] marker or a regular word doesn't matter
+                    if gap_duration >= min_silence_duration:
+                        # Round to nearest 0.1 seconds
+                        rounded_gap = round(gap_duration, 1)
+                        
+                        # Format the silence duration (omit leading zero for values < 1.0)
+                        silence_text = f"({rounded_gap:.1f})"
+                        silence_text = silence_text.replace("(0.", "(.")
+                        
+                        # Create silence "word"
+                        silence_word = {
+                            'start': current_end,
+                            'end': next_start,
+                            'word': silence_text,
+                            'speaker': 'SILENCE',
+                            'confidence': 1.0,
+                            'is_silence_marker': True,
+                            'after_disfluency': is_disfluency_marker  # Flag to track origin
+                        }
+                        
+                        enhanced_words.append(silence_word)
+            
+            # Update the segment with enhanced words
+            new_segment['words'] = enhanced_words
+            enhanced_segments.append(new_segment)
+        
+        return enhanced_segments
+
+
+# Global logger manager instance
+logger_manager = LoggerManager()
