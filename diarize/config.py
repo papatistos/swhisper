@@ -55,6 +55,7 @@ class DiarizationConfig:
 # 
 
     # Silence detection settings
+    min_silence_duration: float = 0.2      # (rounded) silence durations below this value will be ignored
     include_silence_markers: bool = True   # silence duration in transcript
     log_silence_gaps: bool = False         # If true, between-word-gap-durations will be logged in separate file
     
@@ -65,7 +66,7 @@ class DiarizationConfig:
     preserved_markers: List[str] = None
     
     # Output preamble for transcript files
-    output_preamble: str = """Note 1: The transcript contains [*] markers to indicate some sound that could not be transcribed. In many cases, nothing of importance has been missed, but the markers are included just to be safe. You can easily remove them by searching for "[*] " and replacing all instances with nothing. 
+    output_preamble: str = """Note 1: The transcript contains markers like [*], [**], [***] to indicate sounds that could not be transcribed. The number of asterisks roughly reflects the sound's duration in tenths of a second. You can easily remove them by searching for "[*" and replacing the bracketed markers with nothing. 
 
 Note 2: You may also find parentheses with a number inside, e.g. (.3). These indicate silences and the number indicates the duration of the silence in seconds. Currently, not all silences are reliably detected, but those that are may be useful, especially when they indicate longer pauses.
 
@@ -100,7 +101,7 @@ Note 3: Speaker detection is not perfect. The transcript may show too many diffe
     def __post_init__(self):
         """Initialize default values that can't be set in field definition."""
         if self.preserved_markers is None:
-            self.preserved_markers = ["[*]", "[DISCONTINUITY]", "[SILENCE]", "[OVERLAP]"]
+            self.preserved_markers = ["[DISCONTINUITY]", "[SILENCE]", "[OVERLAP]", "[*]"]
     
     @property
     def audio_dir(self) -> str:

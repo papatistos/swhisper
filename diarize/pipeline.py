@@ -176,7 +176,7 @@ class SpeakerAligner:
         Returns:
             Dictionary containing aligned segments and statistics
         """
-        from .utils import SpeakerAssigner, SilenceMarkerProcessor
+        from .utils import SpeakerAssigner, SilenceMarkerProcessor, WordProcessor
         
         print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Aligning transcription with speaker segments (word-level)...")
         
@@ -231,6 +231,11 @@ class SpeakerAligner:
             whisper_result['segments'] = SpeakerAssigner.smooth_word_level_transitions(
                 whisper_result['segments'], 
                 self.config.min_speaker_words
+            )
+
+        if not self.config.preserve_markers:
+            whisper_result['segments'] = WordProcessor.remove_disfluency_markers_from_segments(
+                whisper_result['segments']
             )
         
         # Add silence markers if enabled
