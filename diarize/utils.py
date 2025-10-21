@@ -118,21 +118,93 @@ class WordProcessor:
     """Processes words and segments for speaker assignment."""
     
     @staticmethod
-    def create_paragraph_text_from_words(segment: Dict[str, Any]) -> str:
-        """
-        Reconstruct segment text from words to preserve discontinuity markers AND silence markers.
-        """
+    def create_paragraph_text_from_words(
+        segment: Dict[str, Any],
+        gap_threshold: Optional[float] = None
+    ) -> str:
+        """Reconstruct segment text from words while optionally adding blank lines around long silences."""
         words = segment.get('words', [])
         if not words:
             return segment.get('text', '').strip()
-        
-        word_texts = []
+
+        # Behaviour when no threshold is provided
+        if not gap_threshold or gap_threshold <= 0:
+            word_texts = []
+            for word in words:
+                word_text = word.get('word', word.get('text', ''))
+                if word_text:  # Preserve markers and silence tokens
+                    word_texts.append(word_text)
+            return ' '.join(word_texts).strip()
+
+        lines: List[str] = []
+        current_tokens: List[str] = []
+
+        def flush_current_tokens() -> None:
+            if current_tokens:
+                lines.append(' '.join(current_tokens).strip())
+                current_tokens.clear()
+
         for word in words:
             word_text = word.get('word', word.get('text', ''))
-            if word_text:  # This will include [*] markers AND (1.2) silence markers
-                word_texts.append(word_text)
-        
-        return ' '.join(word_texts).strip()
+            if not word_text:
+                continue
+
+            add_line_breaks = False
+            if word.get('is_silence_marker', False):
+                duration = WordProcessor._parse_silence_duration(word_text)
+                if duration is not None and duration >= gap_threshold:
+                    add_line_breaks = True
+
+            if add_line_breaks:
+                flush_current_tokens()
+                if lines and lines[-1] != '':
+                    lines.append('')
+                lines.append(word_text.strip())
+                lines.append('')
+            else:
+                current_tokens.append(word_text.strip())
+
+        flush_current_tokens()
+
+        if not lines:
+            return ' '.join(current_tokens).strip()
+
+        while lines and lines[0] == '':
+            lines.pop(0)
+        while lines and lines[-1] == '':
+            lines.pop()
+
+        cleaned_lines: List[str] = []
+        previous_blank = False
+        for line in lines:
+            if line == '':
+                if previous_blank:
+                    continue
+                previous_blank = True
+            else:
+                previous_blank = False
+            cleaned_lines.append(line)
+
+        return '\n'.join(cleaned_lines)
+
+    @staticmethod
+    def _parse_silence_duration(token: str) -> Optional[float]:
+        """Extract numeric silence duration from a token like '(1.3)'."""
+        if not token:
+            return None
+
+        stripped = token.strip()
+        if stripped.startswith('(') and stripped.endswith(')'):
+            stripped = stripped[1:-1]
+
+        stripped = stripped.replace(',', '.')
+        if not stripped:
+            return None
+
+        try:
+            return float(stripped)
+        except ValueError:
+            return None
     
     @staticmethod
     def should_smooth_word(current_word: Dict, prev_word: Dict, next_word: Dict) -> bool:

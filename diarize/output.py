@@ -175,9 +175,11 @@ class RTFFormatter(TranscriptFormatter):
         current_paragraph = []
         current_start_time = None
         
+        gap_threshold = getattr(config, 'silence_gap_linebreak_threshold', None) if config else None
+
         for segment in segments:
             speaker = segment.get('speaker', 'UNKNOWN')
-            text = WordProcessor.create_paragraph_text_from_words(segment)  # This includes silence markers
+            text = WordProcessor.create_paragraph_text_from_words(segment, gap_threshold=gap_threshold)
             
             if speaker != current_speaker:
                 # Save the previous paragraph if it exists
@@ -286,8 +288,10 @@ class TXTFormatter(TranscriptFormatter):
         """
         Create a plain text transcript with speaker paragraphs.
         Adjacent segments from the same speaker are joined together.
+        Depending on settings, blank lines may be added around long silence (even when there is no speaker change).
         """
         # Group segments by speaker (but handle silence markers separately)
+        gap_threshold = getattr(config, 'silence_gap_linebreak_threshold', None) if config else None
         paragraphs = []
         current_speaker = None
         current_paragraph = []
@@ -318,7 +322,7 @@ class TXTFormatter(TranscriptFormatter):
                 continue
             
             speaker = segment.get('speaker', 'UNKNOWN')
-            text = WordProcessor.create_paragraph_text_from_words(segment)
+            text = WordProcessor.create_paragraph_text_from_words(segment, gap_threshold=gap_threshold)
             
             if speaker != current_speaker:
                 # Save the previous paragraph if it exists

@@ -64,20 +64,21 @@ class DiarizationConfig:
 # 
 
     # Silence detection settings
-    min_silence_duration: float = 0.2      # (rounded) silence durations below this value will be ignored
-    include_silence_markers: bool = True   # silence duration in transcript
-    log_silence_gaps: bool = False         # If true, between-word-gap-durations will be logged in separate file
+    min_silence_duration: float = 0.2                       # (rounded) silence durations below this value will be ignored
+    include_silence_markers: bool = True                    # silence duration in transcript
+    log_silence_gaps: bool = False                          # If true, between-word-gap-durations will be logged in separate file
+    silence_gap_linebreak_threshold: Optional[float] = 1.0  # Surround long silences with blank lines in transcripts. Set to 0 for no linebreaks
     
     # Word-level processing
     smoothing_enabled: bool = True
     min_speaker_words: int = 3
-    preserve_markers: bool = True          # Preserve markers for sounds that could not be transcribed
+    preserve_markers: bool = True                           # Preserve markers for sounds that could not be transcribed
     preserved_markers: List[str] = None
     
     # Output preamble for transcript files
-    output_preamble: str = """Note 1: The transcript contains markers like [*], [**], [***] to indicate sounds that could not be transcribed. The number of asterisks roughly reflects the sound's duration in tenths of a second. You can easily remove them by searching for "[*" and replacing the bracketed markers with nothing. 
+    output_preamble: str = """Note 1: If the transcript contains markers like [*], [**], [***] they indicate sounds that could not be transcribed. The number of asterisks roughly reflects the sound's duration in tenths of a second. This can be turned off in the swisper settings.
 
-Note 2: You may also find parentheses with a number inside, e.g. (.3). These indicate silences and the number indicates the duration of the silence in seconds. Currently, not all silences are reliably detected, but those that are may be useful, especially when they indicate longer pauses.
+Note 2: You may also find parentheses with a number inside, e.g. (.3). These indicate silences and the number indicates the duration of the silence in seconds. Currently, not all silences are reliably detected, but those that are may be useful, especially when they indicate longer pauses. This can also be turned off in the swhisper settings. Long silences are surrounded by blank lines (even when there is no speaker change). This can be adjusted or turned off in the swhisper settings.
 
 Note 3: Speaker detection is not perfect. The transcript may show too many different speakers, but the excess (or unknown) speakers should have few turns attributed to them, so it should be easy to fix manually.
 """
