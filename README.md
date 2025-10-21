@@ -15,6 +15,13 @@ The excellent transcription quality is due to the KBLab Whisper model, which has
 
 - Word-level timestamps are provided in the `.json` output files in the `whisper-json-output` directory.
 
+### To-dos
+- [ ] migrate to pyannote-audio 4.0 (and the community-1 model)
+- [ ] add (more) speaker stats
+- [ ] improve documentation (let me know what is particularly unclear)
+- [ ] combine settings in one config file that is read by both `config.py`s
+- [ ] add command line options?
+
 ## Configuration and usage
 
 - relevant paths are specified in a `.swhisper.env` file or through environment variables (see below)
@@ -43,10 +50,8 @@ Supported variables:
 | `SWHISPER_AUDIO_DIR` | Default folder containing source audio files for transcription |
 | `SWHISPER_TEMP_DIR` | Custom directory for temporary workspaces and checkpoints |
 | `SWHISPER_DIARIZE_AUDIO_DIR` | Default diarization audio directory (falls back to `SWHISPER_AUDIO_DIR` if omitted) |
+| `HUGGING_FACE_TOKEN` | Hugging Face token for accessing pyannote pretrained model |
 
-
-Values left blank fall back to project defaults (`audio/` inside the repository or the
-system temporary directory). 
 
 ### Environment variables
 
