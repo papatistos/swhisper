@@ -15,11 +15,19 @@ The excellent transcription quality is due to the KBLab Whisper model, which has
 
 - Word-level timestamps are provided in the `.json` output files in the `whisper-json-output` directory. They come from the `whisper-timestamped` model and are not affected by diarization.
 
+- there is a basic stats analysis tool in `diarize/` that can help compare diarization results across different parameter settings. See `diarize/STATS_ANALYSIS_README.md` for details.
+
+
+### Transcript formatting options
+
 - The duration of silences between words can be included in the transcript (using CA notation, e.g. (.3) for a .3 second silence). I have not yet investigate the accuracy of these durations. They are based on the word-level provided by `whisper-timestamped` and I have a feeling that they might be underestimated...
 
 - There is also an option to include disfluence markers (as [*]) for sounds that could not be transcribed By default, these markers are preserved in the diarized transcript, but there is a setting to remove them. The discontinuity markers are longer (more asterisks) the longer the unidentified sound is (one * per .1 s). It looks like the current settings don't properly distinguish between unidentified speech and background noise. Tweaking of the whisper-timestamped settings (in `transcribe/config.py`) might help.
 
-- there is a basic stats analysis tool in `diarize/` that can help compare diarization results across different parameter settings. See `diarize/STATS_ANALYSIS_README.md` for details.
+- The output preamble for transcript files can be customized in the `DiarizationConfig` class. This allows you to include specific notes or instructions for users reviewing the transcripts.
+
+- By default, silence of 1 second or longer are surrounded by blank lines in the transcript (even when there is no speaker change) to improve readability. This threshold can be adjusted in `diarize/config.py` through the `silence_newline_threshold` parameter (set to `0`to disable). This setting only concerns rtf and txt output files.
+
 
 ### To-dos
 - [ ] migrate to pyannote-audio 4.0 (and the community-1 model)
@@ -71,6 +79,28 @@ export SWHISPER_TEMP_DIR=/tmp/swhisper
 
 The path settings module (`path_settings.py`) reads both the environment and the
 optional `.swhisper.env` file, so choose whichever workflow fits your deployment.
+
+### Running the transcription and diarization pipeline§
+
+To run the full transcription and diarization pipeline, simply execute:
+
+```bash
+python transcribe.py
+```
+After successful transcription of all audio files in the specified audio directory, diarization will be automatically initiated.
+
+The transcription can be stopped at any time (e.g., using Ctrl+C), and when you restart the script, it will resume from where it left off.
+
+Once an audio file has been successfully transcribed, the temporary `.json` file with the raw transcript will be moved to the `whisper-json-output` directory inside the audio directory. This file is used as input for the diarization step. 
+
+To run only the diarization step on previously transcribed files, use:
+
+```bash
+python diarize.py
+```
+
+Sucessfully processed files will be skipped. If you want to reprocess a specific file, simply delete its ok-file (e.g., `audio1.ok`) from the `transcritps` directory.
+
 
 ## Acknowledgments
 
