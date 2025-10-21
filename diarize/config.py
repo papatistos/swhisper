@@ -93,20 +93,18 @@ Note 3: Speaker detection is not perfect. The transcript may show too many diffe
     enable_parameter_testing: bool = False
     test_output_dir: str = "parameter_tests"
     test_max_combinations: int = 320
-    test_single_file_mode: bool = True  # Test on one file first before full testing
+    test_single_file_mode: bool = True                      # Test on one file first before full testing
     
     # Parameter testing notes:
     # - Only enable if you want to find optimal embedding_distance_threshold values
     # - With max_speakers=2 (fixed), most parameter testing is meaningless
-    # - Use quick_embedding_test() for meaningful threshold optimization
-    # - Avoid arbitrary quality metrics without ground truth data
     
     # Directory settings
     output_dir: str = "transcripts"
     log_dir: str = "transcripts"
     default_audio_dir: str = DEFAULT_DIARIZE_AUDIO_DIR
     default_json_input_dir: str = "whisper-json-output"
-    default_audio_subdir: str = ""  # Leave empty if audio files are directly in audio_dir
+    default_audio_subdir: str = ""                         # Leave empty if audio files are directly in audio_dir
     
     def __post_init__(self):
         """Initialize default values that can't be set in field definition."""
