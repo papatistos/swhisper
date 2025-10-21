@@ -2,9 +2,11 @@
 
 import os
 import time
+import math
 import multiprocessing as mp
 import threading
 import gc
+import re
 import whisper_timestamped as whisper
 import soundfile as sf
 import numpy as np
@@ -14,6 +16,9 @@ from scipy.signal import resample
 from .config import TranscriptionConfig, WhisperSettings
 from .memory_utils import ResourceManager, MemoryMonitor
 from .audio_utils import AudioProcessor
+
+
+DISFLUENCY_MARKER_PATTERN = re.compile(r"^\[\*+\]$")
 
 
 class TranscriptionWorker:
@@ -81,6 +86,8 @@ class TranscriptionWorker:
                         for word in segment['words']:
                             word['start'] += time_offset
                             word['end'] += time_offset
+
+            TranscriptionWorker._scale_disfluency_markers(result)
             
             # Clean up before returning
             del chunk_audio
@@ -95,6 +102,55 @@ class TranscriptionWorker:
             error_msg = f"Subprocess error: {str(e)}\n{traceback.format_exc()}"
             print(f"    ❌ Subprocess error: {str(e)}")
             output_queue.put((e, error_msg))
+
+    @staticmethod
+    def _scale_disfluency_markers(result: Dict[str, Any]) -> None:
+        """Adjust disfluency markers to reflect duration via repeated asterisks."""
+        if not result:
+            return
+
+        segments = result.get('segments', [])
+        for segment in segments:
+            words = segment.get('words', [])
+            if not words:
+                continue
+
+            segment_updated = False
+            for word in words:
+                marker_text = word.get('word', word.get('text', ''))
+                cleaned = marker_text.strip() if isinstance(marker_text, str) else ''
+                if not cleaned or not DISFLUENCY_MARKER_PATTERN.match(cleaned):
+                    continue
+
+                start = word.get('start')
+                end = word.get('end')
+                if start is None or end is None:
+                    continue
+
+                duration = max(0.0, end - start)
+                if duration <= 0:
+                    asterisk_count = 1
+                else:
+                    asterisk_count = max(1, min(50, math.ceil(duration / 0.1)))
+
+                new_marker = f"[{'*' * asterisk_count}]"
+                if word.get('word') != new_marker:
+                    word['word'] = new_marker
+                    segment_updated = True
+                if 'text' in word and word.get('text') != new_marker:
+                    word['text'] = new_marker
+
+            if segment_updated:
+                rebuilt: List[str] = []
+                for w in words:
+                    text_value = w.get('word', w.get('text', ''))
+                    if not isinstance(text_value, str):
+                        continue
+                    stripped = text_value.strip()
+                    if stripped:
+                        rebuilt.append(stripped)
+
+                segment['text'] = ' '.join(rebuilt) if rebuilt else ''
 
 
 class ChunkProcessor:
