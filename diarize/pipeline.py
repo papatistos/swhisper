@@ -1,10 +1,12 @@
 """Speaker diarization pipeline and core processing logic."""
 
+import os
+from contextlib import contextmanager
+from datetime import datetime
+from typing import Dict, List, Any, Optional
+
 import torch
 from pyannote.audio import Pipeline
-from contextlib import contextmanager
-from typing import Dict, List, Any, Optional
-from datetime import datetime
 
 from .config import DiarizationConfig
 from .utils import DeviceManager
@@ -167,7 +169,7 @@ class SpeakerAligner:
     def __init__(self, config: DiarizationConfig):
         self.config = config
     
-    def align_segments_with_speakers(self, whisper_result: Dict, diarization_result) -> Dict[str, Any]:
+    def align_segments_with_speakers(self, whisper_result: Dict, diarization_result, gap_log_path: Optional[str] = None) -> Dict[str, Any]:
         """
         Align Whisper segments with diarization results at word level.
         
@@ -236,11 +238,15 @@ class SpeakerAligner:
             print("Adding silence markers...")
             whisper_result['segments'] = SilenceMarkerProcessor.add_word_level_silence_markers(
                 whisper_result['segments'], 
-                self.config.min_silence_duration
+                self.config.min_silence_duration,
+                gap_log_path=gap_log_path
             )
             word_silences = sum(len([w for w in seg.get('words', []) if w.get('is_silence_marker', False)]) 
                              for seg in whisper_result['segments'])
             print(f"Added {word_silences} silence markers")
+            if gap_log_path and os.path.exists(gap_log_path):
+                relative_gap_path = os.path.relpath(gap_log_path, self.config.final_output_dir)
+                print(f"Silence gap durations logged to {relative_gap_path}")
         
         return {
             'segments': whisper_result['segments'],

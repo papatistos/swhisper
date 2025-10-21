@@ -55,13 +55,13 @@ class DiarizationConfig:
 # 
 
     # Silence detection settings
-    min_silence_duration: float = 0.2
-    include_silence_markers: bool = True
+    include_silence_markers: bool = True   # silence duration in transcript
+    log_silence_gaps: bool = False         # If true, between-word-gap-durations will be logged in separate file
     
     # Word-level processing
     smoothing_enabled: bool = True
     min_speaker_words: int = 3
-    preserve_markers: bool = True
+    preserve_markers: bool = True          # Preserve markers for sounds that could not be transcribed
     preserved_markers: List[str] = None
     
     # Output preamble for transcript files

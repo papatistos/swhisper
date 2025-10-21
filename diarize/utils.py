@@ -2,6 +2,7 @@
 
 import gc
 import sys
+import os
 import torch
 import signal
 import atexit
@@ -255,7 +256,11 @@ class SilenceMarkerProcessor:
     """Handles silence marker detection and insertion."""
     
     @staticmethod
-    def add_word_level_silence_markers(segments: List[Dict], min_silence_duration: float = 0.2) -> List[Dict]:
+    def add_word_level_silence_markers(
+        segments: List[Dict],
+        min_silence_duration: float = 0.2,
+        gap_log_path: Optional[str] = None
+    ) -> List[Dict]:
         """
         Add silence markers between words where gaps are longer than min_silence_duration.
         Also adds silence markers after [*] disfluency markers IF there's a significant gap.
@@ -271,8 +276,9 @@ class SilenceMarkerProcessor:
             return segments
         
         enhanced_segments = []
+        gap_log_entries: List[str] = []
         
-        for segment in segments:
+        for segment_index, segment in enumerate(segments):
             words = segment.get('words', [])
             if not words:
                 # If no words, just add the segment as-is
@@ -300,10 +306,14 @@ class SilenceMarkerProcessor:
                     next_start = next_word.get('start', next_word.get('end', current_end))
                     
                     gap_duration = next_start - current_end
+                    marker_added = gap_duration >= min_silence_duration
+                    
+                    if gap_log_path is not None:
+                        gap_log_entries.append(f"{gap_duration:.6f}")
                     
                     # Only add silence marker if gap meets minimum threshold
                     # Whether it's after a [*] marker or a regular word doesn't matter
-                    if gap_duration >= min_silence_duration:
+                    if marker_added:
                         # Round to nearest 0.1 seconds
                         rounded_gap = round(gap_duration, 1)
                         
@@ -328,7 +338,18 @@ class SilenceMarkerProcessor:
             new_segment['words'] = enhanced_words
             enhanced_segments.append(new_segment)
         
+        if gap_log_path is not None and gap_log_entries:
+            SilenceMarkerProcessor._write_gap_log(gap_log_path, gap_log_entries)
+        
         return enhanced_segments
+
+    @staticmethod
+    def _write_gap_log(log_path: str, entries: List[str]) -> None:
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, 'w', encoding='utf-8') as log_file:
+            log_file.write("\n".join(entries))
+            log_file.write("\n")
+            log_file.write("\n")
 
 
 # Global logger manager instance

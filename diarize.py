@@ -54,7 +54,8 @@ def create_completion_marker(config: DiarizationConfig, base_filename: str,
 #                       ├── rtf/{output_files.get('rtf', 'N/A')}
 #                       ├── txt/{output_files.get('txt', 'N/A')}
 #                       ├── stats/{output_files.get('stats', 'N/A')}
-#                       └── logs/{output_files.get('log', 'N/A')}
+#                       ├── logs/{output_files.get('log', 'N/A')}
+#                       └── logs/{output_files.get('silence_gap_log', 'N/A')}
 """
 
     with open(completion_marker, 'w', encoding='utf-8') as f:
@@ -90,6 +91,11 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
     log_timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
     subdirs = config.get_output_subdirs()
     log_file_path = os.path.join(subdirs['logs'], f"{base_filename}_{log_timestamp}.log")
+    gap_log_filename = None
+    gap_log_path = None
+    if config.include_silence_markers and getattr(config, 'log_silence_gaps', False):
+        gap_log_filename = f"{base_filename}_{log_timestamp}_silence_gaps.log"
+        gap_log_path = os.path.join(subdirs['logs'], gap_log_filename)
     
     with logger_manager.safe_logger(log_file_path) as logger:
         try:
@@ -151,7 +157,11 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             print(f"{starttime.strftime('%Y-%m-%d %H:%M:%S')} - Step 3: Aligning transcription with speaker segments...")
             sys.stdout.flush()  # Force immediate output
             speaker_aligner = SpeakerAligner(config)
-            alignment_result = speaker_aligner.align_segments_with_speakers(whisper_result, diarization_result)
+            alignment_result = speaker_aligner.align_segments_with_speakers(
+                whisper_result,
+                diarization_result,
+                gap_log_path=gap_log_path if gap_log_path else None
+            )
             
             segments = alignment_result['segments']
             word_stats = alignment_result['word_stats']
@@ -160,6 +170,8 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             endtime = datetime.now()
             duration = endtime - starttime
             print(f"{endtime.strftime('%Y-%m-%d %H:%M:%S')} - Alignment complete. (Duration: {duration})")
+            if gap_log_path and os.path.exists(gap_log_path):
+                print(f"Silence gap log saved to logs/{gap_log_filename}")
 
             # 4. Analysis
             speaker_stats = SegmentAnalyzer.analyze_final_segments(segments)
@@ -243,6 +255,8 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             print(f"Analysis stats saved to stats/{stats_filename}")
             output_files['stats'] = stats_filename
             output_files['log'] = f"{base_filename}_{log_timestamp}.log"
+            if gap_log_path and os.path.exists(gap_log_path):
+                output_files['silence_gap_log'] = gap_log_filename
 
             # Create completion marker
             create_completion_marker(config, base_filename, log_timestamp, output_files)
