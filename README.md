@@ -19,6 +19,8 @@ The excellent transcription quality is due to the KBLab Whisper model, which has
 
 - There is also an option to include disfluence markers (as [*]) for sounds that could not be transcribed By default, these markers are preserved in the diarized transcript, but there is a setting to remove them. The discontinuity markers are longer (more asterisks) the longer the unidentified sound is (one * per .1 s). It looks like the current settings don't properly distinguish between unidentified speech and background noise. Tweaking of the whisper-timestamped settings (in `transcribe/config.py`) might help.
 
+- there is a basic stats analysis tool in `diarize/` that can help compare diarization results across different parameter settings. See `diarize/STATS_ANALYSIS_README.md` for details.
+
 ### To-dos
 - [ ] migrate to pyannote-audio 4.0 (and the community-1 model)
 - [ ] add (more) speaker stats
