@@ -25,7 +25,7 @@ class DiarizationConfig:
     
     # Diarization settings
     min_speakers: int = 2
-    max_speakers: int = 4  # Set to exact number for 2-speaker recordings
+    max_speakers: int = 4  
     device: str = "mps"  # "mps", "cuda", or "cpu"
     
     # Processing options
