@@ -13,7 +13,11 @@ The excellent transcription quality is due to the KBLab Whisper model, which has
 
 - The pipeline prioritizes quality over speed (as this is what counts in academic research), so, if you're in a hurry, this is probably not for you. 
 
-- Word-level timestamps are provided in the `.json` output files in the `whisper-json-output` directory.
+- Word-level timestamps are provided in the `.json` output files in the `whisper-json-output` directory. They come from the `whisper-timestamped` model and are not affected by diarization.
+
+- The duration of silences between words can be included in the transcript (using CA notation, e.g. (.3) for a .3 second silence). I have not yet investigate the accuracy of these durations. They are based on the word-level provided by `whisper-timestamped` and I have a feeling that they might be underestimated...
+
+- There is also an option to include disfluence markers (as [*]) for sounds that could not be transcribed By default, these markers are preserved in the diarized transcript, but there is a setting to remove them. The discontinuity markers are longer (more asterisks) the longer the unidentified sound is (one * per .1 s). It looks like the current settings don't properly distinguish between unidentified speech and background noise. Tweaking of the whisper-timestamped settings (in `transcribe/config.py`) might help.
 
 ### To-dos
 - [ ] migrate to pyannote-audio 4.0 (and the community-1 model)
