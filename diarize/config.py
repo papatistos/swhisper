@@ -4,7 +4,16 @@ import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from path_settings import get_path_settings
+try:
+    from path_settings import get_path_settings
+except ModuleNotFoundError:  # Allow running modules directly from the diarize package
+    import sys
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from path_settings import get_path_settings
 
 _PATH_SETTINGS = get_path_settings()
 
