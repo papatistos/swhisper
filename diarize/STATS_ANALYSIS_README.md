@@ -10,13 +10,13 @@ This set of very rudimentary tools helps you analyze the results from your diari
 
 ## 🚀 Usage
 
+To produce multiple diarizations with different parameter settings, set `enable_parameter_testing` to `True` in `diarize/config.py` and adjust the parameter ranges as desired. After running diarization, use the analysis tool as described below. ALternatively, you can use it on any manuallully produced stats files.
+
 ### 1. Generate Analysis
 
 ```bash
 python diarize/analyze_stats.py
 ```
-
-You can also run the script from inside the `diarize/` folder if you prefer (`cd diarize && python analyze_stats.py`).
 
 This will:
 - Scan the `transcripts/stats/` directory (under the active path settings) for JSON files
