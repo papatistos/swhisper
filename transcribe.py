@@ -74,9 +74,12 @@ class TranscriptionApp:
             
             print("\n" + "=" * 60)
             print("✅ All transcriptions completed successfully!")
-            
-            # Offer to clean up temp workspace since files are already copied
-            self.workspace_manager.offer_cleanup_temp_workspace()
+
+            # Automatically clean up temp workspace
+            self.workspace_manager.cleanup_temp_workspace()
+
+            # Run diarization pipeline now that transcripts exist
+            self._run_diarization_pipeline()
             
         except KeyboardInterrupt:
             print("\n⚠️  Process interrupted by user.")
@@ -266,6 +269,25 @@ class TranscriptionApp:
     def _cleanup(self):
         """Final cleanup."""
         resource_manager.clear_device_memory()
+
+    def _run_diarization_pipeline(self) -> None:
+        """Invoke diarization pipeline after successful transcription."""
+        print("\n" + "=" * 60)
+        print("🎯 Launching diarization pipeline...")
+        try:
+            from diarize import main as diarize_main
+        except ImportError as exc:
+            print(f"❌ Unable to start diarization: {exc}")
+            return
+
+        try:
+            diarize_main()
+        except SystemExit as exit_info:
+            # Propagate successful exit, but continue cleanup on non-zero codes
+            if exit_info.code not in (None, 0):
+                print(f"❌ Diarization exited with status {exit_info.code}")
+        except Exception as exc:
+            print(f"❌ Unexpected error during diarization: {exc}")
 
 
 def main():
