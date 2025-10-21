@@ -3,6 +3,7 @@
 import gc
 import sys
 import os
+import re
 import torch
 import signal
 import atexit
@@ -140,7 +141,7 @@ class WordProcessor:
         """
         # Don't smooth discontinuity markers - they might legitimately have different speakers
         word_text = current_word.get('word', current_word.get('text', ''))
-        if word_text in ['[*]', '[DISCONTINUITY]', '[SILENCE]', '[OVERLAP]']:
+        if is_marker_token(word_text):
             return False
         
         # Standard smoothing logic
@@ -148,6 +149,30 @@ class WordProcessor:
                 current_word['speaker'] != next_word['speaker'] and
                 prev_word['speaker'] == next_word['speaker'] and
                 prev_word['speaker'] != "UNKNOWN")
+
+    @staticmethod
+    def remove_disfluency_markers_from_segments(segments: List[Dict]) -> List[Dict]:
+        """Remove disfluency markers like [*], [**], etc. from segment words and text."""
+        for segment in segments:
+            words = segment.get('words', [])
+            if not words:
+                continue
+
+            filtered_words = []
+            removed_any = False
+            for word in words:
+                marker_text = word.get('word', word.get('text', ''))
+                cleaned = marker_text.strip() if isinstance(marker_text, str) else ''
+                if cleaned and DISFLUENCY_MARKER_PATTERN.match(cleaned):
+                    removed_any = True
+                    continue
+                filtered_words.append(word)
+
+            if removed_any:
+                segment['words'] = filtered_words
+                segment['text'] = WordProcessor.create_paragraph_text_from_words(segment)
+
+        return segments
 
 
 class SpeakerAssigner:
@@ -230,7 +255,7 @@ class SpeakerAssigner:
                 word_text = current_word.get('word', current_word.get('text', '[no_text]'))
                 
                 # Check if this is a discontinuity marker
-                if word_text in ['[*]', '[DISCONTINUITY]', '[SILENCE]', '[OVERLAP]']:
+                if is_marker_token(word_text):
                     markers_preserved += 1
                     continue  # Don't smooth markers - they might legitimately change speakers
                 
@@ -295,7 +320,7 @@ class SilenceMarkerProcessor:
                 
                 # Check if current word is a [*] marker
                 word_text = word.get('word', word.get('text', ''))
-                is_disfluency_marker = word_text.strip() in ['[*]', '[DISCONTINUITY]', '[SILENCE]', '[OVERLAP]']
+                is_disfluency_marker = is_marker_token(word_text)
                 
                 # Check if there's a next word to compare with
                 if i + 1 < len(words):
@@ -353,4 +378,16 @@ class SilenceMarkerProcessor:
 
 
 # Global logger manager instance
+STATIC_MARKERS = {"[DISCONTINUITY]", "[SILENCE]", "[OVERLAP]"}
+DISFLUENCY_MARKER_PATTERN = re.compile(r"^\[\*+\]$")
+
+
+def is_marker_token(token: str) -> bool:
+    """Return True for preserved markers, including variable-length asterisk forms."""
+    if not token:
+        return False
+    cleaned = token.strip()
+    return cleaned in STATIC_MARKERS or bool(DISFLUENCY_MARKER_PATTERN.match(cleaned))
+
+
 logger_manager = LoggerManager()
