@@ -29,6 +29,10 @@ from diarize import (
 from diarize.utils import logger_manager
 
 
+# Get script version from last modified timestamp
+SCRIPT_VERSION = datetime.fromtimestamp(os.path.getmtime(__file__)).strftime('%Y-%m-%d %H:%M:%S')
+
+
 def create_completion_marker(config: DiarizationConfig, base_filename: str, 
                            log_timestamp: str, output_files: dict) -> None:
     """Create completion marker file with processing details."""
@@ -163,7 +167,7 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
 
             # 5. Create settings dictionary for stats
             settings = {
-                "script_version": "diarize_refactored.py v1.0",
+                "script_version": f"diarize.py (modified: {SCRIPT_VERSION})",
                 "audio_file": audio_basename,
                 "json_input_file": json_file,
                 "device": config.device,
