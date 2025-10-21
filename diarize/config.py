@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 
 try:
     from path_settings import get_path_settings
-except ModuleNotFoundError:  # Allow running modules directly from the diarize package
+except ModuleNotFoundError:                                 # Allow running modules directly from the diarize package
     import sys
     from pathlib import Path
 

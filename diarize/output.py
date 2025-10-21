@@ -364,9 +364,9 @@ class TXTFormatter(TranscriptFormatter):
             else:
                 preamble_text = config.output_preamble
             txt_content.append(preamble_text)
-            txt_content.append("")  # Empty line after preamble
+            txt_content.append("")        # Empty line after preamble
             txt_content.append("=" * 80)  # Separator line
-            txt_content.append("")  # Empty line after separator
+            txt_content.append("")        # Empty line after separator
         
         for para in paragraphs:
             speaker = para['speaker']
