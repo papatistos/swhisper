@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 
 try:
     from path_settings import get_path_settings
-except ModuleNotFoundError:  # Allow running modules directly from the diarize package
+except ModuleNotFoundError:                                 # Allow running modules directly from the diarize package
     import sys
     from pathlib import Path
 
@@ -35,24 +35,24 @@ class DiarizationConfig:
     # Diarization settings
     min_speakers: int = 2
     max_speakers: int = 4  
-    device: str = "mps"  # "mps", "cuda", or "cpu"
+    device: str = "mps"                                    # "mps", "cuda", or "cpu"
     
     # Processing options
     force_reprocess: bool = True
 
     # Advanced speaker separation settings
     use_temporal_constraints: bool = True
-    speaker_change_penalty: float = 0.1  # Penalty for frequent speaker changes
-    embedding_distance_threshold: float = 0.6  # Lower values = Stricter matching - speakers must sound very similar to be grouped together
+    speaker_change_penalty: float = 0.1                    # Penalty for frequent speaker changes
+    embedding_distance_threshold: float = 0.6              # Lower values = Stricter matching - speakers must sound very similar to be grouped together
     
     # Pipeline configuration
     pipeline_model: str = "pyannote/speaker-diarization-3.1"
-    segmentation_threshold: float = 0.2  # Lower threshold for more sensitive speaker changes
-    min_duration_on: float = None   # default seems to be 0.0
-    min_duration_off: float = None  # default seems to be 0.0
+    segmentation_threshold: float = 0.2                    # Lower threshold for more sensitive speaker changes
+    min_duration_on: float = None                          # default seems to be 0.0
+    min_duration_off: float = None                         # default seems to be 0.0
     clustering_method: str = "centroid"
     clustering_min_cluster_size: int = 300   
-    clustering_threshold: float = 0.1     # (was: .15) Lower threshold for stricter clustering
+    clustering_threshold: float = 0.1                      # (was: .15) Lower threshold for stricter clustering
     
 # Default values from pyannote
 # embedding_distance_threshold: 0.7 (default)
