@@ -19,6 +19,32 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    message="torchaudio._backend.set_audio_backend has been deprecated",
+    category=UserWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message="torchaudio._backend.get_audio_backend has been deprecated",
+    category=UserWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message="Module 'speechbrain.pretrained' was deprecated",
+    category=UserWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message="`torchaudio.backend.common.AudioMetaData` has been moved",
+    category=UserWarning,
+)
+
+if __name__ == "__main__":
+    print("Preparing for diarization. This may take a while. Please be patient...", flush=True)
+
 # Import our refactored modules
 from diarize import (
     DiarizationConfig, DEFAULT_DIARIZATION_CONFIG,
