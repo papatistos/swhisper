@@ -46,12 +46,12 @@ class TranscriptionConfig:
 
 @dataclass 
 class WhisperSettings:
-    """Whisper-specific transcription settings."""
+    """Whisper-specific transcription settings (for whisper_timestamped)."""
     
     language: str = 'sv'
     task: str = 'transcribe'
     remove_punctuation_from_words: bool = False
-    compute_word_confidence: bool = True
+    compute_word_confidence: bool = True                   # this does not seem to work with the KBLab model
     include_punctuation_in_confidence: bool = False
     refine_whisper_precision: float = 0.5
     min_word_duration: float = 0.02
@@ -59,13 +59,13 @@ class WhisperSettings:
     word_alignment_most_top_layers: Optional[int] = None
     remove_empty_words: bool = False
     seed: int = 1234
-    vad: str = 'auditok'
+    vad: str = 'auditok'                                   # silero:v3.1, silero:v4.0, auditok or None. With None, no VAD is applied before transcription.
     detect_disfluencies: bool = True
     trust_whisper_timestamps: bool = False
-    naive_approach: bool = False
-    beam_size: int = 5
-    best_of: int = 5
-    temperature: List[float] = None
+    naive_approach: bool = False                           # I think this gets overridden if beam_size and best_of are set, so we are using naive mode anyway
+    beam_size: int = 5                                     # less efficient but better results
+    best_of: int = 5                                       # less efficient but better results
+    temperature: List[float] = None                        # if None, set below in __post_init__
     compression_ratio_threshold: float = 2.4
     logprob_threshold: float = -1.0
     no_speech_threshold: float = 0.6
@@ -78,7 +78,7 @@ class WhisperSettings:
     
     def __post_init__(self):
         if self.temperature is None:
-            self.temperature = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+            self.temperature = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0] # less efficient but better results
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for whisper.transcribe()."""

@@ -38,7 +38,7 @@ class DiarizationConfig:
     device: str = "mps"                                    # "mps", "cuda", or "cpu"
     
     # Processing options
-    force_reprocess: bool = False
+    force_reprocess: bool = False                          # Set to True to reprocess files even if output already exists (i.e. .ok files are present)
 
     # Advanced speaker separation settings
     use_temporal_constraints: bool = True
