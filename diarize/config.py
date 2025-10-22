@@ -72,9 +72,12 @@ class DiarizationConfig:
     # Word-level processing
     smoothing_enabled: bool = True
     min_speaker_words: int = 3
-    preserve_markers: bool = True                           # Preserve markers for sounds that could not be transcribed
+    preserve_markers: bool = True                           # Preserve disfluency markers for sounds that could not be transcribed
     preserved_markers: List[str] = None
     
+    # Output formatting
+    tsv_word_per_line: bool = False                          # If True, TSV output writes one word per line instead of one segment per line
+
     # Output preamble for transcript files
     output_preamble: str = """Note 1: If the transcript contains markers like [*], [**], [***] they indicate sounds that could not be transcribed. The number of asterisks roughly reflects the sound's duration in tenths of a second. This can be turned off in the swisper settings.
 
@@ -178,6 +181,7 @@ Note 3: Speaker detection is not perfect. The transcript may show too many diffe
             'rttm': os.path.join(self.final_output_dir, 'rttm'), 
             'rtf': os.path.join(self.final_output_dir, 'rtf'),
             'txt': os.path.join(self.final_output_dir, 'txt'),
+            'tsv': os.path.join(self.final_output_dir, 'tsv'),
             'stats': os.path.join(self.final_output_dir, 'stats'),
             'logs': os.path.join(self.final_output_dir, 'logs')
         }

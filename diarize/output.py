@@ -2,6 +2,7 @@
 
 import os
 import json
+import csv
 from typing import Dict, List, Any
 from .utils import WordProcessor
 
@@ -393,6 +394,123 @@ class TXTFormatter(TranscriptFormatter):
         # Write text file
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(txt_content))
+
+
+class TSVFormatter(TranscriptFormatter):
+    """Formats transcripts in TSV format."""
+
+    def format(
+        self,
+        segments: List[Dict],
+        output_path: str,
+        include_silence: bool = True,
+        include_word_details: bool = True,
+        config=None,
+        word_per_line: bool = False,
+        **kwargs
+    ) -> None:
+        """Create a TSV transcript with optional word-level metadata."""
+
+        fieldnames = [
+            'segment_index',
+            'start',
+            'end',
+            'duration',
+            'speaker',
+            'speaker_confidence',
+            'is_silence',
+            'text',
+            'word_count'
+        ]
+
+        if include_word_details and not word_per_line:
+            fieldnames.append('words')
+
+        if word_per_line:
+            fieldnames.extend([
+                'word',
+                'word_start',
+                'word_end',
+                'word_speaker',
+                'word_confidence',
+                'word_is_silence'
+            ])
+
+        with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames, delimiter='\t', quoting=csv.QUOTE_MINIMAL)
+            writer.writeheader()
+
+            for index, segment in enumerate(segments):
+                is_silence_marker = segment.get('is_silence_marker', False)
+                if is_silence_marker and not include_silence:
+                    continue
+
+                start_time = float(segment.get('start', 0) or 0)
+                end_time = float(segment.get('end', 0) or 0)
+                duration = max(end_time - start_time, 0.0)
+                speaker = segment.get('speaker', 'UNKNOWN')
+                speaker_confidence = segment.get('speaker_confidence')
+                text = WordProcessor.create_paragraph_text_from_words(segment, gap_threshold=None)
+                if not text:
+                    text = segment.get('text', '').strip()
+
+                if text:
+                    # Collapse blank lines created for silence markers and keep markers inline
+                    text_lines = [line.strip() for line in text.splitlines() if line.strip()]
+                    text = ' '.join(text_lines)
+                    text = text.replace('\t', ' ')
+
+                words = segment.get('words', []) or []
+                word_count = sum(1 for w in words if not w.get('is_silence_marker', False))
+
+                base_row = {
+                    'segment_index': index,
+                    'start': round(start_time, 3),
+                    'end': round(end_time, 3),
+                    'duration': round(duration, 3),
+                    'speaker': speaker,
+                    'speaker_confidence': round(speaker_confidence, 3) if isinstance(speaker_confidence, (int, float)) else '',
+                    'is_silence': bool(is_silence_marker),
+                    'text': text,
+                    'word_count': word_count
+                }
+
+                if word_per_line:
+                    for word in words:
+                        if word.get('is_silence_marker', False) and not include_silence:
+                            continue
+
+                        word_text = word.get('word', word.get('text', '')) or ''
+                        word_row = base_row.copy()
+                        word_row.update({
+                            'word': word_text.replace('\t', ' '),
+                            'word_start': round(word.get('start', start_time), 3) if word.get('start') is not None else '',
+                            'word_end': round(word.get('end', end_time), 3) if word.get('end') is not None else '',
+                            'word_speaker': word.get('speaker', speaker),
+                            'word_confidence': round(word.get('confidence'), 3) if isinstance(word.get('confidence'), (int, float)) else '',
+                            'word_is_silence': word.get('is_silence_marker', False)
+                        })
+                        writer.writerow(word_row)
+
+                    if not words:
+                        writer.writerow(base_row)
+
+                else:
+                    row = dict(base_row)
+                    if include_word_details:
+                        row['words'] = json.dumps([
+                            {
+                                'word': word.get('word', word.get('text', '')),
+                                'start': word.get('start'),
+                                'end': word.get('end'),
+                                'speaker': word.get('speaker'),
+                                'confidence': word.get('confidence'),
+                                'is_silence_marker': word.get('is_silence_marker', False)
+                            }
+                            for word in words
+                        ], ensure_ascii=False).replace('\t', ' ')
+
+                    writer.writerow(row)
 
 
 class StatsExporter:

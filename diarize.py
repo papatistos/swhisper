@@ -50,7 +50,7 @@ from diarize import (
     DiarizationConfig, DEFAULT_DIARIZATION_CONFIG,
     DiarizationPipeline, SpeakerAligner,
     DiarizationAnalyzer, SegmentAnalyzer, BoundaryAnalyzer, StatsExporter,
-    VTTFormatter, RTTMFormatter, RTFFormatter, TXTFormatter
+    VTTFormatter, RTTMFormatter, RTFFormatter, TXTFormatter, TSVFormatter
 )
 from diarize.utils import logger_manager
 
@@ -87,6 +87,7 @@ def create_completion_marker(config: DiarizationConfig, base_filename: str,
 #                       ├── rttm/{output_files.get('rttm_detailed', 'N/A')}
 #                       ├── rtf/{output_files.get('rtf', 'N/A')}
 #                       ├── txt/{output_files.get('txt', 'N/A')}
+#                       ├── tsv/{output_files.get('tsv', 'N/A')}
 #                       ├── stats/{output_files.get('stats', 'N/A')}
 #                       ├── logs/{output_files.get('log', 'N/A')}
 #                       └── logs/{output_files.get('silence_gap_log', 'N/A')}
@@ -229,7 +230,10 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     "preserve_markers": config.preserve_markers,
                     "markers_preserved": config.preserved_markers
                 },
-                "output_formats": ["vtt", "rttm", "rttm_detailed", "rtf", "txt", "stats_json"] 
+                "output_formats": ["vtt", "rttm", "rttm_detailed", "rtf", "txt", "tsv", "stats_json"],
+                "tsv": {
+                    "word_per_line": config.tsv_word_per_line
+                }
             }
 
             # 6. Save all output formats
@@ -277,6 +281,21 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             TXTFormatter().format(segments, txt_output_path, config=config, transcript_id=log_timestamp)
             print(f"TXT file saved to txt/{txt_filename}")
             output_files['txt'] = txt_filename
+
+            # TSV format
+            print(f'Saving transcript in TSV format...')
+            tsv_filename = f"{base_filename}_{log_timestamp}.tsv"
+            tsv_output_path = os.path.join(subdirs['tsv'], tsv_filename)
+            TSVFormatter().format(
+                segments,
+                tsv_output_path,
+                include_silence=config.include_silence_markers,
+                include_word_details=False,
+                config=config,
+                word_per_line=config.tsv_word_per_line
+            )
+            print(f"TSV file saved to tsv/{tsv_filename}")
+            output_files['tsv'] = tsv_filename
 
             # Stats JSON
             print(f'Saving analysis statistics...')
@@ -344,6 +363,7 @@ def main():
     print(f"       ├── rttm/ (RTTM speaker timing files)")
     print(f"       ├── rtf/ (Rich text documents)")
     print(f"       ├── txt/ (Plain text transcripts)")
+    print(f"       ├── tsv/ (Tab separated transcripts, e.g. for import into ELAN)")
     print(f"       ├── stats/ (Analysis JSON files)")
     print(f"       └── logs/ (Processing logs)")
     print("=" * 80)
