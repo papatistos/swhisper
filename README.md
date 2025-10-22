@@ -7,7 +7,7 @@ Until proven otherwise (and please do!), I believe that this is currently the be
 
 The excellent transcription quality is due to the KBLab Whisper model, which has been fine-tuned on a large Swedish dataset. The **limitations** are in the diarization step (though I have not tried the latest community-1 version of pyannote). Depending on your audio-files and settings, you may have to do some manual work to assign the right speakers, but it's still much better than starting from scratch. Try to tweak the parameters in `diarize/config.py` to see what works for your audio. I recommend specifying 1-2 more speakers than you have in the audio, it seems to work better and my post-processing sometimes manages to remove the extra speakers.
 
-- Please note that this is very much work in progress. PRs and suggestions are welcome!
+- Although the pipeline is fully functional, it is still work in progress. PRs and suggestions are welcome!
 
 - The scripts have been developed and tested on a MacBook Pro M4 with 24 GB RAM. It works with the Apple GPU but I'm not sure if they will run out of the box on other systems, especially with CUDA support.
 
