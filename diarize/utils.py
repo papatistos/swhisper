@@ -118,6 +118,35 @@ class WordProcessor:
     """Processes words and segments for speaker assignment."""
     
     @staticmethod
+    def align_segment_boundaries_to_words(segments: List[Dict]) -> List[Dict]:
+        """
+        Adjust segment start/end timestamps to match first/last word timestamps.
+        
+        This fixes drift that occurs during chunk merging in transcription,
+        ensuring segment boundaries perfectly align with their actual word content.
+        Silence markers are excluded from boundary calculation.
+        """
+        for segment in segments:
+            words = segment.get('words', [])
+            if not words:
+                continue
+            
+            # Filter out silence markers for boundary calculation
+            real_words = [w for w in words if not w.get('is_silence_marker', False)]
+            
+            if real_words:
+                # Update segment boundaries to match actual word timestamps
+                first_word_start = real_words[0].get('start')
+                last_word_end = real_words[-1].get('end')
+                
+                if first_word_start is not None:
+                    segment['start'] = first_word_start
+                if last_word_end is not None:
+                    segment['end'] = last_word_end
+        
+        return segments
+    
+    @staticmethod
     def create_paragraph_text_from_words(
         segment: Dict[str, Any],
         gap_threshold: Optional[float] = None

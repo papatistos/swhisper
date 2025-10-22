@@ -354,6 +354,12 @@ class SpeakerAligner:
                 whisper_result['segments']
             )
         
+        # Align segment boundaries to word timestamps (fixes chunk merge drift)
+        print("Aligning segment boundaries to word timestamps...")
+        whisper_result['segments'] = WordProcessor.align_segment_boundaries_to_words(
+            whisper_result['segments']
+        )
+        
         # Add silence markers if enabled
         if self.config.include_silence_markers:
             print("Adding silence markers...")
