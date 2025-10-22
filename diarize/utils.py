@@ -389,14 +389,17 @@ class SilenceMarkerProcessor:
     ) -> List[Dict]:
         """
         Add silence markers between words where gaps are longer than min_silence_duration.
-        Also adds silence markers after [*] disfluency markers IF there's a significant gap.
+        Detects gaps both within segments and between consecutive segments.
+        Cross-segment silences are created as standalone segments.
         
         Args:
             segments: List of transcript segments
             min_silence_duration: Minimum silence duration in seconds to mark
+            gap_log_path: Optional path to log all gap durations
         
         Returns:
-            List of segments with silence markers inserted at word level
+            List of segments with silence markers inserted (within-segment as words, 
+            cross-segment as separate segments)
         """
         if not segments:
             return segments
@@ -423,7 +426,7 @@ class SilenceMarkerProcessor:
                 word_text = word.get('word', word.get('text', ''))
                 is_disfluency_marker = is_marker_token(word_text)
                 
-                # Check if there's a next word to compare with
+                # Check for gap to next word within same segment
                 if i + 1 < len(words):
                     next_word = words[i + 1]
                     
@@ -432,14 +435,12 @@ class SilenceMarkerProcessor:
                     next_start = next_word.get('start', next_word.get('end', current_end))
                     
                     gap_duration = next_start - current_end
-                    marker_added = gap_duration >= min_silence_duration
                     
                     if gap_log_path is not None:
                         gap_log_entries.append(f"{gap_duration:.6f}")
                     
                     # Only add silence marker if gap meets minimum threshold
-                    # Whether it's after a [*] marker or a regular word doesn't matter
-                    if marker_added:
+                    if gap_duration >= min_silence_duration:
                         # Round to nearest 0.1 seconds
                         rounded_gap = round(gap_duration, 1)
                         
@@ -447,7 +448,7 @@ class SilenceMarkerProcessor:
                         silence_text = f"({rounded_gap:.1f})"
                         silence_text = silence_text.replace("(0.", "(.")
                         
-                        # Create silence "word"
+                        # Create silence "word" for within-segment gap
                         silence_word = {
                             'start': current_end,
                             'end': next_start,
@@ -463,6 +464,50 @@ class SilenceMarkerProcessor:
             # Update the segment with enhanced words
             new_segment['words'] = enhanced_words
             enhanced_segments.append(new_segment)
+            
+            # Check for cross-segment gap (after adding current segment)
+            if segment_index + 1 < len(segments):
+                next_segment = segments[segment_index + 1]
+                next_segment_words = next_segment.get('words', [])
+                
+                if enhanced_words and next_segment_words:
+                    # Get last word of current segment and first word of next segment
+                    last_word = enhanced_words[-1]
+                    first_next_word = next_segment_words[0]
+                    
+                    current_end = last_word.get('end', last_word.get('start', 0))
+                    next_start = first_next_word.get('start', first_next_word.get('end', current_end))
+                    
+                    gap_duration = next_start - current_end
+                    
+                    if gap_log_path is not None:
+                        gap_log_entries.append(f"{gap_duration:.6f}")
+                    
+                    # Create standalone silence segment if gap meets threshold
+                    if gap_duration >= min_silence_duration:
+                        rounded_gap = round(gap_duration, 1)
+                        silence_text = f"({rounded_gap:.1f})"
+                        silence_text = silence_text.replace("(0.", "(.")
+                        
+                        # Create a standalone silence segment
+                        silence_segment = {
+                            'start': current_end,
+                            'end': next_start,
+                            'text': silence_text,
+                            'speaker': 'SILENCE',
+                            'speaker_confidence': 1.0,
+                            'is_silence_marker': True,
+                            'words': [{
+                                'start': current_end,
+                                'end': next_start,
+                                'word': silence_text,
+                                'speaker': 'SILENCE',
+                                'confidence': 1.0,
+                                'is_silence_marker': True
+                            }]
+                        }
+                        
+                        enhanced_segments.append(silence_segment)
         
         if gap_log_path is not None and gap_log_entries:
             SilenceMarkerProcessor._write_gap_log(gap_log_path, gap_log_entries)
