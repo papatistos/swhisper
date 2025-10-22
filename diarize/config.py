@@ -38,7 +38,7 @@ class DiarizationConfig:
     device: str = "mps"                                    # "mps", "cuda", or "cpu"
     
     # Processing options
-    force_reprocess: bool = True
+    force_reprocess: bool = False
 
     # Advanced speaker separation settings
     use_temporal_constraints: bool = True
