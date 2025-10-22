@@ -55,6 +55,14 @@ from diarize import (
 from diarize.utils import logger_manager
 
 
+# Ensure progress messages appear immediately even when stdout is buffered
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
+
 # Get script version from last modified timestamp
 SCRIPT_VERSION = datetime.fromtimestamp(os.path.getmtime(__file__)).strftime('%Y-%m-%d %H:%M:%S')
 
