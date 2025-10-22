@@ -48,9 +48,7 @@ The excellent transcription quality is due to the KBLab Whisper model, which has
 
 ### Local path configuration
 
-Paths are managed through environment variables loaded from an optional `.swhisper.env`
-file. Copy `.swhisper.env.example` to `.swhisper.env` and set the paths that apply to
-your machine:
+The scripts are started by simply calling them without any arguments. All settings are read from the configuration files and relevant paths are managed through environment variables loaded from an optional `.swhisper.env` file. Copy `.swhisper.env.example` to `.swhisper.env` and set the paths that apply to your machine:
 
 ```bash
 cp .swhisper.env.example .swhisper.env
