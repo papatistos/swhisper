@@ -1,15 +1,87 @@
 """Speaker diarization pipeline and core processing logic."""
 
 import os
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
 import torch
 from pyannote.audio import Pipeline
 
+try:
+    from pyannote.audio.pipelines.utils.hook import Hooks, ProgressHook
+except ImportError:  # pragma: no cover - fallback when hook utilities are missing
+    Hooks = None
+    ProgressHook = None
+
 from .config import DiarizationConfig
 from .utils import DeviceManager
+
+
+class ConsoleProgressHook:
+    """Console-friendly progress hook that mirrors pyannote hook events."""
+
+    def __init__(self, step_prefix: str = "  -> ", progress_prefix: str = "     "):
+        self.step_prefix = step_prefix
+        self.progress_prefix = progress_prefix
+        self._current_step: Optional[str] = None
+        self._step_percent: Dict[str, int] = {}
+        self._step_completed: Dict[str, int] = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):  # noqa: ANN001 - signature defined by context manager protocol
+        return
+
+    def __call__(
+        self,
+        step_name: str,
+        step_artifact,
+        *,
+        file=None,
+        total: Optional[int] = None,
+        completed: Optional[int] = None
+    ) -> None:
+        formatted_name = self._format_step_name(step_name)
+
+        if step_name != self._current_step:
+            print(f"{self.step_prefix}{formatted_name}...")
+            self._current_step = step_name
+            self._step_percent[step_name] = -1
+            self._step_completed[step_name] = -1
+
+        if total is None or completed is None or total <= 0:
+            return
+
+        if completed < 0:
+            return
+
+        last_completed = self._step_completed.get(step_name, -1)
+        if total <= 10:
+            if completed == last_completed:
+                return
+            self._step_completed[step_name] = completed
+            print(self._format_progress_message(completed, total))
+            return
+
+        percent = int(round((completed / total) * 100))
+        percent = max(0, min(percent, 100))
+        last_percent = self._step_percent.get(step_name, -1)
+
+        if percent >= last_percent + 10 or completed >= total:
+            self._step_percent[step_name] = percent
+            self._step_completed[step_name] = completed
+            print(self._format_progress_message(completed, total, percent))
+
+    def _format_step_name(self, step_name: str) -> str:
+        normalized = step_name.replace('-', ' ').replace('_', ' ')
+        return ' '.join(word.capitalize() for word in normalized.split()) or step_name
+
+    def _format_progress_message(self, completed: int, total: int, percent: Optional[int] = None) -> str:
+        if percent is None:
+            return f"{self.progress_prefix}Progress: {completed}/{total}"
+        return f"{self.progress_prefix}Progress: {completed}/{total} ({percent}%)"
 
 
 class DiarizationPipeline:
@@ -85,18 +157,62 @@ class DiarizationPipeline:
             # Add progress indicator for the actual diarization processing
             is_parameter_testing = getattr(self.config, 'enable_parameter_testing', False)
             if not is_parameter_testing:
-                print("  -> Running speaker diarization analysis...")
-            
-            result = pipeline(
-                audio_path, 
-                min_speakers=self.config.min_speakers, 
-                max_speakers=self.config.max_speakers
-            )
-            
+                print(
+                    "  -> Running speaker diarization analysis, assuming between "
+                    f"{self.config.min_speakers} and {self.config.max_speakers} speakers..."
+                )
+
+            progress_context = self._progress_context(enable=not is_parameter_testing)
+
+            with progress_context as hook:
+                hook_arg = hook if hook is not None else None
+                result = pipeline(
+                    audio_path,
+                    min_speakers=self.config.min_speakers,
+                    max_speakers=self.config.max_speakers,
+                    hook=hook_arg,
+                )
+
             if not is_parameter_testing:
                 print("  -> Diarization analysis complete!")
             
             return result
+
+    def _progress_context(self, enable: bool):
+        """Create context manager providing a callable hook when progress reporting is enabled."""
+        if not enable:
+            return nullcontext()
+
+        console_hook = ConsoleProgressHook()
+
+        if Hooks is None or ProgressHook is None:
+            print("  -> Progress hook utilities not available; continuing without step-level progress.")
+            return console_hook
+
+        try:
+            pyannote_hook = self._initialize_pyannote_progress_hook()
+            if pyannote_hook is None:
+                return console_hook
+            return Hooks(pyannote_hook, console_hook)
+        except Exception as hook_error:  # pragma: no cover - defensive against runtime hook failures
+            print(
+                f"  -> Progress hook initialization failed ({hook_error}). "
+                "Continuing without step-level progress."
+            )
+            return console_hook
+
+    def _initialize_pyannote_progress_hook(self):
+        """Create a pyannote ProgressHook instance with graceful fallback across versions."""
+        if ProgressHook is None:
+            return None
+
+        for kwargs in ({"hidden": True}, {"transient": True}, {}):
+            try:
+                return ProgressHook(**kwargs)
+            except TypeError:
+                continue
+
+        return None
 
     def _configure_pipeline_parameters(self, pipeline, verbose: bool = True):
         """Configure pipeline parameters safely."""
