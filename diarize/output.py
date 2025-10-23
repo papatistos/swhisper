@@ -462,7 +462,7 @@ class TSVFormatter(TranscriptFormatter):
         include_silence: bool = True,
         include_word_details: bool = True,
         config=None,
-        word_per_line: bool = False,
+        word_per_line: bool = False,  # DO NOT CHANGE, this is just the default. Change DiarizationConfig.tsv_word_per_line instead
         **kwargs
     ) -> None:
         """Create a TSV transcript with optional word-level metadata."""
