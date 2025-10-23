@@ -50,7 +50,7 @@ from diarize import (
     DiarizationConfig, DEFAULT_DIARIZATION_CONFIG,
     DiarizationPipeline, SpeakerAligner,
     DiarizationAnalyzer, SegmentAnalyzer, BoundaryAnalyzer, StatsExporter,
-    VTTFormatter, RTTMFormatter, RTFFormatter, TXTFormatter, TSVFormatter
+    VTTFormatter, RTTMFormatter, RTFFormatter, TXTFormatter, TSVFormatter, PyannoteSegmentFormatter
 )
 from diarize.utils import logger_manager
 
@@ -163,10 +163,17 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             sys.stdout.flush()  # Force immediate output
             
             diarization_pipeline = DiarizationPipeline(config)
-            print("  -> Loading AI models and running diarization on audio file...")
+            print("  -> Loading models and running diarization on audio file...")
             sys.stdout.flush()  # Force immediate output
             diarization_result = diarization_pipeline.diarize(audiofile_path)
             DiarizationAnalyzer.analyze_diarization_result(diarization_result)
+            
+            # Save pyannote segment boundaries in TSV format
+            print("  -> Saving pyannote segment boundaries...")
+            pyannote_segments_filename = f"{base_filename}_{log_timestamp}_pyannote_segments.tsv"
+            pyannote_segments_path = os.path.join(subdirs['tsv'], pyannote_segments_filename)
+            PyannoteSegmentFormatter().format(diarization_result, pyannote_segments_path, audio_basename=audio_basename)
+            print(f"Pyannote segments saved to tsv/{pyannote_segments_filename}")
             
             # Save raw RTTM output (for reference)
             sanitized_filename = base_filename.replace(" ", "_")

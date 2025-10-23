@@ -513,6 +513,55 @@ class TSVFormatter(TranscriptFormatter):
                     writer.writerow(row)
 
 
+class PyannoteSegmentFormatter(TranscriptFormatter):
+    """Formats pyannote diarization segments in TSV format."""
+
+    def format(
+        self,
+        diarization_result,
+        output_path: str,
+        audio_basename: str = "",
+        **kwargs
+    ) -> None:
+        """Create a TSV file with pyannote segment boundaries."""
+
+        fieldnames = [
+            'segment_index',
+            'start',
+            'end',
+            'duration',
+            'speaker',
+            'confidence'
+        ]
+
+        with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames, delimiter='\t', quoting=csv.QUOTE_MINIMAL)
+            writer.writeheader()
+
+            for index, (segment, _, speaker) in enumerate(diarization_result.itertracks(yield_label=True)):
+                start_time = float(segment.start)
+                end_time = float(segment.end)
+                duration = end_time - start_time
+                
+                # Get confidence if available (some diarization results include this)
+                confidence = getattr(segment, 'confidence', None)
+                if confidence is None:
+                    confidence = ''
+                else:
+                    confidence = round(float(confidence), 3)
+
+                row = {
+                    'segment_index': index,
+                    'start': round(start_time, 3),
+                    'end': round(end_time, 3),
+                    'duration': round(duration, 3),
+                    'speaker': speaker,
+                    'confidence': confidence
+                }
+
+                writer.writerow(row)
+
+
 class StatsExporter:
     """Exports analysis statistics to JSON format."""
     
