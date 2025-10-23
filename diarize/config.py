@@ -76,7 +76,7 @@ class DiarizationConfig:
     preserved_markers: List[str] = None
     
     # Output formatting
-    tsv_word_per_line: bool = False                          # If True, TSV output writes one word per line instead of one segment per line
+    tsv_word_per_line: bool = True                          # If True, TSV output writes one word per line instead of one segment per line
 
     # Output preamble for transcript files
     output_preamble: str = """Note 1: If the transcript contains markers like [*], [**], [***] they indicate sounds that could not be transcribed. The number of asterisks roughly reflects the sound's duration in tenths of a second. This can be turned off in the swisper settings.
