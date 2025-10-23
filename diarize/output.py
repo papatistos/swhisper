@@ -37,6 +37,10 @@ class VTTFormatter(TranscriptFormatter):
         vtt_content = ["WEBVTT", ""]
         
         for segment in segments:
+            # Skip standalone silence segments
+            if segment.get('is_silence_marker', False):
+                continue
+            
             start_time = format_vtt_timestamp(segment['start'])
             end_time = format_vtt_timestamp(segment['end'])
             speaker = segment.get('speaker', 'UNKNOWN')
@@ -177,15 +181,53 @@ class RTFFormatter(TranscriptFormatter):
         current_start_time = None
         
         gap_threshold = getattr(config, 'silence_gap_linebreak_threshold', None) if config else None
-
+        
+        def smart_join(parts):
+            """Join text parts intelligently, preserving newlines around long silences."""
+            if not parts:
+                return ""
+            
+            result = parts[0]
+            for i in range(1, len(parts)):
+                prev_part = parts[i-1]
+                curr_part = parts[i]
+                
+                # If either part contains newlines (indicating a long silence),
+                # don't add a space between them
+                if '\n' in prev_part or '\n' in curr_part:
+                    result += curr_part
+                else:
+                    result += ' ' + curr_part
+            
+            return result
+        
         for segment in segments:
+            is_silence = segment.get('is_silence_marker', False)
             speaker = segment.get('speaker', 'UNKNOWN')
+
             text = WordProcessor.create_paragraph_text_from_words(segment, gap_threshold=gap_threshold)
+            
+            if not text:
+                continue
+
+            if is_silence:
+                # For silence segments, check if it's a long silence and format accordingly
+                if current_paragraph:
+                    # Parse the duration from the silence text (e.g., "(1.5s)" -> 1.5)
+                    duration = WordProcessor._parse_silence_duration(text)
+                    if duration is not None and gap_threshold and duration >= gap_threshold:
+                        # Long silence - add with blank lines (two newlines create empty lines)
+                        formatted_text = f"\n\n{text}\n\n"
+                    else:
+                        # Short silence - keep inline
+                        formatted_text = text
+                    current_paragraph.append(formatted_text)
+                continue
             
             if speaker != current_speaker:
                 # Save the previous paragraph if it exists
                 if current_paragraph and current_speaker:
-                    paragraph_text = ' '.join(current_paragraph)
+                    paragraph_text = smart_join(current_paragraph)
                     paragraphs.append({
                         'speaker': current_speaker,
                         'text': paragraph_text,
@@ -203,7 +245,7 @@ class RTFFormatter(TranscriptFormatter):
         
         # Don't forget the last paragraph
         if current_paragraph and current_speaker:
-            paragraph_text = ' '.join(current_paragraph)
+            paragraph_text = smart_join(current_paragraph)
             paragraphs.append({
                 'speaker': current_speaker,
                 'text': paragraph_text,
@@ -293,42 +335,60 @@ class TXTFormatter(TranscriptFormatter):
         """
         # Group segments by speaker (but handle silence markers separately)
         gap_threshold = getattr(config, 'silence_gap_linebreak_threshold', None) if config else None
+        
         paragraphs = []
         current_speaker = None
         current_paragraph = []
         current_start_time = None
         
-        for segment in segments:
-            # Handle silence markers separately
-            if segment.get('is_silence_marker', False):
-                # Save current paragraph if it exists
-                if current_paragraph and current_speaker:
-                    paragraph_text = ' '.join(current_paragraph)
-                    paragraphs.append({
-                        'speaker': current_speaker,
-                        'text': paragraph_text,
-                        'start_time': current_start_time,
-                        'is_silence': False
-                    })
-                    current_paragraph = []
-                    current_speaker = None
+        def smart_join(parts):
+            """Join text parts intelligently, preserving newlines around long silences."""
+            if not parts:
+                return ""
+            
+            result = parts[0]
+            for i in range(1, len(parts)):
+                prev_part = parts[i-1]
+                curr_part = parts[i]
                 
-                # Add silence marker as its own paragraph
-                paragraphs.append({
-                    'speaker': 'SILENCE',
-                    'text': segment['text'],
-                    'start_time': segment['start'],
-                    'is_silence': True
-                })
+                # If either part contains newlines (indicating a long silence),
+                # don't add a space between them
+                if '\n' in prev_part or '\n' in curr_part:
+                    result += curr_part
+                else:
+                    result += ' ' + curr_part
+            
+            return result
+
+        for segment in segments:
+            is_silence = segment.get('is_silence_marker', False)
+            speaker = segment.get('speaker', 'UNKNOWN')
+
+            text = WordProcessor.create_paragraph_text_from_words(segment, gap_threshold=gap_threshold)
+            
+            if not text:
+                continue
+
+            if is_silence:
+                # For silence segments, check if it's a long silence and format accordingly
+                if current_paragraph:
+                    # Parse the duration from the silence text (e.g., "(1.5s)" -> 1.5)
+                    duration = WordProcessor._parse_silence_duration(text)
+                    if duration is not None and gap_threshold and duration >= gap_threshold:
+                        # Long silence - add with blank lines (two newlines create empty lines)
+                        formatted_text = f"\n\n{text}\n\n"
+                    else:
+                        # Short silence - keep inline
+                        formatted_text = text
+                    current_paragraph.append(formatted_text)
                 continue
             
-            speaker = segment.get('speaker', 'UNKNOWN')
             text = WordProcessor.create_paragraph_text_from_words(segment, gap_threshold=gap_threshold)
             
             if speaker != current_speaker:
                 # Save the previous paragraph if it exists
                 if current_paragraph and current_speaker:
-                    paragraph_text = ' '.join(current_paragraph)
+                    paragraph_text = smart_join(current_paragraph)
                     paragraphs.append({
                         'speaker': current_speaker,
                         'text': paragraph_text,
@@ -347,7 +407,7 @@ class TXTFormatter(TranscriptFormatter):
         
         # Don't forget the last paragraph
         if current_paragraph and current_speaker:
-            paragraph_text = ' '.join(current_paragraph)
+            paragraph_text = smart_join(current_paragraph)
             paragraphs.append({
                 'speaker': current_speaker,
                 'text': paragraph_text,
@@ -375,11 +435,7 @@ class TXTFormatter(TranscriptFormatter):
             start_time = para['start_time']
             is_silence = para.get('is_silence', False)
             
-            if is_silence and include_silence:
-                # Center the silence marker
-                txt_content.append(f"                    {text}")
-                txt_content.append("")  # Empty line after silence
-            elif not is_silence:
+            if not is_silence:
                 # Format timestamp
                 hours = int(start_time // 3600)
                 minutes = int((start_time % 3600) // 60)
