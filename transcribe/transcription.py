@@ -87,6 +87,16 @@ class TranscriptionWorker:
                             word['start'] += time_offset
                             word['end'] += time_offset
 
+            if 'speech_activity' in result:
+                adjusted_vad = []
+                for span in result['speech_activity']:
+                    start = span.get('start')
+                    end = span.get('end')
+                    if start is None or end is None:
+                        continue
+                    adjusted_vad.append({'start': start + time_offset, 'end': end + time_offset})
+                result['speech_activity'] = adjusted_vad
+
             TranscriptionWorker._scale_disfluency_markers(result)
             
             # Clean up before returning
@@ -260,7 +270,10 @@ class ResultMerger:
             'text': '',
             'segments': [],
             'language': chunk_results[0][0].get('language', ''),
+            'speech_activity': []
         }
+
+        all_vad_segments: List[Dict[str, Any]] = []
         
         for i, (result, time_offset) in enumerate(chunk_results):
             if i == 0:
@@ -277,8 +290,36 @@ class ResultMerger:
                     if segment['start'] > overlap_threshold:
                         merged_result['text'] += ' ' + segment.get('text', '')
                         merged_result['segments'].append(segment)
+            all_vad_segments.extend(result.get('speech_activity', []))
         
+        merged_result['speech_activity'] = self._merge_vad_segments(all_vad_segments)
+
         return merged_result
+
+    def _merge_vad_segments(self, spans: List[Dict[str, Any]]) -> List[Dict[str, float]]:
+        """Merge overlapping VAD spans from chunk outputs."""
+        normalized: List[Dict[str, float]] = []
+        for span in spans:
+            start = span.get('start')
+            end = span.get('end')
+            if start is None or end is None:
+                continue
+            normalized.append({'start': float(start), 'end': float(end)})
+
+        if not normalized:
+            return []
+
+        normalized.sort(key=lambda item: item['start'])
+        merged: List[Dict[str, float]] = [normalized[0]]
+
+        for current in normalized[1:]:
+            last = merged[-1]
+            if current['start'] <= last['end'] + 1e-6:
+                last['end'] = max(last['end'], current['end'])
+            else:
+                merged.append(current)
+
+        return merged
 
 
 class TranscriptionPipeline:

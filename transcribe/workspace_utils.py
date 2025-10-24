@@ -169,7 +169,7 @@ class WorkspaceManager:
             print(f"💡 Temp directory will be cleaned up when script exits")
             return False
     
-    def copy_single_result_to_source(self, temp_file_path: str, base_name: str) -> bool:
+    def copy_single_result_to_source(self, temp_file_path: str, base_name: str, extension: Optional[str] = None) -> bool:
         """Copy a single transcription result to the source directory immediately after completion."""
         if not self.original_audio_dir or not self.temp_output_dir:
             return False
@@ -194,10 +194,11 @@ class WorkspaceManager:
             return False
         
         # Copy the file
-        dest_path = os.path.join(dest_dir, f"{base_name}.json")
+        ext = extension if extension is not None else os.path.splitext(temp_file_path)[1] or ".json"
+        dest_path = os.path.join(dest_dir, f"{base_name}{ext}")
         try:
             shutil.copy2(temp_file_path, dest_path)
-            print(f"📋 Copied to source: {self.config.json_dir}/{base_name}.json")
+            print(f"📋 Copied to source: {self.config.json_dir}/{base_name}{ext}")
             return True
         except Exception as e:
             print(f"⚠️  Error copying file to source: {e}")

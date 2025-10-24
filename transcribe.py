@@ -12,6 +12,7 @@ This script automatically chunks long audio files at natural speech boundaries
 to prevent memory issues while maintaining transcription accuracy.
 """
 
+import csv
 import os
 import sys
 import json
@@ -112,9 +113,17 @@ class TranscriptionApp:
         
         # Save final result
         self._save_transcription_result(result, output_path)
+
+        # Persist VAD segments if available
+        vad_output_path = os.path.join(output_dir, f"{base_name}_vad.tsv")
+        vad_saved = self._save_vad_segments(result, vad_output_path)
         
         # Copy this file's result to source immediately
         self.workspace_manager.copy_single_result_to_source(output_path, base_name)
+        if vad_saved:
+            self.workspace_manager.copy_single_result_to_source(
+                vad_output_path, f"{base_name}_vad", extension=".tsv"
+            )
         
         # Clean up checkpoint on successful completion
         if checkpoint_path:
@@ -207,6 +216,31 @@ class TranscriptionApp:
             total_segments = len(result['segments'])
             total_text_length = len(result.get('text', ''))
             print(f"✅ Saved {total_segments} segments, {total_text_length} characters")
+
+    def _save_vad_segments(self, result: dict, vad_path: str) -> bool:
+        """Write VAD boundaries to TSV for downstream analysis."""
+        segments = result.get('speech_activity')
+        if segments is None:
+            print("⚠️ No VAD data found; skipping TSV export")
+            return False
+
+        os.makedirs(os.path.dirname(vad_path), exist_ok=True)
+
+        try:
+            with open(vad_path, 'w', encoding='utf-8', newline='') as outfile:
+                writer = csv.writer(outfile, delimiter='\t')
+                writer.writerow(["segment_id", "start", "end", "duration"])
+                for idx, span in enumerate(segments, start=1):
+                    start = float(span.get('start', 0.0))
+                    end = float(span.get('end', start))
+                    duration = max(0.0, end - start)
+                    writer.writerow([idx, f"{start:.3f}", f"{end:.3f}", f"{duration:.3f}"])
+
+            print(f"📄 Saved VAD segments to: {os.path.basename(vad_path)}")
+            return True
+        except Exception as exc:
+            print(f"⚠️ Failed to write VAD TSV: {exc}")
+            return False
     
     @contextmanager
     def _safe_whisper_model(self):
