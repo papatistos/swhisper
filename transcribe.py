@@ -151,7 +151,7 @@ class TranscriptionApp:
         """Process a single audio file without chunking."""
         # Implementation for single chunk processing
         # This would use the existing whisper transcription directly
-        import whisper
+        import whisper_timestamped as whisper
         
         with self._safe_whisper_model() as model:
             print("🔄 Loading audio...")
@@ -214,7 +214,7 @@ class TranscriptionApp:
         model = None
         try:
             print("🔄 Loading Whisper model...")
-            import whisper
+            import whisper_timestamped as whisper
             model = whisper.load_model(self.config.model_str, device=self.config.device)
             resource_manager.current_whisper_model = model
             yield model
