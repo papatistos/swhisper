@@ -83,6 +83,10 @@ class SegmentAnalyzer:
         total_duration = 0
         
         for segment in segments:
+            # Skip standalone silence segments from analysis
+            if segment.get('is_silence_marker', False):
+                continue
+            
             speaker = segment.get('speaker', 'UNKNOWN')
             duration = segment['end'] - segment['start']
             total_duration += duration
@@ -123,15 +127,18 @@ class BoundaryAnalyzer:
         """
         Analyze where alignment issues occur.
         """
-        unknown_count = sum(1 for seg in segments if seg.get('speaker') == 'UNKNOWN')
-        unknown_percentage = (unknown_count / len(segments)) * 100 if len(segments) > 0 else 0
+        # Filter out standalone silence segments for analysis
+        real_segments = [seg for seg in segments if not seg.get('is_silence_marker', False)]
+        
+        unknown_count = sum(1 for seg in real_segments if seg.get('speaker') == 'UNKNOWN')
+        unknown_percentage = (unknown_count / len(real_segments)) * 100 if len(real_segments) > 0 else 0
         
         # Find speaker changes
         speaker_changes = []
-        for i in range(1, len(segments)):
-            if segments[i]['speaker'] != segments[i-1]['speaker']:
-                prev_seg = segments[i-1]
-                curr_seg = segments[i]
+        for i in range(1, len(real_segments)):
+            if real_segments[i]['speaker'] != real_segments[i-1]['speaker']:
+                prev_seg = real_segments[i-1]
+                curr_seg = real_segments[i]
                 gap = curr_seg['start'] - prev_seg['end']
                 
                 change_data = {
@@ -144,7 +151,7 @@ class BoundaryAnalyzer:
         
         boundary_data = {
             "unknown_segments": unknown_count,
-            "total_segments": len(segments),
+            "total_segments": len(real_segments),
             "unknown_percentage": unknown_percentage,
             "speaker_changes": speaker_changes,
             "total_speaker_changes": len(speaker_changes)
@@ -153,7 +160,7 @@ class BoundaryAnalyzer:
         # Print output (existing behavior)
         if not return_data:
             print("\n🔍 Boundary Analysis:")
-            print(f"   UNKNOWN segments: {unknown_count}/{len(segments)} ({unknown_percentage:.1f}%)")
+            print(f"   UNKNOWN segments: {unknown_count}/{len(real_segments)} ({unknown_percentage:.1f}%)")
             
             for change in speaker_changes:
                 print(f"   Speaker change at {change['time']:.1f}s: {change['from_speaker']} -> {change['to_speaker']} (gap: {change['gap_seconds']:.1f}s)")
