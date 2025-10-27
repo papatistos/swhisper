@@ -93,6 +93,8 @@ class DiarizationConfig:
     backfill_model: str = "KBLab/kb-whisper-large"
     backfill_device: Optional[str] = None
     backfill_overlap: float = 0.5
+    backfill_save_audio_snippets: bool = True
+    backfill_snippet_dir: Optional[str] = None
     
     # Output formatting
     tsv_word_per_line: bool = True                          # If True, TSV output writes one word per line instead of one segment per line
