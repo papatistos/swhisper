@@ -370,9 +370,9 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             DeviceManager.clear_device_memory()
 
 
-def main():
+def main(config: DiarizationConfig = None):
     """Main processing function."""
-    config = DEFAULT_DIARIZATION_CONFIG
+    config = config or DEFAULT_DIARIZATION_CONFIG
     
     # Create the final output directory if it doesn't exist
     os.makedirs(config.final_output_dir, exist_ok=True)
