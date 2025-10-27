@@ -1,7 +1,7 @@
 """Configuration settings for diarization processing."""
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 try:
@@ -17,6 +17,16 @@ except ModuleNotFoundError:                                 # Allow running modu
 
 _PATH_SETTINGS = get_path_settings()
 
+
+def _default_hf_token() -> str:
+    """Resolve Hugging Face token from multiple supported environment variables."""
+    for env_var in ("HUGGINGFACE_ACCESS_TOKEN", "HUGGING_FACE_TOKEN", "PYANNOTE_TOKEN"):
+        token = os.getenv(env_var)
+        if token:
+            return token
+    return ""
+
+
 DEFAULT_DIARIZE_AUDIO_DIR = str(
     _PATH_SETTINGS.diarize_default_audio_dir
     or _PATH_SETTINGS.audio_dir
@@ -30,7 +40,7 @@ class DiarizationConfig:
     """Configuration for speaker diarization."""
     
     # Authentication
-    hugging_face_token: str = os.getenv("HUGGING_FACE_TOKEN", "")
+    hugging_face_token: str = field(default_factory=_default_hf_token)
     
     # Diarization settings
     min_speakers: int = 2
