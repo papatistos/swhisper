@@ -73,6 +73,9 @@ class DiarizationConfig:
 # clustering_min_cluster_size: 10-15?
 # 
 
+    # Pyannote 4 settings
+    use_exclusive_speaker_diarization: bool = True          # Use exclusive speaker diarization stream if available
+
     # Silence detection settings
     min_silence_duration: float = 0.2                       # (rounded) silence durations below this value will be ignored
     include_silence_markers: bool = True                    # silence duration in transcript
