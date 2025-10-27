@@ -27,7 +27,7 @@ class TranscriptionWorker:
     @staticmethod
     def chunk_worker(audiofile_path: str, start_time: float, end_time: float, 
                     model_path: str, settings: Dict[str, Any], output_queue: mp.Queue, 
-                    device: str = "mps"):
+                    device: str = "mps", overlap_duration: float = 2.0):
         """Worker function for processing audio chunks in subprocess."""
         try:
             # Import everything needed in the subprocess
@@ -45,16 +45,17 @@ class TranscriptionWorker:
             print(f"    🔧 Loading audio chunk {start_time:.1f}s-{end_time:.1f}s...")
             
             # Load and process chunk
-            overlap_duration = 2.0
-            overlap_samples = int(overlap_duration * 16000)
-            start_sample = max(0, int(start_time * 16000) - overlap_samples)
-            end_sample = int(end_time * 16000) + overlap_samples
+            sample_rate = 16000
+            effective_overlap = max(0.0, overlap_duration or 0.0)
+            overlap_samples = int(effective_overlap * sample_rate)
+            start_sample = max(0, int(start_time * sample_rate) - overlap_samples)
+            end_sample = int(end_time * sample_rate) + overlap_samples
             
             # Load chunk using soundfile
             with sf.SoundFile(audiofile_path) as f:
                 orig_sr = f.samplerate
-                orig_start = int(start_sample * orig_sr / 16000)
-                orig_end = int(end_sample * orig_sr / 16000)
+                orig_start = int(start_sample * orig_sr / sample_rate)
+                orig_end = int(end_sample * orig_sr / sample_rate)
                 
                 f.seek(orig_start)
                 chunk_audio = f.read(orig_end - orig_start, dtype='float32')
@@ -77,7 +78,7 @@ class TranscriptionWorker:
             print(f"    🔧 Adjusting timestamps...")
             
             # Adjust timestamps to account for the actual start position
-            time_offset = start_sample / 16000
+            time_offset = start_sample / sample_rate
             if 'segments' in result:
                 for segment in result['segments']:
                     segment['start'] += time_offset
@@ -181,8 +182,16 @@ class ChunkProcessor:
         output_queue = mp.Queue()
         process = mp.Process(
             target=TranscriptionWorker.chunk_worker, 
-            args=(audiofile_path, start_time, end_time, self.config.model_str, 
-                  self.whisper_settings.to_dict(), output_queue, self.config.device)
+            args=(
+                audiofile_path,
+                start_time,
+                end_time,
+                self.config.model_str,
+                self.whisper_settings.to_dict(),
+                output_queue,
+                self.config.device,
+                self.config.overlap_duration,
+            )
         )
         
         process.start()
