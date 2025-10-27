@@ -123,10 +123,22 @@ class DiarizationPipeline:
             if not is_parameter_testing:
                 print("  -> Loading speaker diarization models...")
             
-            pipeline = Pipeline.from_pretrained(
-                self.config.pipeline_model,
-                use_auth_token=self.config.hugging_face_token
-            )
+            load_kwargs = self._build_pretrained_kwargs()
+
+            try:
+                pipeline = Pipeline.from_pretrained(
+                    self.config.pipeline_model,
+                    **load_kwargs
+                )
+            except TypeError as load_error:
+                legacy_kwargs = self._build_legacy_pretrained_kwargs(load_kwargs)
+                if legacy_kwargs is None:
+                    raise load_error
+
+                pipeline = Pipeline.from_pretrained(
+                    self.config.pipeline_model,
+                    **legacy_kwargs
+                )
             
             if not is_parameter_testing:
                 print("  -> Configuring pipeline parameters...")
@@ -278,6 +290,21 @@ class DiarizationPipeline:
         except Exception as config_error:
             if verbose:
                 print(f"  Configuration note: Some parameters use defaults ({config_error})")
+
+    def _build_pretrained_kwargs(self):
+        """Build keyword arguments for Pipeline.from_pretrained compatible with v4."""
+        token = getattr(self.config, 'hugging_face_token', '') or ''
+        token = token.strip()
+        return {'token': token} if token else {}
+
+    def _build_legacy_pretrained_kwargs(self, attempted_kwargs):
+        """Fallback to legacy keyword arguments when running against pyannote 3."""
+        token = attempted_kwargs.get('token') if attempted_kwargs else None
+        if not token:
+            return None
+
+        print("  -> Detected legacy pyannote.audio; falling back to use_auth_token keyword.")
+        return {'use_auth_token': token}
 
 class SpeakerAligner:
     """Aligns transcription segments with speaker diarization results."""
