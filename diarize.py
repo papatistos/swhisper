@@ -232,12 +232,76 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             segments = alignment_result['segments']
             word_stats = alignment_result['word_stats']
             segment_stats = alignment_result['segment_stats']
-            
+            unmatched_turns = alignment_result.get('unmatched_diarization_segments', [])
+
+            if unmatched_turns and getattr(config, 'backfill_missing_turns', True):
+                print(f"  -> Attempting targeted transcription for {len(unmatched_turns)} unmatched diarization segments...")
+
+                base_transcribe_config = TranscriptionConfig()
+                backfill_model = getattr(config, 'backfill_model', None) or base_transcribe_config.model_str
+                backfill_device = getattr(config, 'backfill_device', None) or config.device or base_transcribe_config.device
+                backfill_overlap = getattr(config, 'backfill_overlap', None)
+                if backfill_overlap is None:
+                    backfill_overlap = base_transcribe_config.overlap_duration
+
+                backfill_settings = WhisperSettings()
+                backfill_settings.verbose = False
+                backfill_settings.vad = None
+                if isinstance(whisper_result, dict) and whisper_result.get('language'):
+                    backfill_settings.language = whisper_result['language']
+
+                backfill_transcriber = BackfillTranscriber(
+                    audiofile_path,
+                    backfill_model,
+                    backfill_device,
+                    backfill_settings.to_dict(),
+                    overlap_duration=backfill_overlap
+                )
+
+                try:
+                    backfill_outcome = backfill_transcriber.transcribe_turns(unmatched_turns)
+                except Exception as backfill_error:  # pragma: no cover - defensive logging
+                    print(f"  -> Backfill transcription failed: {backfill_error}")
+                    backfill_outcome = {
+                        'segments': [],
+                        'failed_turns': unmatched_turns,
+                        'word_count': 0
+                    }
+                finally:
+                    backfill_transcriber.close()
+
+                recovered_segments = backfill_outcome.get('segments', [])
+                if recovered_segments:
+                    recovered_word_count = backfill_outcome.get('word_count', 0)
+                    segments.extend(recovered_segments)
+                    segments.sort(key=lambda seg: seg.get('start', 0.0))
+
+                    word_stats['total'] += recovered_word_count
+                    word_stats['assigned'] += recovered_word_count
+                    segment_stats['total'] += len(recovered_segments)
+                    segment_stats['high_conf'] += len(recovered_segments)
+
+                    alignment_result['segments'] = segments
+                    alignment_result['word_stats'] = word_stats
+                    alignment_result['segment_stats'] = segment_stats
+
+                    print(f"  -> Backfilled {len(recovered_segments)} diarization segments ({recovered_word_count} new words)")
+                else:
+                    print("  -> Targeted transcription did not recover any words")
+
+                unmatched_turns = backfill_outcome.get('failed_turns', [])
+                alignment_result['unmatched_diarization_segments'] = unmatched_turns
+
             endtime = datetime.now()
             duration = endtime - starttime
             print(f"{endtime.strftime('%Y-%m-%d %H:%M:%S')} - Alignment complete. (Duration: {duration})")
             if gap_log_path and os.path.exists(gap_log_path):
                 print(f"Silence gap log saved to logs/{gap_log_filename}")
+
+            if unmatched_turns:
+                print(f"  -> {len(unmatched_turns)} diarization segments contained no aligned words")
+            else:
+                print("  -> All diarization segments contain at least one word")
 
             # 4. Analysis
             speaker_stats = SegmentAnalyzer.analyze_final_segments(segments)
@@ -260,6 +324,12 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     "min_speaker_words": config.min_speaker_words,
                     "preserve_markers": config.preserve_markers,
                     "markers_preserved": config.preserved_markers
+                },
+                "backfill": {
+                    "enabled": getattr(config, 'backfill_missing_turns', False),
+                    "model": getattr(config, 'backfill_model', None),
+                    "device": getattr(config, 'backfill_device', None) or config.device,
+                    "overlap": getattr(config, 'backfill_overlap', None)
                 },
                 "output_formats": ["vtt", "rttm", "rttm_detailed", "rtf", "txt", "tsv", "stats_json"],
                 "tsv": {

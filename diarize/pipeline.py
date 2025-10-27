@@ -402,8 +402,25 @@ class SpeakerAligner:
                 relative_gap_path = os.path.relpath(gap_log_path, self.config.final_output_dir)
                 print(f"Silence gap durations logged to {relative_gap_path}")
         
+        unmatched_turns = SpeakerAssigner.find_segments_without_word_coverage(
+            whisper_result['segments'],
+            diarization_result
+        )
+        if unmatched_turns:
+            print(f"   Warning: {len(unmatched_turns)} diarization segments have no aligned words")
+            for turn in unmatched_turns:
+                print(
+                    "     - {speaker}: {start:.2f}s - {end:.2f}s (duration {duration:.2f}s)".format(
+                        speaker=turn['speaker'],
+                        start=turn['start'],
+                        end=turn['end'],
+                        duration=turn['duration']
+                    )
+                )
+
         return {
             'segments': whisper_result['segments'],
             'word_stats': word_stats,
-            'segment_stats': segment_stats
+            'segment_stats': segment_stats,
+            'unmatched_diarization_segments': unmatched_turns
         }
