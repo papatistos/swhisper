@@ -10,6 +10,12 @@ import atexit
 from typing import Optional, List, Dict, Any
 from contextlib import contextmanager
 
+import numpy as np
+import soundfile as sf
+from scipy.signal import resample
+import whisper_timestamped as whisper
+from transcribe.transcription import TranscriptionWorker
+
 
 class DeviceManager:
     """Manages device memory and cleanup operations."""
@@ -423,6 +429,198 @@ class SpeakerAssigner:
         return segments
 
 
+class BackfillTranscriber:
+    """Transcribe diarization turns that lack aligned words."""
+
+    def __init__(
+        self,
+        audio_path: str,
+        model_name: str,
+        device: Optional[str],
+        whisper_settings: Dict[str, Any],
+        overlap_duration: float = 0.5,
+    ) -> None:
+        self.audio_path = audio_path
+        self.model_name = model_name
+        self.device = device or "cpu"
+        self.settings = dict(whisper_settings or {})
+        self.settings.setdefault('verbose', False)
+        self.overlap_duration = max(0.0, overlap_duration)
+        self.sample_rate = 16000
+        self._model = None
+
+    def _ensure_model_loaded(self) -> None:
+        if self._model is None:
+            self._model = whisper.load_model(self.model_name, device=self.device)
+
+    def close(self) -> None:
+        if self._model is not None:
+            del self._model
+            self._model = None
+            DeviceManager.clear_device_memory()
+
+    def transcribe_turns(self, turns: List[Dict[str, Any]]) -> Dict[str, Any]:
+        recovered_segments: List[Dict[str, Any]] = []
+        recovered_turns: List[Dict[str, Any]] = []
+        failed_turns: List[Dict[str, Any]] = []
+        total_words = 0
+
+        for turn in turns:
+            speaker = turn.get('speaker', 'UNKNOWN')
+            start = float(turn.get('start', 0.0))
+            end = float(turn.get('end', start))
+            duration = max(0.0, end - start)
+            print(f"   -> Transcribing {speaker}: {start:.2f}s - {end:.2f}s (duration {duration:.2f}s)")
+            try:
+                segment, word_count = self._transcribe_single_turn(turn)
+            except Exception as exc:  # pragma: no cover - logging path
+                print(f"   -> Backfill error for {speaker} {start:.2f}-{end:.2f}s: {exc}")
+                segment, word_count = None, 0
+
+            if segment and word_count:
+                recovered_segments.append(segment)
+                enriched_turn = dict(turn)
+                enriched_turn['word_count'] = word_count
+                recovered_turns.append(enriched_turn)
+                total_words += word_count
+
+                word_tokens = [
+                    (w.get('word') if isinstance(w.get('word'), str) and w.get('word').strip()
+                     else w.get('text', '')).strip()
+                    for w in segment.get('words', [])
+                    if isinstance(w, dict)
+                ]
+                filtered_tokens = [token for token in word_tokens if token]
+                if filtered_tokens:
+                    print(f"      Words: {' '.join(filtered_tokens)}")
+                else:
+                    print("      Words: [none detected]")
+            else:
+                failed_turns.append(turn)
+                print("      Words: [none detected]")
+
+        return {
+            'segments': recovered_segments,
+            'recovered_turns': recovered_turns,
+            'failed_turns': failed_turns,
+            'word_count': total_words
+        }
+
+    def _transcribe_single_turn(self, turn: Dict[str, Any]) -> tuple[Optional[Dict[str, Any]], int]:
+        start = float(turn.get('start', 0.0))
+        end = float(turn.get('end', start))
+        if end <= start:
+            return None, 0
+
+        self._ensure_model_loaded()
+
+        chunk_audio, start_sample = self._load_audio_chunk(start, end)
+        if chunk_audio is None or len(chunk_audio) == 0:
+            return None, 0
+
+        result = whisper.transcribe(self._model, chunk_audio, **self.settings)
+
+        time_offset = start_sample / self.sample_rate
+
+        segments = result.get('segments', [])
+        for segment in segments:
+            if 'start' in segment:
+                segment['start'] += time_offset
+            if 'end' in segment:
+                segment['end'] += time_offset
+            for word in segment.get('words', []):
+                if 'start' in word:
+                    word['start'] += time_offset
+                if 'end' in word:
+                    word['end'] += time_offset
+
+        TranscriptionWorker._scale_disfluency_markers(result)
+
+        collected_words: List[Dict[str, Any]] = []
+        speaker_label = turn.get('speaker', 'UNKNOWN')
+
+        for segment in segments:
+            for word in segment.get('words', []):
+                word_start = word.get('start')
+                word_end = word.get('end')
+                if word_start is None or word_end is None:
+                    continue
+                if word_end <= start or word_start >= end:
+                    continue
+
+                word_text = word.get('word', word.get('text', '')).strip()
+                if not word_text:
+                    continue
+
+                clipped_word = dict(word)
+                clipped_word['start'] = max(start, float(word_start))
+                clipped_word['end'] = min(end, float(word_end))
+                clipped_word['speaker'] = speaker_label
+                clipped_word['is_backfill'] = True
+                collected_words.append(clipped_word)
+
+        if not collected_words:
+            return None, 0
+
+        collected_words.sort(key=lambda item: item.get('start', 0.0))
+
+        text_tokens = []
+        for word in collected_words:
+            token = word.get('word')
+            if not isinstance(token, str):
+                token = word.get('text', '')
+            token = token.strip() if isinstance(token, str) else ''
+            if token:
+                text_tokens.append(token)
+
+        segment_data = {
+            'start': collected_words[0]['start'],
+            'end': collected_words[-1]['end'],
+            'text': ' '.join(text_tokens),
+            'speaker': speaker_label,
+            'speaker_confidence': 1.0,
+            'words': collected_words,
+            'is_backfill': True
+        }
+
+        return segment_data, len(collected_words)
+
+    def _load_audio_chunk(self, start: float, end: float) -> tuple[Optional[np.ndarray], int]:
+        margin = self.overlap_duration
+        padded_start = max(0.0, start - margin)
+        padded_end = max(padded_start + 0.05, end + margin)
+
+        start_sample = int(round(padded_start * self.sample_rate))
+        end_sample = int(round(padded_end * self.sample_rate))
+
+        if end_sample <= start_sample:
+            end_sample = start_sample + int(self.sample_rate * 0.1)
+
+        with sf.SoundFile(self.audio_path) as audio_file:
+            orig_sr = audio_file.samplerate
+            orig_start = int(round(start_sample * orig_sr / self.sample_rate))
+            orig_end = int(round(end_sample * orig_sr / self.sample_rate))
+            if orig_end <= orig_start:
+                return None, start_sample
+
+            audio_file.seek(orig_start)
+            chunk_audio = audio_file.read(orig_end - orig_start, dtype='float32')
+
+        if chunk_audio is None or len(chunk_audio) == 0:
+            return None, start_sample
+
+        if len(chunk_audio.shape) > 1:
+            chunk_audio = np.mean(chunk_audio, axis=1)
+
+        if orig_sr != self.sample_rate:
+            target_length = int(len(chunk_audio) * self.sample_rate / orig_sr)
+            if target_length <= 0:
+                return None, start_sample
+            chunk_audio = resample(chunk_audio, target_length)
+
+        return chunk_audio.astype(np.float32), start_sample
+
+
 class SilenceMarkerProcessor:
     """Handles silence marker detection and insertion."""
     
@@ -579,6 +777,32 @@ def is_marker_token(token: str) -> bool:
         return False
     cleaned = token.strip()
     return cleaned in STATIC_MARKERS or bool(DISFLUENCY_MARKER_PATTERN.match(cleaned))
+
+
+def _is_silence_token(word: Dict[str, Any]) -> bool:
+    """Identify silence placeholders regardless of explicit flags."""
+    if not isinstance(word, dict):
+        return False
+
+    if word.get('is_silence_marker', False):
+        return True
+
+    if word.get('speaker') == 'SILENCE':
+        return True
+
+    token = word.get('word', word.get('text', ''))
+    if not isinstance(token, str):
+        return False
+
+    cleaned = token.strip()
+    if not cleaned:
+        return False
+
+    if cleaned.startswith('(') and cleaned.endswith(')'):
+        if WordProcessor._parse_silence_duration(cleaned) is not None:
+            return True
+
+    return False
 
 
 logger_manager = LoggerManager()

@@ -9,7 +9,7 @@ from .output import (
 )
 from .utils import (
     DeviceManager, LoggerManager, SilenceMarkerProcessor,
-    WordProcessor, SpeakerAssigner
+    WordProcessor, SpeakerAssigner, BackfillTranscriber
 )
 
 # Import the main function from the diarize.py script
@@ -50,5 +50,6 @@ __all__ = [
     'LoggerManager',
     'SilenceMarkerProcessor',
     'WordProcessor',
-    'SpeakerAssigner'
+    'SpeakerAssigner',
+    'BackfillTranscriber'
 ]

@@ -52,7 +52,8 @@ from diarize import (
     DiarizationAnalyzer, SegmentAnalyzer, BoundaryAnalyzer, StatsExporter,
     VTTFormatter, RTTMFormatter, RTFFormatter, TXTFormatter, TSVFormatter, PyannoteSegmentFormatter
 )
-from diarize.utils import logger_manager
+from diarize.utils import logger_manager, BackfillTranscriber
+from transcribe import TranscriptionConfig, WhisperSettings
 
 
 # Ensure progress messages appear immediately even when stdout is buffered
