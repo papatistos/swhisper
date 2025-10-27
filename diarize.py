@@ -165,15 +165,38 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             diarization_pipeline = DiarizationPipeline(config)
             print("  -> Loading models and running diarization on audio file...")
             sys.stdout.flush()  # Force immediate output
-            diarization_result = diarization_pipeline.diarize(audiofile_path)
+            diarization_output = diarization_pipeline.diarize(audiofile_path)
+
+            standard_result = getattr(diarization_output, "speaker_diarization", diarization_output)
+            exclusive_result = getattr(diarization_output, "exclusive_speaker_diarization", None)
+            diarization_result = standard_result
+
+            exclusive_requested = getattr(config, "use_exclusive_speaker_diarization", False)
+            if exclusive_result is not None:
+                if exclusive_requested:
+                    print("  -> Exclusive diarization stream enabled; using exclusive_speaker_diarization output.")
+                    diarization_result = exclusive_result
+                else:
+                    print("  -> Exclusive diarization stream available (pyannote.audio >= 4) but disabled in config.")
+            elif exclusive_requested:
+                print("  -> Exclusive diarization stream requested but not available; using standard diarization output.")
+
             DiarizationAnalyzer.analyze_diarization_result(diarization_result)
             
             # Save pyannote segment boundaries in TSV format
-            print("  -> Saving pyannote segment boundaries...")
-            pyannote_segments_filename = f"{base_filename}_{log_timestamp}_pyannote_segments.tsv"
-            pyannote_segments_path = os.path.join(subdirs['tsv'], pyannote_segments_filename)
-            PyannoteSegmentFormatter().format(diarization_result, pyannote_segments_path, audio_basename=audio_basename)
-            print(f"Pyannote segments saved to tsv/{pyannote_segments_filename}")
+            print("  -> Saving pyannote segment boundaries (overlapping timeline)...")
+            overlap_segments_filename = f"{base_filename}_{log_timestamp}_pyannote_segments_overlapping.tsv"
+            overlap_segments_path = os.path.join(subdirs['tsv'], overlap_segments_filename)
+            PyannoteSegmentFormatter().format(standard_result, overlap_segments_path, audio_basename=audio_basename)
+            print(f"Overlapping segments saved to tsv/{overlap_segments_filename}")
+
+            exclusive_segments_filename = None
+            if exclusive_result is not None:
+                print("  -> Saving pyannote segment boundaries (exclusive timeline)...")
+                exclusive_segments_filename = f"{base_filename}_{log_timestamp}_pyannote_segments_exclusive.tsv"
+                exclusive_segments_path = os.path.join(subdirs['tsv'], exclusive_segments_filename)
+                PyannoteSegmentFormatter().format(exclusive_result, exclusive_segments_path, audio_basename=audio_basename)
+                print(f"Exclusive segments saved to tsv/{exclusive_segments_filename}")
             
             # Save raw RTTM output (for reference)
             sanitized_filename = base_filename.replace(" ", "_")
@@ -303,13 +326,16 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             )
             print(f"TSV file saved to tsv/{tsv_filename}")
             output_files['tsv'] = tsv_filename
+            output_files['tsv_pyannote_overlap'] = overlap_segments_filename
+            if exclusive_segments_filename:
+                output_files['tsv_pyannote_exclusive'] = exclusive_segments_filename
 
             # Stats JSON
             print(f'Saving analysis statistics...')
             stats_filename = f"{base_filename}_{log_timestamp}_analysis.json"  
             stats_output_path = os.path.join(subdirs['stats'], stats_filename)
             StatsExporter.save_analysis_stats(
-                segments, diarization_result, word_stats, segment_stats, 
+                segments, diarization_result, word_stats, segment_stats,
                 speaker_stats, boundary_stats, settings, stats_output_path
             )
             print(f"Analysis stats saved to stats/{stats_filename}")
