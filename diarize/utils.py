@@ -291,19 +291,47 @@ class SpeakerAssigner:
         Find speaker for a single word using its timestamps.
         """
         # Check multiple points in the word for robustness
+        segments = list(diarization_result.itertracks(yield_label=True))
         word_mid = word_start + (word_end - word_start) / 2
         check_points = [word_start + 0.01, word_mid, word_end - 0.01]
         
         speaker_votes = {}
         
         for check_time in check_points:
-            for turn, _, speaker_label in diarization_result.itertracks(yield_label=True):
+            for turn, _, speaker_label in segments:
                 if turn.start <= check_time < turn.end:
                     speaker_votes[speaker_label] = speaker_votes.get(speaker_label, 0) + 1
                     break
         
         if speaker_votes:
             return max(speaker_votes.items(), key=lambda x: x[1])[0]
+
+        # Fall back to nearest-neighbour assignment when no overlap is found
+        max_gap = 0.5
+        closest_before = (None, float('inf'))
+        closest_after = (None, float('inf'))
+
+        for turn, _, speaker_label in segments:
+            if turn.end <= word_start:
+                distance = word_start - turn.end
+                if distance < closest_before[1]:
+                    closest_before = (speaker_label, distance)
+            elif turn.start >= word_end:
+                distance = turn.start - word_end
+                if distance < closest_after[1]:
+                    closest_after = (speaker_label, distance)
+
+        candidate_label = None
+        candidate_distance = float('inf')
+
+        if closest_before[0] is not None and closest_before[1] < candidate_distance:
+            candidate_label, candidate_distance = closest_before
+        if closest_after[0] is not None and closest_after[1] < candidate_distance:
+            candidate_label, candidate_distance = closest_after
+
+        if candidate_label is not None and candidate_distance <= max_gap:
+            return candidate_label
+
         return "UNKNOWN"
     
     @staticmethod
