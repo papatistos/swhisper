@@ -335,6 +335,51 @@ class SpeakerAssigner:
             return "UNKNOWN", 0.0
     
     @staticmethod
+    def find_segments_without_word_coverage(segments: List[Dict], diarization_result) -> List[Dict[str, Any]]:
+        """Return diarization turns that contain no aligned words."""
+        word_intervals: List[tuple[float, float]] = []
+
+        for segment in segments:
+            for word in segment.get('words', []):
+                if not isinstance(word, dict):
+                    continue
+                if _is_silence_token(word):
+                    continue
+
+                word_start = word.get('start')
+                word_end = word.get('end')
+
+                if word_start is None or word_end is None:
+                    continue
+
+                word_intervals.append((float(word_start), float(word_end)))
+
+        unmatched_turns: List[Dict[str, Any]] = []
+
+        for turn, _, speaker_label in diarization_result.itertracks(yield_label=True):
+            has_overlap = False
+            turn_start = float(turn.start)
+            turn_end = float(turn.end)
+
+            for word_start, word_end in word_intervals:
+                if word_end <= turn_start:
+                    continue
+                if word_start >= turn_end:
+                    continue
+                has_overlap = True
+                break
+
+            if not has_overlap:
+                unmatched_turns.append({
+                    'speaker': speaker_label,
+                    'start': turn_start,
+                    'end': turn_end,
+                    'duration': float(turn.duration)
+                })
+
+        return unmatched_turns
+
+    @staticmethod
     def smooth_word_level_transitions(segments: List[Dict], min_speaker_words: int = 3) -> List[Dict]:
         """
         Smooth out very short speaker changes at word level.
