@@ -250,12 +250,21 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                 if isinstance(whisper_result, dict) and whisper_result.get('language'):
                     backfill_settings.language = whisper_result['language']
 
+                snippet_dir = None
+                snippet_prefix = base_filename
+                if getattr(config, 'backfill_save_audio_snippets', False):
+                    configured_dir = getattr(config, 'backfill_snippet_dir', None)
+                    base_snippet_dir = configured_dir or os.path.join(config.final_log_dir, "backfill_snippets")
+                    snippet_dir = os.path.join(base_snippet_dir, base_filename)
+
                 backfill_transcriber = BackfillTranscriber(
                     audiofile_path,
                     backfill_model,
                     backfill_device,
                     backfill_settings.to_dict(),
-                    overlap_duration=backfill_overlap
+                    overlap_duration=backfill_overlap,
+                    snippet_output_dir=snippet_dir,
+                    snippet_prefix=snippet_prefix
                 )
 
                 try:

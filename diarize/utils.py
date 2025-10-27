@@ -7,6 +7,7 @@ import re
 import torch
 import signal
 import atexit
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 from contextlib import contextmanager
 
@@ -467,6 +468,8 @@ class BackfillTranscriber:
         device: Optional[str],
         whisper_settings: Dict[str, Any],
         overlap_duration: float = 0.5,
+        snippet_output_dir: Optional[str] = None,
+        snippet_prefix: Optional[str] = None,
     ) -> None:
         self.audio_path = audio_path
         self.model_name = model_name
@@ -476,6 +479,11 @@ class BackfillTranscriber:
         self.overlap_duration = max(0.0, overlap_duration)
         self.sample_rate = 16000
         self._model = None
+        self.snippet_output_dir = Path(snippet_output_dir).expanduser() if snippet_output_dir else None
+        if self.snippet_output_dir:
+            self.snippet_output_dir.mkdir(parents=True, exist_ok=True)
+        self.snippet_prefix = snippet_prefix or "backfill"
+        self._snippet_counter = 0
 
     def _ensure_model_loaded(self) -> None:
         if self._model is None:
@@ -486,6 +494,39 @@ class BackfillTranscriber:
             del self._model
             self._model = None
             DeviceManager.clear_device_memory()
+
+    def _maybe_save_audio_snippet(
+        self,
+        audio: Optional[np.ndarray],
+        speaker: str,
+        start: float,
+        end: float,
+        start_sample: int
+    ) -> None:
+        if self.snippet_output_dir is None:
+            return
+        if audio is None or len(audio) == 0:
+            return
+
+        try:
+            padded_start = start_sample / self.sample_rate
+            rel_start = max(0, int(round((start - padded_start) * self.sample_rate)))
+            rel_end = max(rel_start + 1, int(round((end - padded_start) * self.sample_rate)))
+            rel_end = min(rel_end, len(audio))
+            snippet_audio = audio[rel_start:rel_end]
+            if snippet_audio.size == 0:
+                snippet_audio = audio
+
+            safe_speaker = re.sub(r"[^A-Za-z0-9_.-]+", "_", speaker or "UNKNOWN")
+            start_ms = int(round(start * 1000))
+            end_ms = int(round(end * 1000))
+            filename = f"{self.snippet_prefix}_{safe_speaker}_{start_ms:07d}-{end_ms:07d}_{self._snippet_counter:04d}.wav"
+            file_path = self.snippet_output_dir / filename
+            sf.write(file_path, snippet_audio, self.sample_rate, subtype='PCM_16')
+            self._snippet_counter += 1
+            print(f"      🎧 Saved backfill snippet to {file_path}")
+        except Exception as exc:  # pragma: no cover - best effort logging
+            print(f"      ⚠️ Could not save backfill audio snippet: {exc}")
 
     def transcribe_turns(self, turns: List[Dict[str, Any]]) -> Dict[str, Any]:
         recovered_segments: List[Dict[str, Any]] = []
@@ -540,11 +581,20 @@ class BackfillTranscriber:
         if end <= start:
             return None, 0
 
+        speaker_label = turn.get('speaker', 'UNKNOWN')
         self._ensure_model_loaded()
 
         chunk_audio, start_sample = self._load_audio_chunk(start, end)
         if chunk_audio is None or len(chunk_audio) == 0:
             return None, 0
+
+        self._maybe_save_audio_snippet(
+            chunk_audio,
+            speaker_label,
+            start,
+            end,
+            start_sample
+        )
 
         result = whisper.transcribe(self._model, chunk_audio, **self.settings)
 
@@ -565,7 +615,6 @@ class BackfillTranscriber:
         TranscriptionWorker._scale_disfluency_markers(result)
 
         collected_words: List[Dict[str, Any]] = []
-        speaker_label = turn.get('speaker', 'UNKNOWN')
 
         for segment in segments:
             for word in segment.get('words', []):
