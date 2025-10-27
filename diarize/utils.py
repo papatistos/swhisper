@@ -611,7 +611,11 @@ class BackfillTranscriber:
             'is_backfill': True
         }
 
-        return segment_data, len(collected_words)
+        # Rescale any disfluency markers based on the clipped durations.
+        temp_result = {'segments': [segment_data]}
+        TranscriptionWorker._scale_disfluency_markers(temp_result)
+
+        return temp_result['segments'][0], len(collected_words)
 
     def _load_audio_chunk(self, start: float, end: float) -> tuple[Optional[np.ndarray], int]:
         margin = self.overlap_duration
