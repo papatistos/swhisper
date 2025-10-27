@@ -87,6 +87,12 @@ class DiarizationConfig:
     min_speaker_words: int = 3
     preserve_markers: bool = True                           # Preserve disfluency markers for sounds that could not be transcribed
     preserved_markers: List[str] = None
+
+    # Targeted re-transcription for empty diarization turns
+    backfill_missing_turns: bool = True
+    backfill_model: str = "KBLab/kb-whisper-large"
+    backfill_device: Optional[str] = None
+    backfill_overlap: float = 0.5
     
     # Output formatting
     tsv_word_per_line: bool = True                          # If True, TSV output writes one word per line instead of one segment per line
@@ -126,6 +132,10 @@ Note 3: Speaker detection is not perfect. The transcript may show too many diffe
         """Initialize default values that can't be set in field definition."""
         if self.preserved_markers is None:
             self.preserved_markers = ["[DISCONTINUITY]", "[SILENCE]", "[OVERLAP]", "[*]"]
+        if not getattr(self, 'backfill_model', None):
+            self.backfill_model = "KBLab/kb-whisper-large"
+        if getattr(self, 'backfill_overlap', 0.0) < 0.0:
+            self.backfill_overlap = 0.0
     
     @property
     def audio_dir(self) -> str:
