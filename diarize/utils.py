@@ -9,12 +9,13 @@ import torch
 import signal
 import atexit
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from contextlib import contextmanager
 
 import numpy as np
 import soundfile as sf
 from scipy.signal import resample
+import json
 import whisper_timestamped as whisper
 from transcribe.transcription import TranscriptionWorker
 
@@ -541,7 +542,7 @@ class BackfillTranscriber:
             start = float(turn.get('start', 0.0))
             end = float(turn.get('end', start))
             duration = max(0.0, end - start)
-            print(f"   -> Transcribing {speaker}: {start:.2f}s - {end:.2f}s (duration {duration:.2f}s)")
+            print(f"----> Transcribing {speaker}: {start:.2f}s - {end:.2f}s (duration {duration:.2f}s)")
             try:
                 segment, word_count = self._transcribe_single_turn(turn)
             except Exception as exc:  # pragma: no cover - logging path
@@ -936,3 +937,96 @@ def _is_silence_token(word: Dict[str, Any]) -> bool:
 
 
 logger_manager = LoggerManager()
+
+
+class BackfillCache:
+    """Persist and retrieve backfill transcription results for reuse."""
+
+    INDEX_FILENAME = "cache_index.json"
+
+    def __init__(self, cache_dir: str, audio_path: str, model: str, device: str, overlap: float) -> None:
+        self.cache_dir = Path(cache_dir).expanduser()
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.audio_path = Path(audio_path)
+        self.model = model
+        self.device = device
+        self.overlap = overlap
+        self.index_path = self.cache_dir / self.INDEX_FILENAME
+        self._index = self._load_index()
+
+    def _load_index(self) -> Dict[str, Any]:
+        if not self.index_path.exists():
+            return {}
+        try:
+            with self.index_path.open('r', encoding='utf-8') as handle:
+                return json.load(handle)
+        except Exception:
+            return {}
+
+    def _write_index(self) -> None:
+        tmp_path = self.index_path.with_suffix('.tmp')
+        with tmp_path.open('w', encoding='utf-8') as handle:
+            json.dump(self._index, handle, ensure_ascii=False, indent=2)
+        tmp_path.replace(self.index_path)
+
+    def _audio_signature(self) -> Dict[str, Any]:
+        try:
+            stat = self.audio_path.stat()
+            return {
+                'path': str(self.audio_path.resolve()),
+                'size': stat.st_size,
+                'mtime': int(stat.st_mtime)
+            }
+        except OSError:
+            return {
+                'path': str(self.audio_path),
+                'size': None,
+                'mtime': None
+            }
+
+    def _config_signature(self) -> Dict[str, Any]:
+        return {
+            'model': self.model,
+            'device': self.device,
+            'overlap': float(self.overlap)
+        }
+
+    def _cache_file_path(self, transcript_key: str) -> Path:
+        safe_key = re.sub(r"[^A-Za-z0-9_.-]+", "_", transcript_key)
+        return self.cache_dir / f"{safe_key}.json"
+
+    def load(self, transcript_key: str) -> Dict[str, Any]:
+        cache_path = self._cache_file_path(transcript_key)
+        if not cache_path.exists():
+            return {}
+
+        try:
+            with cache_path.open('r', encoding='utf-8') as handle:
+                payload = json.load(handle)
+        except Exception:
+            return {}
+
+        audio_sig = payload.get('audio')
+        config_sig = payload.get('config')
+        if audio_sig != self._audio_signature() or config_sig != self._config_signature():
+            return {}
+
+        segments = payload.get('segments', {})
+        if not isinstance(segments, dict):
+            return {}
+        return segments
+
+    def save(self, transcript_key: str, segments: Dict[str, Dict[str, Any]]) -> None:
+        if not segments:
+            return
+        cache_path = self._cache_file_path(transcript_key)
+        payload = {
+            'audio': self._audio_signature(),
+            'config': self._config_signature(),
+            'segments': segments
+        }
+        tmp_path = cache_path.with_suffix('.tmp')
+        with tmp_path.open('w', encoding='utf-8') as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+        tmp_path.replace(cache_path)
+

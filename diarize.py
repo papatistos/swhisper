@@ -235,6 +235,33 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             unmatched_turns = alignment_result.get('unmatched_diarization_segments', [])
 
             if unmatched_turns and getattr(config, 'backfill_missing_turns', True):
+                min_duration = max(0.0, getattr(config, 'backfill_min_duration', 0.0) or 0.0)
+                if min_duration > 0.0:
+                    eligible_turns = []
+                    skipped_turns = 0
+                    for turn in unmatched_turns:
+                        start = float(turn.get('start', 0.0))
+                        end = float(turn.get('end', start))
+                        duration = turn.get('duration')
+                        if duration is None:
+                            duration = max(0.0, end - start)
+                        if duration < min_duration:
+                            skipped_turns += 1
+                            continue
+                        eligible_turns.append(turn)
+
+                    if skipped_turns:
+                        print(
+                            "  -> Skipped {count} diarization segments below backfill minimum ({threshold:.1f}s)".format(
+                                count=skipped_turns,
+                                threshold=min_duration,
+                            )
+                        )
+
+                    unmatched_turns = eligible_turns
+                    alignment_result['unmatched_diarization_segments'] = unmatched_turns
+
+            if unmatched_turns and getattr(config, 'backfill_missing_turns', True):
                 print(f"  -> Attempting targeted transcription for {len(unmatched_turns)} unmatched diarization segments...")
 
                 base_transcribe_config = TranscriptionConfig()

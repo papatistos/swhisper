@@ -95,6 +95,9 @@ class DiarizationConfig:
     backfill_overlap: float = 0.5
     backfill_save_audio_snippets: bool = True
     backfill_snippet_dir: Optional[str] = None
+    backfill_cache_enabled: bool = True
+    backfill_cache_dir: Optional[str] = None
+    backfill_min_duration: float = 0.1
 
     # Premium diarization service (pyannote precision-2)
     use_precision_service: bool = False
@@ -144,6 +147,8 @@ Note 3: Speaker detection is not perfect. The transcript may show too many diffe
             self.backfill_model = "KBLab/kb-whisper-large"
         if getattr(self, 'backfill_overlap', 0.0) < 0.0:
             self.backfill_overlap = 0.0
+        if getattr(self, 'backfill_min_duration', 0.0) < 0.0:
+            self.backfill_min_duration = 0.0
         if not getattr(self, 'precision_api_token', None):
             for env_var in getattr(self, 'precision_token_env_vars', ()):  # type: ignore[arg-type]
                 token = os.getenv(env_var, "").strip()
@@ -185,6 +190,13 @@ Note 3: Speaker detection is not perfect. The transcript may show too many diffe
     def final_audio_dir(self) -> str:
         """Get final audio directory path."""
         return os.path.join(self.audio_dir, self.audio_subdir) if self.audio_subdir else self.audio_dir
+
+    def get_backfill_cache_dir(self) -> str:
+        """Resolve directory used for backfill cache storage."""
+        base_dir = getattr(self, 'backfill_cache_dir', None)
+        if not base_dir:
+            base_dir = os.path.join(self.final_log_dir, "backfill_cache")
+        return base_dir
     
     def get_pipeline_config(self) -> Dict:
         """Get pipeline configuration dictionary."""
