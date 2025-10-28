@@ -34,12 +34,24 @@ def _invoke_legacy_main(config: DiarizationConfig) -> None:
 
     legacy_main(config)
 
+LEGACY_PIPELINE_ID = "pyannote/speaker-diarization-3.1"
 COMMUNITY_PIPELINE_ID = "pyannote/speaker-diarization-community-1"
+PRECISION_PIPELINE_ID = "pyannote/speaker-diarization-precision-2"
+PRECISION_TOKEN_ENV_VARS = ("PYANNOTEAI_API_KEY", "PYANNOTE_API_KEY")
 
 
 def resolve_pyannote_token(existing_token: str = "") -> str:
     """Pick the best available Hugging Face token."""
     for env_var in ("HUGGINGFACE_ACCESS_TOKEN", "HUGGING_FACE_TOKEN", "PYANNOTE_TOKEN"):
+        token = os.getenv(env_var, "").strip()
+        if token:
+            return token
+    return existing_token.strip()
+
+
+def resolve_precision_token(existing_token: str = "") -> str:
+    """Resolve pyannote precision API token from known environment variables."""
+    for env_var in PRECISION_TOKEN_ENV_VARS:
         token = os.getenv(env_var, "").strip()
         if token:
             return token
@@ -83,14 +95,32 @@ def run(config: Optional[DiarizationConfig] = None, *, show_header: bool = True)
         print(f"❌ Unable to initialize diarization config: {exc}")
         return
 
-    config_obj.pipeline_model = COMMUNITY_PIPELINE_ID
-    config_obj.hugging_face_token = resolve_pyannote_token(config_obj.hugging_face_token)
+    precision_pipeline_id = getattr(config_obj, "precision_pipeline_model", PRECISION_PIPELINE_ID)
+    use_precision = getattr(config_obj, "use_precision_service", False)
 
-    if not config_obj.hugging_face_token:
-        print(
-            "⚠️ Hugging Face token not detected. Set HUGGINGFACE_ACCESS_TOKEN or "
-            "HUGGING_FACE_TOKEN to access the community pipeline."
+    if use_precision and config_obj.pipeline_model != precision_pipeline_id:
+        config_obj.pipeline_model = precision_pipeline_id
+
+    is_precision = config_obj.pipeline_model == precision_pipeline_id
+
+    if is_precision:
+        config_obj.precision_api_token = resolve_precision_token(
+            getattr(config_obj, "precision_api_token", "")
         )
+        if not config_obj.precision_api_token:
+            print(
+                "⚠️ Precision diarization token not detected. Set PYANNOTEAI_API_KEY "
+                "(or override precision_api_token) to use the precision-2 service."
+            )
+    else:
+        if getattr(config_obj, "pipeline_model", "").strip() in {"", LEGACY_PIPELINE_ID}:
+            config_obj.pipeline_model = COMMUNITY_PIPELINE_ID
+        config_obj.hugging_face_token = resolve_pyannote_token(config_obj.hugging_face_token)
+        if not config_obj.hugging_face_token:
+            print(
+                "⚠️ Hugging Face token not detected. Set HUGGINGFACE_ACCESS_TOKEN or "
+                "HUGGING_FACE_TOKEN to access the community pipeline."
+            )
 
     try:
         _invoke_legacy_main(config_obj)
