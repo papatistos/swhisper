@@ -2,7 +2,7 @@
 
 import os
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 try:
     from path_settings import get_path_settings
@@ -95,6 +95,12 @@ class DiarizationConfig:
     backfill_overlap: float = 0.5
     backfill_save_audio_snippets: bool = True
     backfill_snippet_dir: Optional[str] = None
+
+    # Premium diarization service (pyannote precision-2)
+    use_precision_service: bool = False
+    precision_pipeline_model: str = "pyannote/speaker-diarization-precision-2"
+    precision_api_token: Optional[str] = None
+    precision_token_env_vars: Tuple[str, ...] = ("PYANNOTEAI_API_KEY", "PYANNOTE_API_KEY")
     
     # Output formatting
     tsv_word_per_line: bool = True                          # If True, TSV output writes one word per line instead of one segment per line
@@ -138,6 +144,12 @@ Note 3: Speaker detection is not perfect. The transcript may show too many diffe
             self.backfill_model = "KBLab/kb-whisper-large"
         if getattr(self, 'backfill_overlap', 0.0) < 0.0:
             self.backfill_overlap = 0.0
+        if not getattr(self, 'precision_api_token', None):
+            for env_var in getattr(self, 'precision_token_env_vars', ()):  # type: ignore[arg-type]
+                token = os.getenv(env_var, "").strip()
+                if token:
+                    self.precision_api_token = token
+                    break
     
     @property
     def audio_dir(self) -> str:

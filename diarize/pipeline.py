@@ -146,11 +146,19 @@ class DiarizationPipeline:
             # Configure parameters - suppress detailed output during parameter testing
             self._configure_pipeline_parameters(pipeline, verbose=not is_parameter_testing)
             
-            if not is_parameter_testing:
-                print(f"  -> Moving models to {self.config.device}...")
-            
-            pipeline.to(torch.device(self.config.device))
-            
+            is_precision_pipeline = getattr(self.config, 'precision_pipeline_model', '') \
+                and getattr(self.config, 'pipeline_model', '') == getattr(self.config, 'precision_pipeline_model')
+
+            setattr(pipeline, '_supports_hooks', not is_precision_pipeline)
+            setattr(pipeline, '_supports_device_move', not is_precision_pipeline)
+
+            if not is_precision_pipeline:
+                if not is_parameter_testing:
+                    print(f"  -> Moving models to {self.config.device}...")
+                pipeline.to(torch.device(self.config.device))
+            elif not is_parameter_testing:
+                print("  -> Using hosted precision diarization service (no local device move).")
+
             if not is_parameter_testing:
                 print("  -> Diarization pipeline ready!")
             
@@ -174,15 +182,24 @@ class DiarizationPipeline:
                     f"{self.config.min_speakers} and {self.config.max_speakers} speakers..."
                 )
 
-            progress_context = self._progress_context(enable=not is_parameter_testing)
+            supports_hook = getattr(pipeline, '_supports_hooks', True)
+            progress_context = self._progress_context(enable=not is_parameter_testing and supports_hook)
 
-            with progress_context as hook:
-                hook_arg = hook if hook is not None else None
+            if supports_hook:
+                with progress_context as hook:
+                    hook_arg = hook if hook is not None else None
+                    result = pipeline(
+                        audio_path,
+                        min_speakers=self.config.min_speakers,
+                        max_speakers=self.config.max_speakers,
+                        hook=hook_arg,
+                    )
+            else:
+                # Hosted precision API does not accept the hook argument.
                 result = pipeline(
                     audio_path,
                     min_speakers=self.config.min_speakers,
                     max_speakers=self.config.max_speakers,
-                    hook=hook_arg,
                 )
 
             if not is_parameter_testing:
@@ -293,7 +310,14 @@ class DiarizationPipeline:
 
     def _build_pretrained_kwargs(self):
         """Build keyword arguments for Pipeline.from_pretrained compatible with v4."""
-        token = getattr(self.config, 'hugging_face_token', '') or ''
+        pipeline_id = getattr(self.config, 'pipeline_model', '') or ''
+        precision_id = getattr(self.config, 'precision_pipeline_model', '') or ''
+
+        if precision_id and pipeline_id == precision_id:
+            token = getattr(self.config, 'precision_api_token', '') or ''
+        else:
+            token = getattr(self.config, 'hugging_face_token', '') or ''
+
         token = token.strip()
         return {'token': token} if token else {}
 
