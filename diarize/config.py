@@ -52,8 +52,8 @@ class DiarizationConfig:
 
     # Advanced speaker separation settings
     use_temporal_constraints: bool = True
-    speaker_change_penalty: float = 0.1                    # Penalty for frequent speaker changes
-    embedding_distance_threshold: float = 0.6              # Lower values = Stricter matching - speakers must sound very similar to be grouped together
+    speaker_change_penalty: float = 0.1                    # Penalty for frequent speaker changes (default 0.1)
+    embedding_distance_threshold: float = 0.3              # Lower values = Stricter matching - speakers must sound very similar to be grouped together (default 0.6 ?)
     
     # Pipeline configuration
     pipeline_model: str = "pyannote/speaker-diarization-3.1"
@@ -61,8 +61,8 @@ class DiarizationConfig:
     min_duration_on: float = None                          # default seems to be 0.0
     min_duration_off: float = None                         # default seems to be 0.0
     clustering_method: str = "centroid"
-    clustering_min_cluster_size: int = 300   
-    clustering_threshold: float = 0.1                      # (was: .15) Lower threshold for stricter clustering
+    clustering_min_cluster_size: int = 15                  # Minimum number of frames (not segments!) to form a cluster
+    clustering_threshold: float = 0.15                      # (was: .15) Lower threshold for stricter clustering
     
 # Default values from pyannote
 # embedding_distance_threshold: 0.7 (default)
