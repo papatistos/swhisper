@@ -4,6 +4,7 @@ import gc
 import sys
 import os
 import re
+import math
 import torch
 import signal
 import atexit
@@ -533,6 +534,7 @@ class BackfillTranscriber:
         recovered_turns: List[Dict[str, Any]] = []
         failed_turns: List[Dict[str, Any]] = []
         total_words = 0
+        placeholder_segments = 0
 
         for turn in turns:
             speaker = turn.get('speaker', 'UNKNOWN')
@@ -546,24 +548,33 @@ class BackfillTranscriber:
                 print(f"   -> Backfill error for {speaker} {start:.2f}-{end:.2f}s: {exc}")
                 segment, word_count = None, 0
 
-            if segment and word_count:
+            is_placeholder = bool(segment and segment.get('is_placeholder'))
+
+            if segment and (word_count or is_placeholder):
                 recovered_segments.append(segment)
                 enriched_turn = dict(turn)
                 enriched_turn['word_count'] = word_count
+                if is_placeholder:
+                    enriched_turn['is_placeholder'] = True
                 recovered_turns.append(enriched_turn)
                 total_words += word_count
 
-                word_tokens = [
-                    (w.get('word') if isinstance(w.get('word'), str) and w.get('word').strip()
-                     else w.get('text', '')).strip()
-                    for w in segment.get('words', [])
-                    if isinstance(w, dict)
-                ]
-                filtered_tokens = [token for token in word_tokens if token]
-                if filtered_tokens:
-                    print(f"      Words: {' '.join(filtered_tokens)}")
+                if is_placeholder:
+                    placeholder_segments += 1
+                    marker_text = segment.get('text', '').strip() or '[ * ]'
+                    print(f"      Words: {marker_text} (placeholder)")
                 else:
-                    print("      Words: [none detected]")
+                    word_tokens = [
+                        (w.get('word') if isinstance(w.get('word'), str) and w.get('word').strip()
+                         else w.get('text', '')).strip()
+                        for w in segment.get('words', [])
+                        if isinstance(w, dict)
+                    ]
+                    filtered_tokens = [token for token in word_tokens if token]
+                    if filtered_tokens:
+                        print(f"      Words: {' '.join(filtered_tokens)}")
+                    else:
+                        print("      Words: [none detected]")
             else:
                 failed_turns.append(turn)
                 print("      Words: [none detected]")
@@ -572,7 +583,8 @@ class BackfillTranscriber:
             'segments': recovered_segments,
             'recovered_turns': recovered_turns,
             'failed_turns': failed_turns,
-            'word_count': total_words
+            'word_count': total_words,
+            'placeholders': placeholder_segments
         }
 
     def _transcribe_single_turn(self, turn: Dict[str, Any]) -> tuple[Optional[Dict[str, Any]], int]:
@@ -637,7 +649,8 @@ class BackfillTranscriber:
                 collected_words.append(clipped_word)
 
         if not collected_words:
-            return None, 0
+            placeholder_segment = self._build_placeholder_segment(turn, speaker_label)
+            return placeholder_segment, 0
 
         collected_words.sort(key=lambda item: item.get('start', 0.0))
 
@@ -665,6 +678,37 @@ class BackfillTranscriber:
         TranscriptionWorker._scale_disfluency_markers(temp_result)
 
         return temp_result['segments'][0], len(collected_words)
+
+    def _build_placeholder_segment(self, turn: Dict[str, Any], speaker_label: str) -> Dict[str, Any]:
+        start = float(turn.get('start', 0.0))
+        end = float(turn.get('end', start))
+        duration = max(0.0, end - start)
+        if duration <= 0.0:
+            duration = 0.1
+
+        asterisk_count = max(1, min(50, math.ceil(duration / 0.1)))
+        marker_token = f"[ {'*' * asterisk_count} ]"
+
+        placeholder_word = {
+            'start': start,
+            'end': end,
+            'word': marker_token,
+            'speaker': speaker_label,
+            'confidence': 0.0,
+            'is_backfill': True,
+            'is_placeholder': True
+        }
+
+        return {
+            'start': start,
+            'end': end,
+            'text': marker_token,
+            'speaker': speaker_label,
+            'speaker_confidence': 0.0,
+            'words': [placeholder_word],
+            'is_backfill': True,
+            'is_placeholder': True
+        }
 
     def _load_audio_chunk(self, start: float, end: float) -> tuple[Optional[np.ndarray], int]:
         margin = self.overlap_duration
@@ -850,6 +894,7 @@ class SilenceMarkerProcessor:
 # Global logger manager instance
 STATIC_MARKERS = {"[DISCONTINUITY]", "[SILENCE]", "[OVERLAP]"}
 DISFLUENCY_MARKER_PATTERN = re.compile(r"^\[\*+\]$")
+SPACED_MARKER_PATTERN = re.compile(r"^\[\s\*{1,50}\s\]$")
 
 
 def is_marker_token(token: str) -> bool:
@@ -857,7 +902,11 @@ def is_marker_token(token: str) -> bool:
     if not token:
         return False
     cleaned = token.strip()
-    return cleaned in STATIC_MARKERS or bool(DISFLUENCY_MARKER_PATTERN.match(cleaned))
+    return (
+        cleaned in STATIC_MARKERS
+        or bool(DISFLUENCY_MARKER_PATTERN.match(cleaned))
+        or bool(SPACED_MARKER_PATTERN.match(cleaned))
+    )
 
 
 def _is_silence_token(word: Dict[str, Any]) -> bool:
