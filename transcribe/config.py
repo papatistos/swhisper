@@ -67,11 +67,11 @@ class WhisperSettings:
     best_of: int = 5                                       # less efficient but better results
     temperature: List[float] = None                        # if None, set below in __post_init__
     compression_ratio_threshold: float = 2.4
-    logprob_threshold: float = -1.0
-    no_speech_threshold: float = 0.6
+    logprob_threshold: float = -1.0                        # value between 0 and -1 . (-1 effectuively disables the threshold, i.e. no segment will be excluded because of low confidence)
+    no_speech_threshold: float = 0.6                       # we have to be more than 60% sure there is no speech to dismiss a segment as silence
     fp16: Optional[bool] = None
     condition_on_previous_text: bool = False
-    initial_prompt: str = 'Mm. Jag tror öhm Jag ser um vad du menar. Ehm Du ja du öh Asså du säger liksom att'
+    initial_prompt: str = 'Mm. Aa. Mhm. Hm. Hmm. Ahh. Aah. Åh. haha ha Äsch. Teams oj! Ojojoj! Aj jo joho nähä öhm Ehm Du ja du öh Asså du säger liksom att'
     suppress_tokens: str = '50364'
     sample_len: Optional[int] = None
     verbose: bool = True

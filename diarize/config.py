@@ -20,7 +20,7 @@ _PATH_SETTINGS = get_path_settings()
 
 def _default_hf_token() -> str:
     """Resolve Hugging Face token from multiple supported environment variables."""
-    for env_var in ("HUGGINGFACE_ACCESS_TOKEN", "HUGGING_FACE_TOKEN", "PYANNOTE_TOKEN"):
+    for env_var in ("HUGGINGFACE_ACCESS_TOKEN", "HUGGING_FACE_TOKEN"):
         token = os.getenv(env_var)
         if token:
             return token
@@ -51,20 +51,18 @@ class DiarizationConfig:
     force_reprocess: bool = False                          # Set to True to reprocess files even if output already exists (i.e. .ok files are present)
 
     # Advanced speaker separation settings
-    use_temporal_constraints: bool = True
-    speaker_change_penalty: float = 0.1                    # Penalty for frequent speaker changes (default 0.1)
-    embedding_distance_threshold: float = 0.3              # Lower values = Stricter matching - speakers must sound very similar to be grouped together (default 0.6 ?)
-    
+    use_temporal_constraints: bool = True                  # Might be ignored by post 3.1 models,  ignored by precision-2
+    speaker_change_penalty: float = 0.1                    # Penalty for frequent speaker changes (default 0.1) - Might be ignored by post 3.1 models,  ignored by precision-2
+    embedding_distance_threshold: float = 0.3              # Lower values = Stricter matching - speakers must sound very similar to be grouped together (default 0.6 ?) - Might be ignored by post 3.1 models, ignored by precision-2
+
     # Pipeline configuration
-    pipeline_model: str = "pyannote/speaker-diarization-3.1"
-    segmentation_threshold: float = 0.2                    # Lower threshold for more sensitive speaker changes
+    pipeline_model: str = "pyannote/speaker-diarization-3.1" # this is ignored when diarize4.py is used
+    segmentation_threshold: float = 0.01                    # Lower threshold for more sensitive speaker changes (this concerns segmentation)
     min_duration_on: float = None                          # default seems to be 0.0
     min_duration_off: float = None                         # default seems to be 0.0
     clustering_method: str = "centroid"
     clustering_min_cluster_size: int = 15                  # Minimum number of frames (not segments!) to form a cluster
-    clustering_threshold: float = 0.15                      # (was: .15) Lower threshold for stricter clustering
-    
-# Default values from pyannote
+    clustering_threshold: float = 0.1                       # (was: .15) Lower threshold for stricter clustering
 # embedding_distance_threshold: 0.7 (default)
 # lustering_threshold: 0.15 (typical default)
 # segmentation_threshold: 0.3 (voice activity detection)
@@ -73,10 +71,16 @@ class DiarizationConfig:
 # clustering_min_cluster_size: 10-15?
 # 
 
-    # Pyannote 4 settings
+    # Pyannote 4 settings (some of the above are also applied)
     use_exclusive_speaker_diarization: bool = True          # Use exclusive speaker diarization stream if available
 
-    # Silence detection settings
+    # Premium diarization service (pyannote precision-2)
+    use_precision_service: bool = False
+    precision_pipeline_model: str = "pyannote/speaker-diarization-precision-2"
+    precision_api_token: Optional[str] = None
+    precision_token_env_vars: Tuple[str, ...] = ("PYANNOTEAI_API_KEY", "PYANNOTE_API_KEY")
+
+    # Silence detection settings (post-processing)
     min_silence_duration: float = 0.2                       # (rounded) silence durations below this value will be ignored
     include_silence_markers: bool = True                    # silence duration in transcript
     log_silence_gaps: bool = False                          # If true, between-word-gap-durations will be logged in separate file
@@ -99,11 +103,7 @@ class DiarizationConfig:
     backfill_cache_dir: Optional[str] = None
     backfill_min_duration: float = 0.1
 
-    # Premium diarization service (pyannote precision-2)
-    use_precision_service: bool = False
-    precision_pipeline_model: str = "pyannote/speaker-diarization-precision-2"
-    precision_api_token: Optional[str] = None
-    precision_token_env_vars: Tuple[str, ...] = ("PYANNOTEAI_API_KEY", "PYANNOTE_API_KEY")
+
     
     # Output formatting
     tsv_word_per_line: bool = True                          # If True, TSV output writes one word per line instead of one segment per line
