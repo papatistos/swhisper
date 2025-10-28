@@ -59,7 +59,7 @@ class WhisperSettings:
     word_alignment_most_top_layers: Optional[int] = None
     remove_empty_words: bool = False
     seed: int = 1234
-    vad: str = 'auditok'                                   # silero:v3.1, silero:v4.0, auditok or None. With None, no VAD is applied before transcription.
+    vad: str = "silero:v3.1"                               # silero:v3.1, silero:v4.0, auditok or None. With None, no VAD is applied before transcription.
     detect_disfluencies: bool = True
     trust_whisper_timestamps: bool = False
     naive_approach: bool = False                           # I think this gets overridden if beam_size and best_of are set, so we are using naive mode anyway
