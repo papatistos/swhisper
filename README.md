@@ -5,7 +5,13 @@ Speech transcription and diarization pipeline using the (strict) Swedish Whisper
 ## Performance and limitations
 Until proven otherwise (and please do!), I believe that this is currently the best available open-source solution for Swedish speech recognition and diarization. 
 
-The excellent transcription quality is due to the KBLab Whisper model, which has been fine-tuned on a large Swedish dataset. The **limitations** are in the diarization step (though I have not tried the latest community-1 version of pyannote). Depending on your audio-files and settings, you may have to do some manual work to assign the right speakers, but it's still much better than starting from scratch. Try to tweak the parameters in `diarize/config.py` to see what works for your audio. I recommend specifying 1-2 more speakers than you have in the audio, it seems to work better and my post-processing sometimes manages to remove the extra speakers.
+The excellent transcription quality is due to the KBLab Whisper model, which has been fine-tuned on a large Swedish dataset. The pipeline uses the `strict` version of the model, which prioritizes verbatim transcription as much as possible (unfortunately, the model still filters out a lot of sounds and filler words that are relevant for certain transcription standards).
+
+The **limitations** are mostly in the diarization step. I tried the `precision-2` model and it seems to solve a lot of the segmentation/attribution errors that I had with the open source models. But because researchers are often not allowed to upload sensitive audio data to third-party services, I will continue to develop this pipeline for the open-source models. If nothing prevents you from using PyannoteAI's cloud service, I recommend using the `precision-2` model by setting `use_precision_service = True` in `diarize/config.py`. (You will need to set up an account and get an API key from [pyannote.ai](https://pyannote.ai/).)
+
+A second limitation is in the voice activity detection (VAD) step, which currently misses a few speech segments (both with silero and auditok), which entails that those audio segments are not transcribed. I have tried to address this in the pipeline by automatically (re-)transcribing speaker segments (from pyannote) that did not get any words assigned ("empty turns"). Not perfect, but it does recover some of the missing words.
+
+Depending on your audio-files and settings, you may still have to do some manual work to assign the right speakers, but it's still much better than starting from scratch. Try to tweak the parameters in `diarize/config.py` to see what works for your audio. I recommend specifying 1-2 more speakers than you have in the audio, it seems to work better and my post-processing sometimes manages to remove the extra speakers.
 
 - Although the pipeline is fully functional, it is still work in progress. PRs and suggestions are welcome!
 
@@ -26,7 +32,7 @@ The excellent transcription quality is due to the KBLab Whisper model, which has
 
 - The output preamble for transcript files can be customized in the `DiarizationConfig` class. This allows you to include specific notes or instructions for users reviewing the transcripts.
 
-- By default, silence of 1 second or longer are surrounded by blank lines in the transcript (even when there is no speaker change) to improve readability. This threshold can be adjusted in `diarize/config.py` through the `silence_newline_threshold` parameter (set to `0`to disable). This setting only concerns rtf and txt output files.
+- By default, silence of 1 second or longer are surrounded by blank lines in the transcript (even when there is no speaker change) to improve readability. This threshold can be adjusted in `diarize/config.py` through the `silence_newline_threshold` parameter (set to `0` to disable). This setting only concerns rtf and txt output files.
 
 
 ### To-dos
@@ -68,7 +74,7 @@ Supported variables:
 | `SWHISPER_TEMP_DIR` | Custom directory for temporary workspaces and checkpoints |
 | `SWHISPER_DIARIZE_AUDIO_DIR` | Default diarization audio directory (falls back to `SWHISPER_AUDIO_DIR` if omitted) |
 | `HUGGING_FACE_TOKEN` | Hugging Face token for accessing pyannote pretrained model |
-
+| `PYANNOTEAI_API_KEY` | PyannoteAI API key for accessing the `precision-2` model (commercial) |
 
 ### Environment variables
 
