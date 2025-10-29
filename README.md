@@ -30,7 +30,12 @@ The excellent transcription quality is due to the KBLab Whisper model, which has
 
 
 ### To-dos
-- [ ] migrate to pyannote-audio 4.0 (and the community-1 model)
+- [x] migrate to pyannote-audio 4.0 (and the `community-1` model)
+  - to use pyannote 4 with `community-1` use `diarize4.py` (instead of `diarize.py`) or `transcribe4.py` for the entire pipeline
+  - there is also an option to use the premium `precision-2` diarization service from pyannote (see `diarize/config.py` for details)
+- [x] do something with speaker segments that didn't get any words
+  - these are now reprocessed by (re-)transcribing them and backfilling the words in the diarized transcript. While this does find the odd word here and there, it also sometimes introduces artifacts (possibly due to the short duration of these segments). If no word has been transcried, we add a discontinuity marker `[ * ]` instead, because we trust pyannote that there is some voice activity there. These markers have spaces around them to distinguish them from the regular disfluency markers (`[*]`) added by whisper-timestamped.
+- [ ] fix caching of empty turns (the current code that should persist those transcriptions doesn't seem to work)
 - [ ] add (more) speaker stats
 - [ ] improve documentation (let me know what is particularly unclear)
 - [ ] combine settings in one config file that is read by both `config.py`s
