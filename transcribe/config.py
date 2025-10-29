@@ -51,7 +51,7 @@ class WhisperSettings:
     language: str = 'sv'
     task: str = 'transcribe'
     remove_punctuation_from_words: bool = False
-    compute_word_confidence: bool = True                   # this does not seem to work with the KBLab model
+    compute_word_confidence: bool = True                   # this does not seem to work with the KBLab model, though it should according to this: https://huggingface.co/KBLab/kb-whisper-large/discussions/14
     include_punctuation_in_confidence: bool = False
     refine_whisper_precision: float = 0.5
     min_word_duration: float = 0.02
