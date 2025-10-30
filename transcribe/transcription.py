@@ -24,12 +24,67 @@ from .audio_utils import AudioProcessor
 DISFLUENCY_MARKER_PATTERN = re.compile(r"^\[\*+\]$")
 
 
+def is_model_cached(model_name: str) -> bool:
+    """Check if a HuggingFace model is cached locally.
+
+    Args:
+        model_name: HuggingFace model identifier (e.g., "KBLab/kb-whisper-large")
+
+    Returns:
+        True if the model files are found in the local cache, False otherwise
+    """
+    try:
+        # Check if it's a local path
+        if os.path.exists(model_name):
+            return True
+
+        # For HuggingFace models, check the cache directory
+        from huggingface_hub import try_to_load_from_cache
+        from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
+
+        # Common model files that whisper models have
+        model_files = [
+            "pytorch_model.bin",
+            "model.safetensors",
+            "config.json",
+        ]
+
+        # Check if at least one critical model file is cached
+        for filename in model_files:
+            cached_path = try_to_load_from_cache(
+                repo_id=model_name,
+                filename=filename,
+                cache_dir=HUGGINGFACE_HUB_CACHE
+            )
+            # try_to_load_from_cache returns the path if cached, None if not found,
+            # or raises if there's an error
+            if cached_path is not None and cached_path != "_CACHED_NO_EXIST":
+                return True
+
+        return False
+
+    except ImportError:
+        # If huggingface_hub is not available, fall back to basic check
+        cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
+        if os.path.exists(cache_dir):
+            # Look for model directory in cache
+            model_cache_pattern = model_name.replace("/", "--")
+            for entry in os.listdir(cache_dir):
+                if model_cache_pattern in entry:
+                    return True
+        return False
+    except Exception as e:
+        # If we can't determine, assume it's not cached (will attempt download)
+        print(f"    ⚠️  Could not verify model cache status: {e}")
+        return False
+
+
 class TranscriptionWorker:
     """Handle transcription in subprocess."""
-    
+
     @staticmethod
-    def chunk_worker(audiofile_path: str, start_time: float, end_time: float, 
-                    model_path: str, settings: Dict[str, Any], output_queue: mp.Queue, 
+    def chunk_worker(audiofile_path: str, start_time: float, end_time: float,
+                    model_path: str, settings: Dict[str, Any], output_queue: mp.Queue,
                     device: str = "mps", overlap_duration: float = 2.0):
         """Worker function for processing audio chunks in subprocess."""
         try:
@@ -39,11 +94,26 @@ class TranscriptionWorker:
             import numpy as np
             import gc
             from scipy.signal import resample
-            
+
             print(f"    🔧 Loading model {model_path} on {device}...")
-            
-            # Use the same device as main process
-            model = whisper.load_model(model_path, device=device)
+
+            # Enable offline mode if model is cached to avoid network calls
+            original_offline = os.environ.get('HF_HUB_OFFLINE')
+            if is_model_cached(model_path):
+                os.environ['HF_HUB_OFFLINE'] = '1'
+                print(f"    📦 Model found in cache - using offline mode")
+            else:
+                print(f"    🌐 Model not cached - will download from HuggingFace")
+
+            try:
+                # Use the same device as main process
+                model = whisper.load_model(model_path, device=device)
+            finally:
+                # Restore original offline setting
+                if original_offline is None:
+                    os.environ.pop('HF_HUB_OFFLINE', None)
+                else:
+                    os.environ['HF_HUB_OFFLINE'] = original_offline
             
             print(f"    🔧 Loading audio chunk {start_time:.1f}s-{end_time:.1f}s...")
             
