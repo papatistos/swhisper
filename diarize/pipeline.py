@@ -145,7 +145,49 @@ class DiarizationPipeline:
             
             # Configure parameters - suppress detailed output during parameter testing
             self._configure_pipeline_parameters(pipeline, verbose=not is_parameter_testing)
-            
+
+            # Report which parameters were actually applied (useful because different
+            # pipeline/model versions accept different configuration fields).
+            if not is_parameter_testing:
+                applied = {}
+
+                if hasattr(pipeline, '_segmentation'):
+                    seg_attrs = {}
+                    for k in ('onset', 'offset', 'min_duration_on', 'min_duration_off'):
+                        if hasattr(pipeline._segmentation, k):
+                            try:
+                                seg_attrs[k] = getattr(pipeline._segmentation, k)
+                            except Exception:
+                                seg_attrs[k] = '<unreadable>'
+                    if seg_attrs:
+                        applied['segmentation'] = seg_attrs
+
+                if hasattr(pipeline, '_clustering'):
+                    clust_attrs = {}
+                    for k in ('threshold', 'min_cluster_size', 'method', 'distance_threshold', 'embedding_threshold'):
+                        if hasattr(pipeline._clustering, k):
+                            try:
+                                clust_attrs[k] = getattr(pipeline._clustering, k)
+                            except Exception:
+                                clust_attrs[k] = '<unreadable>'
+                    if clust_attrs:
+                        applied['clustering'] = clust_attrs
+
+                if hasattr(pipeline, '_embedding'):
+                    emb = {}
+                    if hasattr(pipeline._embedding, 'threshold'):
+                        try:
+                            emb['threshold'] = getattr(pipeline._embedding, 'threshold')
+                        except Exception:
+                            emb['threshold'] = '<unreadable>'
+                    if emb:
+                        applied['embedding'] = emb
+
+                if applied:
+                    print(f"  -> Applied pipeline parameters: {applied}")
+                else:
+                    print("  -> No pipeline parameters applied; using model defaults.")
+
             is_precision_pipeline = getattr(self.config, 'precision_pipeline_model', '') \
                 and getattr(self.config, 'pipeline_model', '') == getattr(self.config, 'precision_pipeline_model')
 
