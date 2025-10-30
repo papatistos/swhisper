@@ -26,16 +26,15 @@ class WorkspaceManager:
         
         # Create main temp directory
         if self.config.custom_temp_dir:
-            # Use custom temp directory with session name
-            session_name = f"transcription_{time.strftime('%Y%m%d_%H%M%S')}"
-            self.temp_dir = os.path.join(self.config.custom_temp_dir, session_name)
+            # Use the specified custom temp directory directly
+            self.temp_dir = self.config.custom_temp_dir
             os.makedirs(self.temp_dir, exist_ok=True)
-            print(f"🏗️  Using custom temp location: {self.config.custom_temp_dir}")
-            print(f"   📁 Session folder: {session_name}")
+            print(f"🏗️  Using custom temp location for workspace: {self.temp_dir}")
         else:
-            # Use system temp with cryptic name
-            self.temp_dir = tempfile.mkdtemp(prefix="transcribe_", suffix="_workspace")
-            print(f"🏗️  Using system temp location")
+            # Use a fixed directory inside the system temp location
+            self.temp_dir = os.path.join(tempfile.gettempdir(), "swhisper_workspace")
+            os.makedirs(self.temp_dir, exist_ok=True)
+            print(f"🏗️  Using persistent workspace in system temp location: {self.temp_dir}")
         
         self.temp_audio_dir = os.path.join(self.temp_dir, "audio")
         self.temp_output_dir = os.path.join(self.temp_dir, self.config.json_dir)
@@ -49,7 +48,6 @@ class WorkspaceManager:
         print(f"   📁 Output files: {self.temp_output_dir}")
         print(f"   💾 Checkpoint preservation: {'Enabled' if self.config.preserve_checkpoints else 'Disabled'}")
         
-        # Copy audio files to temp workspace
         self._copy_audio_files_to_temp()
         
         return self.temp_dir
@@ -96,24 +94,10 @@ class WorkspaceManager:
                 sum(1 for char in filename if char.isalpha()) >= 4)
     
     def get_output_dir(self) -> str:
-        """Get the current output directory (temp or original)."""
-        if self.temp_output_dir:
-            return self.temp_output_dir
-        elif self.temp_dir:
-            return os.path.join(self.temp_dir, self.config.json_dir)
-        else:
-            # Fallback to original directory
-            fallback_dir = os.path.join(self.original_audio_dir or self.config.audio_dir, self.config.json_dir)
-            os.makedirs(fallback_dir, exist_ok=True)
-            
-            if not self._check_write_permissions(fallback_dir):
-                print(f"❌ No write permission to fallback directory: {fallback_dir}")
-                print("💡 Setting up temporary workspace instead...")
-                if not self.temp_dir:
-                    self.setup_temp_workspace()
-                return os.path.join(self.temp_dir, self.config.json_dir)
-            
-            return fallback_dir
+        """Get the output directory path within the source folder."""
+        output_dir = os.path.join(self.original_audio_dir or self.config.audio_dir, self.config.json_dir)
+        os.makedirs(output_dir, exist_ok=True)
+        return output_dir
     
     def get_audio_dir(self) -> str:
         """Get the current audio directory (temp or original)."""
@@ -128,81 +112,6 @@ class WorkspaceManager:
             os.remove(test_file)
             return True
         except (OSError, IOError, PermissionError):
-            return False
-    
-    def copy_results_to_source(self) -> bool:
-        """Copy results from temp directory back to source directory."""
-        if not self.original_audio_dir or not self.temp_output_dir:
-            return False
-        
-        # Check if source directory exists and is writable
-        if not os.path.exists(self.original_audio_dir):
-            print(f"❌ Source directory no longer exists: {self.original_audio_dir}")
-            return False
-        
-        if not self._check_write_permissions(self.original_audio_dir):
-            print(f"❌ No write permission to source directory: {self.original_audio_dir}")
-            print("💡 You can manually copy the results from the temp directory:")
-            print(f"   cp -r {self.temp_output_dir} {self.original_audio_dir}/")
-            return False
-        
-        # Ask user if they want to copy results back
-        print(f"\n📂 Processing completed successfully!")
-        print(f"   📁 Results are in temp directory: {self.temp_output_dir}")
-        print(f"   📁 Source directory: {self.original_audio_dir}")
-        
-        response = input("\n🤔 Copy transcript folder to source directory? (y/N): ").strip().lower()
-        
-        if response in ['y', 'yes']:
-            try:
-                dest_dir = os.path.join(self.original_audio_dir, self.config.json_dir)
-                if os.path.exists(dest_dir):
-                    shutil.rmtree(dest_dir)
-                shutil.copytree(self.temp_output_dir, dest_dir)
-                print(f"✅ Results copied to: {dest_dir}")
-                return True
-            except Exception as e:
-                print(f"❌ Error copying results: {e}")
-                return False
-        else:
-            print(f"📝 Results remain in temp directory: {self.temp_output_dir}")
-            print(f"💡 Temp directory will be cleaned up when script exits")
-            return False
-    
-    def copy_single_result_to_source(self, temp_file_path: str, base_name: str, extension: Optional[str] = None) -> bool:
-        """Copy a single transcription result to the source directory immediately after completion."""
-        if not self.original_audio_dir or not self.temp_output_dir:
-            return False
-        
-        # Check if source directory exists and is writable
-        if not os.path.exists(self.original_audio_dir):
-            print(f"⚠️  Source directory no longer exists: {self.original_audio_dir}")
-            print(f"   File remains in temp: {temp_file_path}")
-            return False
-        
-        # Ensure destination directory exists
-        dest_dir = os.path.join(self.original_audio_dir, self.config.json_dir)
-        try:
-            os.makedirs(dest_dir, exist_ok=True)
-        except Exception as e:
-            print(f"⚠️  Could not create destination directory: {e}")
-            return False
-        
-        if not self._check_write_permissions(dest_dir):
-            print(f"⚠️  No write permission to: {dest_dir}")
-            print(f"   File remains in temp: {temp_file_path}")
-            return False
-        
-        # Copy the file
-        ext = extension if extension is not None else os.path.splitext(temp_file_path)[1] or ".json"
-        dest_path = os.path.join(dest_dir, f"{base_name}{ext}")
-        try:
-            shutil.copy2(temp_file_path, dest_path)
-            print(f"📋 Copied to source: {self.config.json_dir}/{base_name}{ext}")
-            return True
-        except Exception as e:
-            print(f"⚠️  Error copying file to source: {e}")
-            print(f"   File remains in temp: {temp_file_path}")
             return False
     
     def offer_cleanup_temp_workspace(self):

@@ -96,30 +96,36 @@ class FileManager:
             print(f"Error: The directory '{audio_dir}' was not found.")
             return []
     
-    def find_and_convert_audio_files(self, audio_dir: str, output_dir: str) -> List[str]:
-        """Find audio files and convert them to WAV if needed."""
+    def find_and_convert_audio_files(self, audio_dir: str, output_dir: str, source_output_dir: str) -> List[str]:
+        """Find audio files, filter out processed ones, and convert if needed."""
         audio_files = self.find_audio_files(audio_dir)
         print(f"Found {len(audio_files)} audio/video files")
-        
+
+        unprocessed_files = []
+        if not self.config.force_reprocess and os.path.exists(source_output_dir):
+            existing_json_basenames = {os.path.splitext(f)[0] for f in os.listdir(source_output_dir) if f.endswith('.json')}
+            for audio_file in audio_files:
+                base_name = os.path.splitext(audio_file)[0]
+                if base_name in existing_json_basenames:
+                    print(f"  ⏩ {audio_file} (already processed, found in source)")
+                else:
+                    unprocessed_files.append(audio_file)
+        else:
+            unprocessed_files = audio_files
+
+        # Apply file limit *after* filtering
+        files_to_consider = unprocessed_files[:self.config.file_limit]
+
         # Separate WAV files from non-WAV files
-        wav_files = [f for f in audio_files if f.lower().endswith('.wav')]
-        non_wav_files = [f for f in audio_files if not f.lower().endswith('.wav')]
+        wav_files = [f for f in files_to_consider if f.lower().endswith('.wav')]
+        non_wav_files = [f for f in files_to_consider if not f.lower().endswith('.wav')]
         
         ready_wav_files = []
         wav_files_to_convert = []
-        converted_files = []
         
         # Process existing WAV files
         for wav_file in wav_files:
             input_path = os.path.join(audio_dir, wav_file)
-            base_name = os.path.splitext(wav_file)[0]
-            
-            # Check if already processed
-            json_output = os.path.join(output_dir, f"{base_name}.json")
-            if os.path.exists(json_output):
-                print(f"  ⏩ {wav_file} (already processed)")
-                continue
-            
             if self.converter.is_wav_ready(input_path):
                 ready_wav_files.append(wav_file)
                 print(f"  ✅ {wav_file} (ready)")
@@ -127,59 +133,37 @@ class FileManager:
                 wav_files_to_convert.append(wav_file)
                 print(f"  🔄 {wav_file} (needs format conversion)")
         
-        # Check non-WAV files
-        non_wavs_to_convert = []
-        for audio_file in non_wav_files:
-            base_name = os.path.splitext(audio_file)[0]
-            json_output = os.path.join(output_dir, f"{base_name}.json")
-            
-            # Skip if already processed
-            if os.path.exists(json_output):
-                print(f"  ⏩ {audio_file} (already processed)")
-                continue
-                
-            non_wavs_to_convert.append(audio_file)
+        # Mark non-WAV files for conversion
+        non_wavs_to_convert = non_wav_files
+        for audio_file in non_wavs_to_convert:
             print(f"  🔄 {audio_file} (needs conversion to WAV)")
-        
-        # Smart conversion logic
-        total_available = len(ready_wav_files) + len(wav_files_to_convert) + len(non_wavs_to_convert)
-        files_needed = min(self.config.file_limit, total_available)
-        
+
         print(f"\n📊 File Status Summary:")
         print(f"   Ready WAV files: {len(ready_wav_files)}")
         print(f"   WAV files needing format conversion: {len(wav_files_to_convert)}")
         print(f"   Non-WAV files needing conversion: {len(non_wavs_to_convert)}")
-        print(f"   FILE_LIMIT: {self.config.file_limit}")
         
         final_wav_files = ready_wav_files.copy()
-        
-        if len(ready_wav_files) >= files_needed:
-            print(f"\n✨ Sufficient ready WAV files available")
-            final_wav_files = ready_wav_files[:files_needed]
-        else:
-            remaining_needed = files_needed - len(ready_wav_files)
-            print(f"\n🔄 Need to convert {remaining_needed} more files...")
-            
+        converted_files = []
+
+        # Convert files as needed
+        if len(final_wav_files) < len(files_to_consider):
             # Convert WAV format issues first (faster)
-            for wav_file in wav_files_to_convert[:remaining_needed]:
+            for wav_file in wav_files_to_convert:
                 if self._convert_wav_file(audio_dir, wav_file):
                     final_wav_files.append(wav_file)
                     converted_files.append(wav_file)
-                    remaining_needed -= 1
-                    if remaining_needed <= 0:
-                        break
             
-            # Convert non-WAV files if still needed
-            for audio_file in non_wavs_to_convert[:remaining_needed]:
+            # Convert non-WAV files
+            for audio_file in non_wavs_to_convert:
+                if len(final_wav_files) >= self.config.file_limit:
+                    break
                 if self._convert_non_wav_file(audio_dir, audio_file):
                     base_name = os.path.splitext(audio_file)[0]
                     wav_filename = f"{base_name}.wav"
                     final_wav_files.append(wav_filename)
                     converted_files.append(wav_filename)
-                    remaining_needed -= 1
-                    if remaining_needed <= 0:
-                        break
-        
+
         # Remove duplicates while preserving order
         final_wav_files = list(dict.fromkeys(final_wav_files))
         
@@ -189,7 +173,7 @@ class FileManager:
                 print(f"  ✅ {f}")
         
         if not final_wav_files:
-            print(f"❌ No suitable audio files found or converted in '{audio_dir}'")
+            print(f"❌ No new audio files to process in '{audio_dir}'")
             return []
         
         print(f"\n🎵 Ready to process {len(final_wav_files)} WAV files:")

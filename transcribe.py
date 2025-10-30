@@ -12,6 +12,7 @@ This script automatically chunks long audio files at natural speech boundaries
 to prevent memory issues while maintaining transcription accuracy.
 """
 
+import shutil
 import csv
 import os
 import sys
@@ -20,6 +21,8 @@ import signal as sys_signal
 import atexit
 import multiprocessing as mp
 from contextlib import contextmanager
+from datetime import datetime
+import shutil
 
 # Add the current directory to Python path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -59,14 +62,15 @@ class TranscriptionApp:
         try:
             # Setup workspace
             workspace_dir = self.workspace_manager.setup_temp_workspace()
-            audio_dir = self.workspace_manager.get_audio_dir()
+            audio_dir = self.config.audio_dir # Use source directory for audio processing
             output_dir = self.workspace_manager.get_output_dir()
             
             # Find and convert audio files
-            wav_files = self.file_manager.find_and_convert_audio_files(audio_dir, output_dir)
+            source_output_dir = os.path.join(self.workspace_manager.original_audio_dir, self.config.json_dir)
+            wav_files = self.file_manager.find_and_convert_audio_files(audio_dir, output_dir, source_output_dir)
             
             if not wav_files:
-                print("❌ No audio files found to process.")
+                print("✅ No new audio files to process.")
                 return
             
             # Process each audio file
@@ -116,14 +120,7 @@ class TranscriptionApp:
 
         # Persist VAD segments if available
         vad_output_path = os.path.join(output_dir, f"{base_name}_vad.tsv")
-        vad_saved = self._save_vad_segments(result, vad_output_path)
-        
-        # Copy this file's result to source immediately
-        self.workspace_manager.copy_single_result_to_source(output_path, base_name)
-        if vad_saved:
-            self.workspace_manager.copy_single_result_to_source(
-                vad_output_path, f"{base_name}_vad", extension=".tsv"
-            )
+        self._save_vad_segments(result, vad_output_path)
         
         # Clean up checkpoint on successful completion
         if checkpoint_path:
@@ -203,7 +200,28 @@ class TranscriptionApp:
         return self.transcription_pipeline.result_merger.merge_chunk_results(chunk_results, boundaries)
     
     def _save_transcription_result(self, result: dict, output_path: str):
-        """Save transcription result to JSON file."""
+        """Save transcription result to JSON file, archiving any existing file."""
+        
+        # Archive existing file if it exists
+        if os.path.exists(output_path):
+            try:
+                # Create archive directory
+                output_dir = os.path.dirname(output_path)
+                archive_dir = os.path.join(output_dir, "archive")
+                os.makedirs(archive_dir, exist_ok=True)
+                
+                # Create timestamped filename for the old file
+                modification_time = os.path.getmtime(output_path)
+                timestamp = datetime.fromtimestamp(modification_time).strftime('%Y%m%d-%H%M%S')
+                base_name = os.path.splitext(os.path.basename(output_path))[0]
+                archive_path = os.path.join(archive_dir, f"{base_name}_{timestamp}.json")
+                
+                # Move the old file
+                print(f"  -> Archiving existing file to: {os.path.relpath(archive_path, output_dir)}")
+                os.rename(output_path, archive_path)
+            except Exception as e:
+                print(f"  -> ⚠️ Warning: Could not archive existing file: {e}")
+
         print(f"💾 Saving transcription to: {os.path.basename(output_path)}")
         
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
