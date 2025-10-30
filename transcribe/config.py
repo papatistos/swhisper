@@ -3,6 +3,7 @@
 import os
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
+import re
 
 from path_settings import get_path_settings
 
@@ -36,18 +37,20 @@ class TranscriptionConfig:
     preserve_checkpoints: bool = True
     
     # Chunking configuration
-    target_chunk_duration: int = 180  # 3 minutes
-    min_silence_duration: float = 0.5  # 0.5 seconds
-    overlap_duration: float = 1.0  # 1 second
+    target_chunk_duration: int = 180   # size in seconds of audio chunks to be processed individually (to handle memory constraints)
+    min_silence_duration: float = 0.5  # Minimum duration of silence to place the chunk boundary
+    overlap_duration: float = 5.0      # increasing this from 1 to make sure there are enough words to reliabley stitch the transcript together
     
     # Environment checks
     check_revision: bool = False
     check_environment: bool = True
 
+
 @dataclass 
 class WhisperSettings:
     """Whisper-specific transcription settings (for whisper_timestamped)."""
-    
+    lexicon = "öh öhm nä nähä jo jaha jaså jaja oj ojojoj nja njäh nja näe haha hehe hihi asså ju mm mhm hmm eh ehm äh ähm"
+
     language: str = 'sv'
     task: str = 'transcribe'
     remove_punctuation_from_words: bool = False
@@ -70,8 +73,8 @@ class WhisperSettings:
     logprob_threshold: float = -1.0                        # value between 0 and -1 . (-1 effectuively disables the threshold, i.e. no segment will be excluded because of low confidence)
     no_speech_threshold: float = 0.6                       # we have to be more than 60% sure there is no speech to dismiss a segment as silence
     fp16: Optional[bool] = None
-    condition_on_previous_text: bool = False
-    initial_prompt: str = 'öh öhm nä nähä jo jaha jaha jaså jaja oj ojojoj nja njäh nja näe haha hehe hihi asså ju mm mhm hmm eh ehm äh ähm'
+    condition_on_previous_text: bool = True
+    initial_prompt: str = lexicon
     suppress_tokens: str = '50364'
     sample_len: Optional[int] = None
     verbose: bool = True
