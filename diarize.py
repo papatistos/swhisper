@@ -52,7 +52,7 @@ from diarize import (
     DiarizationAnalyzer, SegmentAnalyzer, BoundaryAnalyzer, StatsExporter,
     VTTFormatter, RTTMFormatter, RTFFormatter, TXTFormatter, TSVFormatter, PyannoteSegmentFormatter
 )
-from diarize.utils import logger_manager, BackfillTranscriber
+from diarize.utils import logger_manager, BackfillTranscriber, BackfillCache
 from transcribe import TranscriptionConfig, WhisperSettings
 
 
@@ -284,6 +284,18 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     base_snippet_dir = configured_dir or os.path.join(config.final_log_dir, "backfill_snippets")
                     snippet_dir = os.path.join(base_snippet_dir, base_filename)
 
+                # Initialize cache if enabled
+                cache = None
+                if getattr(config, 'backfill_cache_enabled', True):
+                    cache_dir = config.get_backfill_cache_dir()
+                    cache = BackfillCache(
+                        cache_dir=cache_dir,
+                        audio_path=audiofile_path,
+                        model=backfill_model,
+                        device=backfill_device,
+                        overlap=backfill_overlap
+                    )
+
                 backfill_transcriber = BackfillTranscriber(
                     audiofile_path,
                     backfill_model,
@@ -291,11 +303,12 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     backfill_settings.to_dict(),
                     overlap_duration=backfill_overlap,
                     snippet_output_dir=snippet_dir,
-                    snippet_prefix=snippet_prefix
+                    snippet_prefix=snippet_prefix,
+                    cache=cache
                 )
 
                 try:
-                    backfill_outcome = backfill_transcriber.transcribe_turns(unmatched_turns)
+                    backfill_outcome = backfill_transcriber.transcribe_turns(unmatched_turns, transcript_key=base_filename)
                 except Exception as backfill_error:  # pragma: no cover - defensive logging
                     print(f"  -> Backfill transcription failed: {backfill_error}")
                     backfill_outcome = {

@@ -472,6 +472,7 @@ class BackfillTranscriber:
         overlap_duration: float = 0.5,
         snippet_output_dir: Optional[str] = None,
         snippet_prefix: Optional[str] = None,
+        cache: Optional['BackfillCache'] = None,
     ) -> None:
         self.audio_path = audio_path
         self.model_name = model_name
@@ -486,6 +487,7 @@ class BackfillTranscriber:
             self.snippet_output_dir.mkdir(parents=True, exist_ok=True)
         self.snippet_prefix = snippet_prefix or "backfill"
         self._snippet_counter = 0
+        self.cache = cache
 
     def _ensure_model_loaded(self) -> None:
         if self._model is None:
@@ -530,24 +532,49 @@ class BackfillTranscriber:
         except Exception as exc:  # pragma: no cover - best effort logging
             print(f"      ⚠️ Could not save backfill audio snippet: {exc}")
 
-    def transcribe_turns(self, turns: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def transcribe_turns(self, turns: List[Dict[str, Any]], transcript_key: Optional[str] = None) -> Dict[str, Any]:
         recovered_segments: List[Dict[str, Any]] = []
         recovered_turns: List[Dict[str, Any]] = []
         failed_turns: List[Dict[str, Any]] = []
         total_words = 0
         placeholder_segments = 0
 
+        # Load cached segments if available
+        cached_segments = {}
+        cache_hits = 0
+        if self.cache and transcript_key:
+            cached_segments = self.cache.load(transcript_key)
+            if cached_segments:
+                print(f"  -> Loaded {len(cached_segments)} cached backfill segments")
+
+        # Segments to save to cache (only newly transcribed ones)
+        newly_transcribed = {}
+
         for turn in turns:
             speaker = turn.get('speaker', 'UNKNOWN')
             start = float(turn.get('start', 0.0))
             end = float(turn.get('end', start))
             duration = max(0.0, end - start)
-            print(f"----> Transcribing {speaker}: {start:.2f}s - {end:.2f}s (duration {duration:.2f}s)")
-            try:
-                segment, word_count = self._transcribe_single_turn(turn)
-            except Exception as exc:  # pragma: no cover - logging path
-                print(f"   -> Backfill error for {speaker} {start:.2f}-{end:.2f}s: {exc}")
-                segment, word_count = None, 0
+
+            # Create a cache key for this turn
+            turn_key = f"{speaker}_{start:.3f}_{end:.3f}"
+
+            # Check cache first
+            if turn_key in cached_segments:
+                segment = cached_segments[turn_key]
+                word_count = len(segment.get('words', []))
+                cache_hits += 1
+                print(f"----> Using cached result for {speaker}: {start:.2f}s - {end:.2f}s (duration {duration:.2f}s)")
+            else:
+                print(f"----> Transcribing {speaker}: {start:.2f}s - {end:.2f}s (duration {duration:.2f}s)")
+                try:
+                    segment, word_count = self._transcribe_single_turn(turn)
+                    # Store newly transcribed segment for caching
+                    if segment:
+                        newly_transcribed[turn_key] = segment
+                except Exception as exc:  # pragma: no cover - logging path
+                    print(f"   -> Backfill error for {speaker} {start:.2f}-{end:.2f}s: {exc}")
+                    segment, word_count = None, 0
 
             is_placeholder = bool(segment and segment.get('is_placeholder'))
 
@@ -579,6 +606,16 @@ class BackfillTranscriber:
             else:
                 failed_turns.append(turn)
                 print("      Words: [none detected]")
+
+        # Save newly transcribed segments to cache
+        if self.cache and transcript_key and newly_transcribed:
+            # Merge with existing cache
+            merged_cache = {**cached_segments, **newly_transcribed}
+            self.cache.save(transcript_key, merged_cache)
+            print(f"  -> Saved {len(newly_transcribed)} new segments to cache")
+
+        if cache_hits > 0:
+            print(f"  -> Cache hits: {cache_hits}/{len(turns)} turns")
 
         return {
             'segments': recovered_segments,
