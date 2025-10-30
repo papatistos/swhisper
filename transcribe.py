@@ -12,6 +12,7 @@ This script automatically chunks long audio files at natural speech boundaries
 to prevent memory issues while maintaining transcription accuracy.
 """
 
+import shutil
 import csv
 import os
 import sys
@@ -20,6 +21,8 @@ import signal as sys_signal
 import atexit
 import multiprocessing as mp
 from contextlib import contextmanager
+from datetime import datetime
+import shutil
 
 # Add the current directory to Python path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -203,7 +206,28 @@ class TranscriptionApp:
         return self.transcription_pipeline.result_merger.merge_chunk_results(chunk_results, boundaries)
     
     def _save_transcription_result(self, result: dict, output_path: str):
-        """Save transcription result to JSON file."""
+        """Save transcription result to JSON file, archiving any existing file."""
+        
+        # Archive existing file if it exists
+        if os.path.exists(output_path):
+            try:
+                # Create archive directory
+                output_dir = os.path.dirname(output_path)
+                archive_dir = os.path.join(output_dir, "archive")
+                os.makedirs(archive_dir, exist_ok=True)
+                
+                # Create timestamped filename for the old file
+                modification_time = os.path.getmtime(output_path)
+                timestamp = datetime.fromtimestamp(modification_time).strftime('%Y%m%d-%H%M%S')
+                base_name = os.path.splitext(os.path.basename(output_path))[0]
+                archive_path = os.path.join(archive_dir, f"{base_name}_{timestamp}.json")
+                
+                # Move the old file
+                print(f"  -> Archiving existing file to: {os.path.relpath(archive_path, output_dir)}")
+                os.rename(output_path, archive_path)
+            except Exception as e:
+                print(f"  -> ⚠️ Warning: Could not archive existing file: {e}")
+
         print(f"💾 Saving transcription to: {os.path.basename(output_path)}")
         
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
