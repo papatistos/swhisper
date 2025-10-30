@@ -62,14 +62,15 @@ class TranscriptionApp:
         try:
             # Setup workspace
             workspace_dir = self.workspace_manager.setup_temp_workspace()
-            audio_dir = self.workspace_manager.get_audio_dir()
+            audio_dir = self.config.audio_dir # Use source directory for audio processing
             output_dir = self.workspace_manager.get_output_dir()
             
             # Find and convert audio files
-            wav_files = self.file_manager.find_and_convert_audio_files(audio_dir, output_dir)
+            source_output_dir = os.path.join(self.workspace_manager.original_audio_dir, self.config.json_dir)
+            wav_files = self.file_manager.find_and_convert_audio_files(audio_dir, output_dir, source_output_dir)
             
             if not wav_files:
-                print("❌ No audio files found to process.")
+                print("✅ No new audio files to process.")
                 return
             
             # Process each audio file
@@ -119,14 +120,7 @@ class TranscriptionApp:
 
         # Persist VAD segments if available
         vad_output_path = os.path.join(output_dir, f"{base_name}_vad.tsv")
-        vad_saved = self._save_vad_segments(result, vad_output_path)
-        
-        # Copy this file's result to source immediately
-        self.workspace_manager.copy_single_result_to_source(output_path, base_name)
-        if vad_saved:
-            self.workspace_manager.copy_single_result_to_source(
-                vad_output_path, f"{base_name}_vad", extension=".tsv"
-            )
+        self._save_vad_segments(result, vad_output_path)
         
         # Clean up checkpoint on successful completion
         if checkpoint_path:
