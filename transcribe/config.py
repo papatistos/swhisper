@@ -31,6 +31,7 @@ class TranscriptionConfig:
     
     # Processing limits
     file_limit: int = 3
+    force_reprocess: bool = False                         # if true, files are transcribed even if transcriptions already exist
     
     # Temporary directory configuration
     custom_temp_dir: Optional[str] = DEFAULT_TEMP_DIR
@@ -39,7 +40,7 @@ class TranscriptionConfig:
     # Chunking configuration
     target_chunk_duration: int = 180   # size in seconds of audio chunks to be processed individually (to handle memory constraints)
     min_silence_duration: float = 0.5  # Minimum duration of silence to place the chunk boundary
-    overlap_duration: float = 5.0      # increasing this from 1 to make sure there are enough words to reliabley stitch the transcript together
+    overlap_duration: float = 1.0      # increasing this from 1 to make sure there are enough words to reliabley stitch the transcript together. But not too long, otherwise it will be removed as duplicate
     
     # Environment checks
     check_revision: bool = False

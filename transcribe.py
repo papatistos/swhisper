@@ -22,7 +22,6 @@ import atexit
 import multiprocessing as mp
 from contextlib import contextmanager
 from datetime import datetime
-import shutil
 
 # Add the current directory to Python path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -101,7 +100,7 @@ class TranscriptionApp:
             raise
         finally:
             self._cleanup()
-    
+
     def _process_single_file(self, wav_file: str, audio_dir: str, output_dir: str):
         """Process a single audio file."""
         audiofile_path = os.path.join(audio_dir, wav_file)
@@ -335,12 +334,10 @@ class TranscriptionApp:
         """Safe cleanup function for exit handler."""
         try:
             resource_manager.cleanup_resources()
-            
-            if hasattr(self, 'workspace_manager'):
-                temp_dir = getattr(self.workspace_manager, 'temp_dir', None)
-                if temp_dir and os.path.exists(temp_dir):
-                    print(f"💾 Checkpoints preserved in: {temp_dir}")
-                    print(f"💡 Re-run the script to resume from where it left off")
+            root = getattr(self.checkpoint_manager, 'output_dir', None)
+            if root and os.path.isdir(root):
+                print(f"💾 Checkpoints preserved in: {root}")
+                print("💡 Re-run the script to resume from where it left off")
         except Exception as e:
             print(f"Warning: Error during exit cleanup: {e}")
     
@@ -371,9 +368,11 @@ class TranscriptionApp:
 def main():
     """Main entry point."""
     # Required for macOS multiprocessing
-    if __name__ == '__main__':
+    try:
         mp.set_start_method('spawn', force=True)
-    
+    except RuntimeError:
+        # It's okay if the start method was already set elsewhere
+        pass
     # Create and run the application
     app = TranscriptionApp()
     app.run()
