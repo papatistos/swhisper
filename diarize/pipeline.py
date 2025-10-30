@@ -151,6 +151,10 @@ class DiarizationPipeline:
             if not is_parameter_testing:
                 applied = {}
 
+                # Detect clustering type for proper parameter reporting
+                is_vbx = hasattr(pipeline, '_clustering') and \
+                        type(pipeline._clustering).__name__ == 'VBxClustering'
+
                 if hasattr(pipeline, '_segmentation'):
                     seg_attrs = {}
                     for k in ('onset', 'offset', 'min_duration_on', 'min_duration_off'):
@@ -164,14 +168,21 @@ class DiarizationPipeline:
 
                 if hasattr(pipeline, '_clustering'):
                     clust_attrs = {}
-                    for k in ('threshold', 'min_cluster_size', 'method', 'distance_threshold', 'embedding_threshold'):
+                    # Check for VBxClustering parameters (community-1) or legacy parameters (3.1)
+                    if is_vbx:
+                        param_list = ('threshold', 'Fa', 'Fb')
+                    else:
+                        param_list = ('threshold', 'min_cluster_size', 'method', 'distance_threshold', 'embedding_threshold')
+
+                    for k in param_list:
                         if hasattr(pipeline._clustering, k):
                             try:
                                 clust_attrs[k] = getattr(pipeline._clustering, k)
                             except Exception:
                                 clust_attrs[k] = '<unreadable>'
                     if clust_attrs:
-                        applied['clustering'] = clust_attrs
+                        clust_type = 'VBxClustering' if is_vbx else 'AgglomerativeClustering'
+                        applied[f'clustering ({clust_type})'] = clust_attrs
 
                 if hasattr(pipeline, '_embedding'):
                     emb = {}
@@ -288,47 +299,79 @@ class DiarizationPipeline:
     def _configure_pipeline_parameters(self, pipeline, verbose: bool = True):
         """Configure pipeline parameters safely."""
         try:
+            # Detect pipeline type
+            is_vbx_clustering = hasattr(pipeline, '_clustering') and \
+                               type(pipeline._clustering).__name__ == 'VBxClustering'
+
+            params_configured = []
+
             # Configure segmentation if available
             if hasattr(pipeline, '_segmentation'):
-                seg_config = {
-                    'onset': self.config.segmentation_threshold,
-                    'offset': self.config.segmentation_threshold,
-                    'min_duration_on': self.config.min_duration_on,
-                    'min_duration_off': self.config.min_duration_off
-                }
-                
+                seg_config = {}
+
+                if is_vbx_clustering:
+                    # Community-1 uses min_duration_off from config
+                    seg_config['min_duration_off'] = self.config.community_min_duration_off
+                else:
+                    # Legacy 3.1 pipeline parameters
+                    seg_config = {
+                        'onset': self.config.segmentation_threshold,
+                        'offset': self.config.segmentation_threshold,
+                        'min_duration_on': self.config.min_duration_on,
+                        'min_duration_off': self.config.min_duration_off
+                    }
+
                 configured_params = []
                 for param, value in seg_config.items():
-                    if hasattr(pipeline._segmentation, param):
+                    if value is not None and hasattr(pipeline._segmentation, param):
                         setattr(pipeline._segmentation, param, value)
                         configured_params.append(param)
-                
-                if verbose and configured_params:
-                    print(f"  Segmentation parameters configured: {configured_params}")
-            
+
+                if configured_params:
+                    params_configured.extend([f"segmentation.{p}" for p in configured_params])
+                    if verbose:
+                        print(f"  Segmentation parameters configured: {configured_params}")
+
             # Configure clustering if available
             if hasattr(pipeline, '_clustering'):
                 clustering_params = []
-                
-                if hasattr(pipeline._clustering, 'threshold'):
-                    pipeline._clustering.threshold = self.config.clustering_threshold
-                    clustering_params.append('threshold')
-                
-                if hasattr(pipeline._clustering, 'min_cluster_size'):
-                    pipeline._clustering.min_cluster_size = self.config.clustering_min_cluster_size
-                    clustering_params.append('min_cluster_size')
-                
-                if hasattr(pipeline._clustering, 'method'):
-                    pipeline._clustering.method = self.config.clustering_method
-                    clustering_params.append('method')
-                
-                if verbose and clustering_params:
-                    print(f"  Clustering parameters configured: {clustering_params}")
-            
-            # Configure embedding distance threshold if available
-            if hasattr(self.config, 'embedding_distance_threshold'):
+
+                if is_vbx_clustering:
+                    # VBxClustering parameters (community-1)
+                    vbx_params = {
+                        'threshold': self.config.vbx_clustering_threshold,
+                        'Fa': self.config.vbx_fa,
+                        'Fb': self.config.vbx_fb
+                    }
+
+                    for param, value in vbx_params.items():
+                        if hasattr(pipeline._clustering, param):
+                            setattr(pipeline._clustering, param, value)
+                            clustering_params.append(param)
+                else:
+                    # AgglomerativeClustering parameters (3.1)
+                    if hasattr(pipeline._clustering, 'threshold'):
+                        pipeline._clustering.threshold = self.config.clustering_threshold
+                        clustering_params.append('threshold')
+
+                    if hasattr(pipeline._clustering, 'min_cluster_size'):
+                        pipeline._clustering.min_cluster_size = self.config.clustering_min_cluster_size
+                        clustering_params.append('min_cluster_size')
+
+                    if hasattr(pipeline._clustering, 'method'):
+                        pipeline._clustering.method = self.config.clustering_method
+                        clustering_params.append('method')
+
+                if clustering_params:
+                    params_configured.extend([f"clustering.{p}" for p in clustering_params])
+                    if verbose:
+                        clustering_type = "VBxClustering" if is_vbx_clustering else "AgglomerativeClustering"
+                        print(f"  Clustering parameters configured ({clustering_type}): {clustering_params}")
+
+            # Configure embedding distance threshold if available (legacy 3.1)
+            if not is_vbx_clustering and hasattr(self.config, 'embedding_distance_threshold'):
                 embedding_configured = False
-                
+
                 # Try different possible locations for embedding threshold
                 if hasattr(pipeline, '_embedding') and hasattr(pipeline._embedding, 'threshold'):
                     pipeline._embedding.threshold = self.config.embedding_distance_threshold
@@ -339,13 +382,18 @@ class DiarizationPipeline:
                 elif hasattr(pipeline, '_clustering') and hasattr(pipeline._clustering, 'embedding_threshold'):
                     pipeline._clustering.embedding_threshold = self.config.embedding_distance_threshold
                     embedding_configured = True
-                
-                if verbose and embedding_configured:
-                    print("  Embedding distance threshold configured.")
-            
+
+                if embedding_configured:
+                    params_configured.append('embedding.threshold')
+                    if verbose:
+                        print("  Embedding distance threshold configured.")
+
             if verbose:
-                print("  Pipeline configured with custom parameters.")
-                
+                if params_configured:
+                    print(f"  Pipeline configured with custom parameters: {', '.join(params_configured)}")
+                else:
+                    print("  Pipeline configuration attempted (parameters may use model defaults).")
+
         except Exception as config_error:
             if verbose:
                 print(f"  Configuration note: Some parameters use defaults ({config_error})")

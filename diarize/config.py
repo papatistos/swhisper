@@ -57,19 +57,32 @@ class DiarizationConfig:
 
     # Pipeline configuration
     pipeline_model: str = "pyannote/speaker-diarization-3.1" # this is ignored when diarize4.py is used
+
+    # Community-1 pipeline parameters (VBxClustering) - used when diarize4.py is used
+    vbx_clustering_threshold: float = 0.4                   # VBx clustering threshold (default: 0.6) - lower values create more speakers (speakers must sound very similar to be grouped)
+    vbx_fa: float = 0.05                                    # False alarm probability for speaker activity (default: 0.07) - lower = more conservative speech detection
+    vbx_fb: float = 0.6                                     # Probability of not detecting a speaker (default: 0.8), - lower = more aggressive speaker separation
+    community_min_duration_off: float = 0.0                 # Minimum duration for non-speech segments (default: 0.0)
+    # segmentation_threshold? community-1 apparently does not expose it.  
+
+    # Legacy 3.1 pipeline parameters (AgglomerativeClustering)
     segmentation_threshold: float = 0.01                    # Lower threshold for more sensitive speaker changes (this concerns segmentation)
     min_duration_on: float = None                          # default seems to be 0.0
     min_duration_off: float = None                         # default seems to be 0.0
     clustering_method: str = "centroid"
     clustering_min_cluster_size: int = 15                  # Minimum number of frames (not segments!) to form a cluster
     clustering_threshold: float = 0.1                       # (was: .15) Lower threshold for stricter clustering
+
 # embedding_distance_threshold: 0.7 (default)
 # lustering_threshold: 0.15 (typical default)
 # segmentation_threshold: 0.3 (voice activity detection)
 # min_duration_on: 0.0 (no minimum duration filter)
 # clustering_threshold: 0.15 (default for clustering)
 # clustering_min_cluster_size: 10-15?
-# 
+#
+
+
+
 
     # Pyannote 4 settings (some of the above are also applied)
     use_exclusive_speaker_diarization: bool = True          # Use exclusive speaker diarization stream if available
