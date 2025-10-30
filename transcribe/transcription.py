@@ -753,49 +753,73 @@ class ResultMerger:
 
 class TranscriptionPipeline:
     """Main transcription pipeline orchestrator."""
-    
-    def __init__(self, config: TranscriptionConfig, whisper_settings: WhisperSettings):
+
+    def __init__(self, config: TranscriptionConfig, whisper_settings: WhisperSettings,
+                 checkpoint_manager=None):
         self.config = config
         self.whisper_settings = whisper_settings
         self.resource_manager = ResourceManager()
         self.audio_processor = AudioProcessor(config)
         self.chunk_processor = ChunkProcessor(config, whisper_settings, self.resource_manager)
         self.result_merger = ResultMerger(config)
+        self.checkpoint_manager = checkpoint_manager
     
-    def process_audio_file(self, audiofile_path: str, boundaries: List[float], 
-                          output_path: str) -> Dict[str, Any]:
-        """Process an entire audio file using chunking."""
-        chunk_results = []
-        
+    def process_audio_file(self, audiofile_path: str, boundaries: List[float],
+                          output_path: str, start_chunk: int = 0,
+                          existing_chunk_results: List[Tuple[Dict[str, Any], float]] = None) -> Dict[str, Any]:
+        """Process an entire audio file using chunking.
+
+        Args:
+            audiofile_path: Path to the audio file
+            boundaries: List of chunk boundary timestamps
+            output_path: Path for final output (kept for compatibility)
+            start_chunk: Chunk index to start from (for resume)
+            existing_chunk_results: Previously completed chunk results (for resume)
+        """
+        chunk_results = existing_chunk_results if existing_chunk_results is not None else []
+
         print(f"\n🎬 Processing {len(boundaries)-1} chunks...")
-        
-        for i in range(len(boundaries) - 1):
+        if start_chunk > 0:
+            print(f"   Resuming from chunk {start_chunk+1}/{len(boundaries)-1}")
+
+        for i in range(start_chunk, len(boundaries) - 1):
             start_time = boundaries[i]
             end_time = boundaries[i + 1]
             chunk_duration = end_time - start_time
-            
+
             print(f"\n📝 Chunk {i+1}/{len(boundaries)-1}: {start_time:.1f}s to {end_time:.1f}s ({chunk_duration:.1f}s)")
-            
+
             chunk_start_time = time.time()
-            
+
             try:
                 result = self.chunk_processor.process_chunk_in_subprocess(
                     audiofile_path, start_time, end_time, i
                 )
                 chunk_results.append(result)
-                
+
                 # Monitor progress
                 self._monitor_progress(i, len(boundaries)-1, chunk_start_time, chunk_duration)
-                
+
+                # Save checkpoint after each chunk (if checkpoint manager is available)
+                if self.checkpoint_manager is not None:
+                    self.checkpoint_manager.save_checkpoint(
+                        audiofile_path,
+                        chunk_results,
+                        i + 1,  # Next chunk to process
+                        boundaries,
+                        output_path,
+                        self.whisper_settings.to_dict()
+                    )
+
             except Exception as e:
                 print(f"❌ Error processing chunk {i+1}: {e}")
-                # Could implement retry logic here
+                # Checkpoint is already saved, so resuming is possible
                 raise
-        
+
         # Merge all chunk results
         print("\n🔀 Merging chunk results...")
         merged_result = self.result_merger.merge_chunk_results(chunk_results, boundaries)
-        
+
         return merged_result
     
     def _monitor_progress(self, chunk_id: int, total_chunks: int, 

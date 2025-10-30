@@ -49,7 +49,9 @@ class TranscriptionApp:
         self.audio_processor = AudioProcessor(self.config)
         self.speech_analyzer = SpeechAnalyzer(self.config)
         self.boundary_finder = ChunkBoundaryFinder(self.config)
-        self.transcription_pipeline = TranscriptionPipeline(self.config, self.whisper_settings)
+        self.transcription_pipeline = TranscriptionPipeline(
+            self.config, self.whisper_settings, self.checkpoint_manager
+        )
         
         # Setup signal handlers
         self._setup_signal_handlers()
@@ -62,8 +64,12 @@ class TranscriptionApp:
         try:
             # Setup workspace
             workspace_dir = self.workspace_manager.setup_temp_workspace()
-            audio_dir = self.config.audio_dir # Use source directory for audio processing
+            audio_dir = self.workspace_manager.get_audio_dir()
             output_dir = self.workspace_manager.get_output_dir()
+            # Use a single, deterministic checkpoint root for both save and load.
+            checkpoint_root = getattr(self.workspace_manager, "temp_dir", None) or output_dir
+            self.checkpoint_manager.set_output_dir(checkpoint_root)
+            print(f"💾 Checkpoints will be read/written in: {checkpoint_root}")
             
             # Find and convert audio files
             source_output_dir = os.path.join(self.workspace_manager.original_audio_dir, self.config.json_dir)
@@ -108,9 +114,58 @@ class TranscriptionApp:
         # Check for existing checkpoint
         checkpoint_data, checkpoint_path = self.checkpoint_manager.load_checkpoint(audiofile_path)
         
+        # Fallback: probe multiple plausible roots so read/write match exactly
+        if not checkpoint_data:
+            current_root = getattr(self.checkpoint_manager, "output_dir", None)
+            candidates = []
+            # 1) current configured root (already checked, but keep for order)
+            if current_root:
+                candidates.append(current_root)
+            # 2) temp output directory
+            try:
+                temp_output_dir = self.workspace_manager.get_output_dir()
+                if temp_output_dir:
+                    candidates.append(temp_output_dir)
+            except Exception:
+                pass
+            # 3) temp workspace root
+            temp_root = getattr(self.workspace_manager, "temp_dir", None)
+            if temp_root:
+                candidates.append(temp_root)
+
+            # Try each unique candidate (preserve order)
+            seen = set()
+            for root in [c for c in candidates if not (c in seen or seen.add(c))]:
+                if not os.path.isdir(root):
+                    continue
+                if current_root != root:
+                    self.checkpoint_manager.set_output_dir(root)
+                alt_data, alt_path = self.checkpoint_manager.load_checkpoint(audiofile_path)
+                if alt_data:
+                    checkpoint_data, checkpoint_path = alt_data, alt_path
+                    print(f"📍 Using checkpoint from: {root}")
+                    # Keep manager pointing at the root where we found the checkpoint,
+                    # so subsequent saves go to the same place.
+                    break
+            else:
+                # Nothing found; restore original root if we changed it
+                if current_root and getattr(self.checkpoint_manager, "output_dir", None) != current_root:
+                    self.checkpoint_manager.set_output_dir(current_root)
+                if current_root:
+                    print(f"🔎 No checkpoints found in searched locations. Current root: {current_root}")
+        
         if checkpoint_data:
-            # Resume from checkpoint
-            result = self._resume_from_checkpoint(checkpoint_data, checkpoint_path)
+            # Resume from checkpoint - extract saved state
+            start_chunk = checkpoint_data['current_chunk']
+            chunk_results = checkpoint_data['chunk_results']
+            boundaries = checkpoint_data['boundaries']
+
+            print(f"📋 Resuming from chunk {start_chunk+1}/{len(boundaries)-1}...")
+
+            # Use unified processing path with resume parameters
+            result = self.transcription_pipeline.process_audio_file(
+                audiofile_path, boundaries, output_path, start_chunk, chunk_results
+            )
         else:
             # Start fresh processing
             result = self._process_from_start(audiofile_path, output_path)
@@ -169,35 +224,6 @@ class TranscriptionApp:
             result = whisper.transcribe(model, audio_data, **self.whisper_settings.to_dict())
             
             return result
-    
-    def _resume_from_checkpoint(self, checkpoint_data: dict, checkpoint_path: str) -> dict:
-        """Resume processing from a checkpoint."""
-        print(f"📋 Resuming from checkpoint...")
-        
-        # Extract checkpoint information
-        audiofile_path = checkpoint_data['audiofile_path']
-        chunk_results = checkpoint_data['chunk_results']
-        current_chunk = checkpoint_data['current_chunk']
-        boundaries = checkpoint_data['boundaries']
-        
-        # Continue processing from where we left off
-        remaining_boundaries = boundaries[current_chunk:]
-        
-        # Process remaining chunks
-        for i, (start_time, end_time) in enumerate(zip(remaining_boundaries[:-1], remaining_boundaries[1:])):
-            chunk_id = current_chunk + i
-            result = self.transcription_pipeline.chunk_processor.process_chunk_in_subprocess(
-                audiofile_path, start_time, end_time, chunk_id
-            )
-            chunk_results.append(result)
-            
-            # Save checkpoint after each chunk
-            self.checkpoint_manager.save_checkpoint(
-                audiofile_path, chunk_results, chunk_id + 1, boundaries, "", self.whisper_settings.to_dict()
-            )
-        
-        # Merge results
-        return self.transcription_pipeline.result_merger.merge_chunk_results(chunk_results, boundaries)
     
     def _save_transcription_result(self, result: dict, output_path: str):
         """Save transcription result to JSON file, archiving any existing file."""

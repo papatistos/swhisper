@@ -13,17 +13,31 @@ class CheckpointManager:
     
     def __init__(self, config: TranscriptionConfig):
         self.config = config
+        # Optional explicit output directory (usually set by workspace manager)
+        self._output_dir: Optional[str] = None
     
-    def save_checkpoint(self, audiofile_path: str, chunk_results: List[Tuple[Dict[str, Any], float]], 
-                       current_chunk: int, boundaries: List[float], output_path: str, 
+    def save_checkpoint(self, audiofile_path: str, chunk_results: List[Tuple[Dict[str, Any], float]],
+                       current_chunk: int, boundaries: List[float], output_path: str,
                        settings: Dict[str, Any]) -> str:
-        """Save current processing state to a checkpoint file."""
+        """Save current processing state to a checkpoint file.
+
+        Args:
+            audiofile_path: Path to the audio file being processed
+            chunk_results: List of (result_dict, time_offset) tuples for completed chunks
+            current_chunk: Index of the next chunk to process (0-based)
+            boundaries: List of chunk boundary timestamps
+            output_path: Final output path (optional, for reference only)
+            settings: Whisper settings dictionary
+
+        Returns:
+            Path to the saved checkpoint file
+        """
         checkpoint_data = {
             'audiofile_path': audiofile_path,
             'chunk_results': chunk_results,
             'current_chunk': current_chunk,
             'boundaries': boundaries,
-            'output_path': output_path,
+            'output_path': output_path,  # Stored for reference, not used during resume
             'settings': settings,
             'timestamp': time.strftime("%Y%m%d-%H%M%S"),
             'total_chunks': len(boundaries) - 1
@@ -51,12 +65,18 @@ class CheckpointManager:
             try:
                 with open(checkpoint_path, 'rb') as f:
                     checkpoint_data = pickle.load(f)
-                    print(f"📋 Found checkpoint: resuming from chunk {checkpoint_data['current_chunk']}/{checkpoint_data['total_chunks']}")
-                    return checkpoint_data, checkpoint_path
+                    # Verify that the checkpoint is for the same file
+                    if checkpoint_data.get('audiofile_path') == audiofile_path:
+                        print(f"📋 Found checkpoint: resuming from chunk {checkpoint_data['current_chunk']}/{checkpoint_data['total_chunks']}")
+                        return checkpoint_data, checkpoint_path
+                    else:
+                        print("⚠️ Checkpoint found, but for a different audio file. Ignoring.")
+                        return None, checkpoint_path
             except Exception as e:
                 print(f"❌ Error loading checkpoint: {e}")
                 return None, checkpoint_path
-        return None, checkpoint_path
+        # No checkpoint found - return (None, "") so callers know nothing to cleanup
+        return None, ""
     
     def cleanup_checkpoint(self, checkpoint_path: str):
         """Remove checkpoint file when processing is complete."""
@@ -109,6 +129,23 @@ class CheckpointManager:
     
     def _get_output_dir(self) -> str:
         """Get the output directory - this should be injected or passed in."""
-        # This is a temporary implementation - in practice this should be
-        # passed in or injected as a dependency
-        return self.config.audio_dir  # Fallback
+        # Prefer an explicitly-set output dir (e.g. temp workspace output)
+        if self._output_dir:
+            return self._output_dir
+
+        # Fall back to config's audio_dir/json_dir layout if available
+        try:
+            # If config has json_dir, place checkpoints in that output directory next to audio
+            base = getattr(self.config, 'audio_dir', None) or os.getcwd()
+            json_dir = getattr(self.config, 'json_dir', 'whisper-json-output')
+            candidate = os.path.join(base, json_dir)
+            os.makedirs(candidate, exist_ok=True)
+            return candidate
+        except Exception:
+            return os.getcwd()
+
+    def set_output_dir(self, output_dir: str):
+        """Explicitly set the directory where checkpoint files will be stored."""
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+            self._output_dir = output_dir
