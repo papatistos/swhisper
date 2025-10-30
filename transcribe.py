@@ -59,8 +59,11 @@ class TranscriptionApp:
         """Run the main transcription process."""
         print("🚀 Starting Audio Transcription Pipeline")
         print("=" * 60)
-        
+
         try:
+            # Verify model availability before starting
+            self._verify_model_availability()
+
             # Setup workspace
             workspace_dir = self.workspace_manager.setup_temp_workspace()
             audio_dir = self.workspace_manager.get_audio_dir()
@@ -69,7 +72,7 @@ class TranscriptionApp:
             checkpoint_root = getattr(self.workspace_manager, "temp_dir", None) or output_dir
             self.checkpoint_manager.set_output_dir(checkpoint_root)
             print(f"💾 Checkpoints will be read/written in: {checkpoint_root}")
-            
+
             # Find and convert audio files
             source_output_dir = os.path.join(self.workspace_manager.original_audio_dir, self.config.json_dir)
             wav_files = self.file_manager.find_and_convert_audio_files(audio_dir, output_dir, source_output_dir)
@@ -341,6 +344,34 @@ class TranscriptionApp:
         except Exception as e:
             print(f"Warning: Error during exit cleanup: {e}")
     
+    def _verify_model_availability(self):
+        """Verify that the Whisper model is available, downloading if necessary."""
+        from transcribe.transcription import is_model_cached
+
+        model_name = self.config.model_str
+        print(f"🔍 Checking model availability: {model_name}")
+
+        if is_model_cached(model_name):
+            print(f"✅ Model found in local cache - all processing will be offline")
+            return
+
+        print(f"⚠️  Model not found in cache")
+        print(f"📥 Will download model from HuggingFace on first use")
+        print(f"💡 This is a one-time download (model will be cached for future use)")
+
+        # Optional: Pre-download the model in the main process
+        # This ensures download happens once, not in every subprocess
+        try:
+            import whisper_timestamped as whisper
+            print(f"📦 Pre-loading model to cache...")
+            model = whisper.load_model(model_name, device=self.config.device)
+            del model
+            resource_manager.clear_device_memory()
+            print(f"✅ Model cached successfully - subsequent chunks will load from cache")
+        except Exception as e:
+            print(f"⚠️  Could not pre-load model: {e}")
+            print(f"   Will attempt to download in subprocesses instead")
+
     def _cleanup(self):
         """Final cleanup."""
         resource_manager.clear_device_memory()
