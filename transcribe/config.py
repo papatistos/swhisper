@@ -71,7 +71,7 @@ class WhisperSettings:
     no_speech_threshold: float = 0.6                       # we have to be more than 60% sure there is no speech to dismiss a segment as silence
     fp16: Optional[bool] = None
     condition_on_previous_text: bool = False
-    initial_prompt: str = 'Mm. Aa. Mhm. Hm. Hmm. Ahh. Aah. Åh. haha ha Äsch. Teams oj! Ojojoj! Aj jo joho nähä öhm Ehm Du ja du öh Asså du säger liksom att'
+    initial_prompt: str = 'öh öhm nä nähä jo jaha jaha jaså jaja oj ojojoj nja njäh nja näe haha hehe hihi asså ju mm mhm hmm eh ehm äh ähm'
     suppress_tokens: str = '50364'
     sample_len: Optional[int] = None
     verbose: bool = True
