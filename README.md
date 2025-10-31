@@ -116,10 +116,10 @@ Settings are loaded in this order (highest to lowest priority):
 | `SWHISPER_MODEL` | Whisper model from HuggingFace | `"KBLab/kb-whisper-large"` |
 | `SWHISPER_DEVICE` | Processing device | `"mps"` |
 | `SWHISPER_LANGUAGE` | Transcription language | `"sv"` |
-| `SWHISPER_FILE_LIMIT` | Max files to process | `3` |
+| `SWHISPER_FILE_LIMIT` | Max files to process | *unlimited* |
 | **Diarization** | | |
-| `SWHISPER_MIN_SPEAKERS` | Minimum speakers | `2` |
-| `SWHISPER_MAX_SPEAKERS` | Maximum speakers | `2` |
+| `SWHISPER_MIN_SPEAKERS` | Minimum speakers | `1` |
+| `SWHISPER_MAX_SPEAKERS` | Maximum speakers | *none* |
 | `SWHISPER_PIPELINE_MODEL` | Diarization pipeline | `"pyannote/speaker-diarization-3.1"` |
 | `SWHISPER_USE_PRECISION` | Use commercial precision-2 service | `false` |
 | **Processing** | | |
