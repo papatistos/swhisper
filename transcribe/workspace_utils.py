@@ -23,7 +23,7 @@ class WorkspaceManager:
         """Set up a temporary workspace for robust processing."""
         # Store original paths
         self.original_audio_dir = self.config.audio_dir
-        
+
         # Create main temp directory
         if self.config.custom_temp_dir:
             # Use the specified custom temp directory directly
@@ -35,9 +35,12 @@ class WorkspaceManager:
             self.temp_dir = os.path.join(tempfile.gettempdir(), "swhisper_workspace")
             os.makedirs(self.temp_dir, exist_ok=True)
             print(f"🏗️  Using persistent workspace in system temp location: {self.temp_dir}")
-        
+
         self.temp_audio_dir = os.path.join(self.temp_dir, "audio")
         self.temp_output_dir = os.path.join(self.temp_dir, self.config.json_dir)
+
+        # Clean up any existing audio files from previous runs
+        self._cleanup_temp_audio()
         
         # Create subdirectories
         os.makedirs(self.temp_audio_dir, exist_ok=True)
@@ -87,6 +90,27 @@ class WorkspaceManager:
         except Exception as e:
             print(f"❌ Error copying files to temp workspace: {e}")
     
+    def _cleanup_temp_audio(self):
+        """Clean up any existing audio files from previous runs to ensure fresh start."""
+        if not self.temp_audio_dir:
+            return
+
+        if os.path.exists(self.temp_audio_dir):
+            try:
+                # Remove all files in the temp audio directory
+                for item in os.listdir(self.temp_audio_dir):
+                    item_path = os.path.join(self.temp_audio_dir, item)
+                    try:
+                        if os.path.isfile(item_path):
+                            os.remove(item_path)
+                        elif os.path.isdir(item_path):
+                            shutil.rmtree(item_path)
+                    except Exception as e:
+                        print(f"⚠️  Warning: Could not remove {item_path}: {e}")
+                print(f"🧹 Cleaned up existing temp audio files")
+            except Exception as e:
+                print(f"⚠️  Warning: Could not clean temp audio directory: {e}")
+
     def _is_audio_file(self, filename: str) -> bool:
         """Check if file is a supported audio format."""
         supported_formats = ['.wav', '.m4a', '.mp3', '.mov', '.mp4', '.flac', '.aac', '.ogg']
@@ -138,6 +162,19 @@ class WorkspaceManager:
         """Clean up the temporary workspace."""
         if self.temp_dir and os.path.exists(self.temp_dir):
             try:
+                # First clean up audio files specifically
+                if self.temp_audio_dir and os.path.exists(self.temp_audio_dir):
+                    for item in os.listdir(self.temp_audio_dir):
+                        item_path = os.path.join(self.temp_audio_dir, item)
+                        try:
+                            if os.path.isfile(item_path):
+                                os.remove(item_path)
+                            elif os.path.isdir(item_path):
+                                shutil.rmtree(item_path)
+                        except Exception as e:
+                            print(f"⚠️  Warning: Could not remove {item_path}: {e}")
+
+                # Then remove the entire temp workspace
                 shutil.rmtree(self.temp_dir)
                 print(f"🧹 Cleaned up temporary workspace: {self.temp_dir}")
             except Exception as e:
