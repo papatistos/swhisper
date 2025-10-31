@@ -156,7 +156,7 @@ class FileManager:
             
             # Convert non-WAV files
             for audio_file in non_wavs_to_convert:
-                if len(final_wav_files) >= self.config.file_limit:
+                if self.config.file_limit is not None and len(final_wav_files) >= self.config.file_limit:
                     break
                 if self._convert_non_wav_file(audio_dir, audio_file):
                     base_name = os.path.splitext(audio_file)[0]
