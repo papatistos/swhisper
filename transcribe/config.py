@@ -64,7 +64,7 @@ class TranscriptionConfig:
     # Model settings
     model_str: str = os.getenv("SWHISPER_MODEL", "KBLab/kb-whisper-large")
     revision: str = os.getenv("SWHISPER_MODEL_REVISION", "strict")
-    device: str = os.getenv("SWHISPER_DEVICE", "mpu")
+    device: str = os.getenv("SWHISPER_DEVICE", "mps")
 
     # Processing limits
     file_limit: Optional[int] = _get_env_int("SWHISPER_FILE_LIMIT", None)
