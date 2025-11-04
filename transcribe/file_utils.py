@@ -3,8 +3,13 @@
 import os
 import shutil
 import subprocess
+import tempfile
 import soundfile as sf
 from typing import List, Tuple, Optional
+
+# Local tuning knob for developers while iterating on staged processing.
+# Toggle to True to restore eager format validation and detailed counts.
+ENABLE_EARLY_FORMAT_SUMMARY = False
 
 from .config import TranscriptionConfig
 
@@ -22,6 +27,17 @@ class AudioConverter:
         if not shutil.which('ffmpeg'):
             raise Exception("ffmpeg not found. Please install ffmpeg: brew install ffmpeg")
         
+        same_path = os.path.abspath(input_path) == os.path.abspath(output_path)
+        temp_output_path = output_path
+        temp_created = False
+
+        if same_path:
+            # ffmpeg cannot overwrite in-place; use a temporary file then replace.
+            fd, temp_output_path = tempfile.mkstemp(suffix=".tmp.wav", dir=os.path.dirname(output_path) or None)
+            os.close(fd)
+            os.unlink(temp_output_path)
+            temp_created = True
+
         try:
             # Use ffmpeg to convert to 16kHz mono WAV
             cmd = [
@@ -33,7 +49,7 @@ class AudioConverter:
                 '-y',                       # Overwrite output file
                 '-hide_banner',             # Suppress banner for cleaner logs
                 '-loglevel', 'error',       # Only show errors
-                output_path                 # Output file
+                temp_output_path            # Output file (may be temporary)
             ]
             
             # Run ffmpeg with a timeout to prevent hanging
@@ -46,6 +62,8 @@ class AudioConverter:
                 encoding='utf-8',
                 errors='replace'
             )
+            if temp_created:
+                os.replace(temp_output_path, output_path)
             return True
             
         except subprocess.TimeoutExpired as e:
@@ -61,6 +79,12 @@ class AudioConverter:
         except Exception as e:
             print(f"❌ An unexpected error occurred during conversion: {e}")
             return False
+        finally:
+            if temp_created and os.path.exists(temp_output_path):
+                try:
+                    os.remove(temp_output_path)
+                except OSError:
+                    pass
     
     def is_wav_ready(self, wav_path: str) -> bool:
         """Check if WAV file is ready for processing (16kHz mono)."""
