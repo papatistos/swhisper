@@ -23,7 +23,22 @@ Depending on your audio-files and settings, you may still have to do some manual
 
 - there is a basic stats analysis tool in `diarize/` that can help compare diarization results across different parameter settings. See `diarize/STATS_ANALYSIS_README.md` for details.
 
+- Each transcript includes basic speaker statistics in a table like the one below. Note, however, that these stats depend on the quality of both the transcription and diarization. They are almost worthless if the wrong number of speakers has been detected.
 
+````
+                   TURNS          WORDS  WORD/TURN          SPEECH    SPEED        PAUSES
+
+SPEAKER_00   141 (27.9%)    791 (29.2%)        5.6   223.4 (30.3%)  212 wpm           32s
+SPEAKER_01   155 (30.6%)    928 (34.3%)        6.0   229.8 (31.2%)  242 wpm           37s
+SPEAKER_02   188 (37.2%)    963 (35.6%)        5.1   269.9 (36.6%)  214 wpm           57s
+UNKNOWN        22 (4.3%)      25 (0.9%)        1.1     13.8 (1.9%)  109 wpm           16s
+GAPS                                                                                 165s
+Total       506 (100.0%)  2707 (100.0%)        5.3  737.0 (100.0%)  220 wpm  306s (29.4%)
+````
+
+- When the voice activity detection algorithm (VAD) failed to detect speech in parts of the audio, those parts will not be transcribed in the initial transcription step. If the diarization step then identifies a speaker segment in such a part, we send this segment for transcription and fill in the results into the "empty turn" (backfilling). While this recovers some missing words, it can also introduce hallucination artifacts (possibly due to the short duration of these segments). To at least partially work around this, you can specify a list of words to ignore during backfilling. For example, if you notice that the word "Balans" is frequently hallucinated in empty turns, you can add it to the ignore list in the `.swhisper.env` file using the `SWHISPER_BACKFILL_IGNORE_WORDS` variable. Alternatively, you can disable backfilling entirely via `SWHISPER_BACKFILL_ENABLED=false`.
+
+```
 ### Transcript formatting options
 
 - The duration of silences between words can be included in the transcript (using CA notation, e.g. (.3) for a .3 second silence). I have not yet investigate the accuracy of these durations. They are based on the word-level provided by `whisper-timestamped` and I have a feeling that they might be underestimated...
