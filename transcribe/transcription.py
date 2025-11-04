@@ -836,7 +836,10 @@ class TranscriptionPipeline:
     
     def process_audio_file(self, audiofile_path: str, boundaries: List[float],
                           output_path: str, start_chunk: int = 0,
-                          existing_chunk_results: List[Tuple[Dict[str, Any], float]] = None) -> Dict[str, Any]:
+                          existing_chunk_results: List[Tuple[Dict[str, Any], float]] = None,
+                          file_label: Optional[str] = None,
+                          file_index: Optional[int] = None,
+                          total_files: Optional[int] = None) -> Dict[str, Any]:
         """Process an entire audio file using chunking.
 
         Args:
@@ -848,7 +851,12 @@ class TranscriptionPipeline:
         """
         chunk_results = existing_chunk_results if existing_chunk_results is not None else []
 
-        print(f"\n🎬 Processing {len(boundaries)-1} chunks...")
+        label = file_label or os.path.basename(audiofile_path)
+        file_position = (
+            f" [{file_index}/{total_files}]" if file_index is not None and total_files is not None else ""
+        )
+
+        print(f"\n🎬 Processing {len(boundaries)-1} chunks for {label}{file_position}...")
         if start_chunk > 0:
             print(f"   Resuming from chunk {start_chunk+1}/{len(boundaries)-1}")
 
@@ -857,18 +865,29 @@ class TranscriptionPipeline:
             end_time = boundaries[i + 1]
             chunk_duration = end_time - start_time
 
-            print(f"\n📝 Chunk {i+1}/{len(boundaries)-1}: {start_time:.1f}s to {end_time:.1f}s ({chunk_duration:.1f}s)")
+            print(
+                f"\n📝 [{label}] Chunk {i+1}/{len(boundaries)-1}: "
+                f"{start_time:.1f}s to {end_time:.1f}s ({chunk_duration:.1f}s)"
+            )
 
             chunk_start_time = time.time()
 
             try:
                 result = self.chunk_processor.process_chunk_in_subprocess(
-                    audiofile_path, start_time, end_time, i
+                    audiofile_path, start_time, end_time, i, label
                 )
                 chunk_results.append(result)
 
                 # Monitor progress
-                self._monitor_progress(i, len(boundaries)-1, chunk_start_time, chunk_duration)
+                self._monitor_progress(
+                    i,
+                    len(boundaries) - 1,
+                    chunk_start_time,
+                    chunk_duration,
+                    label,
+                    file_index,
+                    total_files
+                )
 
                 # Save checkpoint after each chunk (if checkpoint manager is available)
                 if self.checkpoint_manager is not None:
@@ -892,17 +911,27 @@ class TranscriptionPipeline:
 
         return merged_result
     
-    def _monitor_progress(self, chunk_id: int, total_chunks: int, 
-                         chunk_start_time: float, chunk_duration: float):
+    def _monitor_progress(self, chunk_id: int, total_chunks: int,
+                         chunk_start_time: float, chunk_duration: float,
+                         file_label: Optional[str] = None,
+                         file_index: Optional[int] = None,
+                         total_files: Optional[int] = None):
         """Monitor and display processing progress."""
         current_chunk_time = time.time() - chunk_start_time
         remaining_chunks = total_chunks - chunk_id - 1
         estimated_remaining = current_chunk_time * remaining_chunks if remaining_chunks > 0 else 0
-        
-        print(f"Progress: {chunk_id+1}/{total_chunks} ({(chunk_id+1)/total_chunks*100:.1f}%)")
-        print(f"Chunk duration: {chunk_duration:.1f}s | Processed in: {current_chunk_time:.1f}s")
-        print(f"Estimated remaining: {estimated_remaining/60:.1f}min")
+
+        prefix = f"[{file_label}] " if file_label else ""
+        position = (
+            f" (file {file_index}/{total_files})"
+            if file_index is not None and total_files is not None
+            else ""
+        )
+
+        print(f"    {prefix}Progress: {chunk_id+1}/{total_chunks} ({(chunk_id+1)/total_chunks*100:.1f}%)" + position)
+        print(f"    {prefix}Chunk duration: {chunk_duration:.1f}s | Processed in: {current_chunk_time:.1f}s")
+        print(f"    {prefix}Estimated time remaining for this file: {estimated_remaining/60:.1f}min")
         
         # Warning for slow chunks
         if current_chunk_time > chunk_duration * 3:
-            print("⚠️ WARNING: Current chunk is very slow - possible memory pressure!")
+            print(f"{prefix}⚠️ WARNING: Current chunk is very slow - possible memory pressure!")
