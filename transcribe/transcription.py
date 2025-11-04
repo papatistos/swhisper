@@ -85,7 +85,8 @@ class TranscriptionWorker:
     @staticmethod
     def chunk_worker(audiofile_path: str, start_time: float, end_time: float,
                     model_path: str, settings: Dict[str, Any], output_queue: mp.Queue,
-                    device: str = "mps", overlap_duration: float = 2.0):
+                    device: str = "mps", overlap_duration: float = 2.0,
+                    file_label: Optional[str] = None):
         """Worker function for processing audio chunks in subprocess."""
         try:
             # Import everything needed in the subprocess
@@ -95,15 +96,17 @@ class TranscriptionWorker:
             import gc
             from scipy.signal import resample
 
-            print(f"    🔧 Loading model {model_path} on {device}...")
+            prefix = f"[{file_label}] " if file_label else ""
+
+            print(f"    {prefix}🔧 Loading model {model_path} on {device}...")
 
             # Enable offline mode if model is cached to avoid network calls
             original_offline = os.environ.get('HF_HUB_OFFLINE')
             if is_model_cached(model_path):
                 os.environ['HF_HUB_OFFLINE'] = '1'
-                print(f"    📦 Model found in cache - using offline mode")
+                print(f"    {prefix}📦 Model found in cache")
             else:
-                print(f"    🌐 Model not cached - will download from HuggingFace")
+                print(f"    {prefix}🌐 Model not cached - will download from HuggingFace")
 
             try:
                 # Use the same device as main process
@@ -115,7 +118,7 @@ class TranscriptionWorker:
                 else:
                     os.environ['HF_HUB_OFFLINE'] = original_offline
             
-            print(f"    🔧 Loading audio chunk {start_time:.1f}s-{end_time:.1f}s...")
+            print(f"    {prefix}🔧 Loading audio chunk {start_time:.1f}s-{end_time:.1f}s...")
             
             # Load and process chunk
             sample_rate = 16000
@@ -143,12 +146,12 @@ class TranscriptionWorker:
             
             chunk_audio = chunk_audio.astype(np.float32)
             
-            print(f"    🔧 Transcribing...")
+            print(f"    {prefix}🔧 Transcribing...")
             
             # Transcribe chunk
             result = whisper.transcribe(model, chunk_audio, **settings)
             
-            print(f"    🔧 Adjusting timestamps...")
+            print(f"    {prefix}🔧 Adjusting timestamps...")
             
             # Adjust timestamps to account for the actual start position
             time_offset = start_sample / sample_rate
@@ -178,13 +181,13 @@ class TranscriptionWorker:
             del model
             gc.collect()
             
-            print(f"    ✅ Transcription of this chunk completed successfully")
+            print(f"    {prefix}✅ Transcription of this chunk completed successfully")
             output_queue.put((result, time_offset))
             
         except Exception as e:
             import traceback
             error_msg = f"Subprocess error: {str(e)}\n{traceback.format_exc()}"
-            print(f"    ❌ Subprocess error: {str(e)}")
+            print(f"    {prefix}❌ Subprocess error: {str(e)}")
             output_queue.put((e, error_msg))
 
     @staticmethod
@@ -246,10 +249,12 @@ class ChunkProcessor:
         self.whisper_settings = whisper_settings
         self.resource_manager = resource_manager
     
-    def process_chunk_in_subprocess(self, audiofile_path: str, start_time: float, 
-                                  end_time: float, chunk_id: int) -> Tuple[Dict[str, Any], float]:
+    def process_chunk_in_subprocess(self, audiofile_path: str, start_time: float,
+                                  end_time: float, chunk_id: int,
+                                  file_label: Optional[str] = None) -> Tuple[Dict[str, Any], float]:
         """Process a single chunk in a subprocess."""
-        print(f"    🚀 Starting subprocess for chunk {chunk_id+1}...")
+        prefix = f"[{file_label}] " if file_label else ""
+        print(f"    {prefix}🚀 Starting subprocess for chunk {chunk_id+1}...")
         
         # Create subprocess
         output_queue = mp.Queue()
@@ -264,6 +269,7 @@ class ChunkProcessor:
                 output_queue,
                 self.config.device,
                 self.config.overlap_duration,
+                file_label,
             )
         )
         
@@ -290,10 +296,10 @@ class ChunkProcessor:
         # Show peak memory usage
         if memory_snapshots:
             peak_mem = self._get_max_memory(memory_snapshots)
-            print(f"    📊 Memory usage during transcription ≈ {peak_mem}")
+            print(f"    {prefix}📊 Memory usage during transcription ≈ {peak_mem}")
         
         if process.is_alive():
-            print(f"    ⚠️ Subprocess timeout, terminating...")
+            print(f"    {prefix}⚠️ Subprocess timeout, terminating...")
             process.terminate()
             process.join()
             raise Exception("Subprocess timed out after 10 minutes")
@@ -309,7 +315,7 @@ class ChunkProcessor:
         result = output_queue.get()
         
         if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], Exception):
-            print(f"    ❌ Worker error: {result[1]}")
+            print(f"    {prefix}❌ Worker error: {result[1]}")
             raise result[0]
         
         self.resource_manager.current_subprocess = None
