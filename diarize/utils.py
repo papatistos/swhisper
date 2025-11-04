@@ -895,6 +895,71 @@ class BackfillTranscriber:
             self._model = None
             DeviceManager.clear_device_memory()
 
+    def _should_filter_word(self, word_text: str) -> bool:
+        """Check if a word should be filtered (replaced with disfluency marker)."""
+        if not self.ignore_words:
+            return False
+        # Case-insensitive matching - strip punctuation for comparison
+        cleaned = word_text.strip().lower().strip('.,!?;:"\'-')
+        return cleaned in self.ignore_words
+
+    def _create_disfluency_marker_for_word(self, word: Dict[str, Any]) -> Dict[str, Any]:
+        """Replace a word with a disfluency marker based on its duration."""
+        word_start = word.get('start', 0.0)
+        word_end = word.get('end', word_start)
+        duration = max(0.0, word_end - word_start)
+        
+        # Calculate marker size based on duration (1 asterisk per 0.1 seconds)
+        asterisk_count = max(1, min(50, math.ceil(duration / 0.1)))
+        marker_token = f"[{'*' * asterisk_count}]"
+        
+        filtered_word = dict(word)
+        filtered_word['word'] = marker_token
+        filtered_word['text'] = marker_token
+        filtered_word['is_filtered_hallucination'] = True
+        filtered_word['original_word'] = word.get('word', word.get('text', ''))
+        
+        return filtered_word
+
+    def _apply_word_filtering(self, segment: Dict[str, Any]) -> tuple[Dict[str, Any], int]:
+        """Apply word filtering to a segment (works for both cached and newly transcribed)."""
+        if not segment or not self.ignore_words:
+            return segment, 0
+        
+        words = segment.get('words', [])
+        if not words:
+            return segment, 0
+        
+        filtered_count = 0
+        filtered_words = []
+        
+        for word in words:
+            word_text = word.get('word', word.get('text', '')).strip()
+            if word_text and self._should_filter_word(word_text):
+                filtered_word = self._create_disfluency_marker_for_word(word)
+                filtered_words.append(filtered_word)
+                filtered_count += 1
+            else:
+                filtered_words.append(word)
+        
+        if filtered_count > 0:
+            # Update segment with filtered words
+            segment = dict(segment)
+            segment['words'] = filtered_words
+            
+            # Rebuild segment text from words
+            text_tokens = []
+            for word in filtered_words:
+                token = word.get('word')
+                if not isinstance(token, str):
+                    token = word.get('text', '')
+                token = token.strip() if isinstance(token, str) else ''
+                if token:
+                    text_tokens.append(token)
+            segment['text'] = ' '.join(text_tokens)
+        
+        return segment, filtered_count
+
     def _maybe_save_audio_snippet(
         self,
         audio: Optional[np.ndarray],
