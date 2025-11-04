@@ -304,7 +304,8 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     overlap_duration=backfill_overlap,
                     snippet_output_dir=snippet_dir,
                     snippet_prefix=snippet_prefix,
-                    cache=cache
+                    cache=cache,
+                    ignore_words=config.backfill_ignore_words
                 )
 
                 try:

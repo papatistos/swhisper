@@ -866,6 +866,7 @@ class BackfillTranscriber:
         snippet_output_dir: Optional[str] = None,
         snippet_prefix: Optional[str] = None,
         cache: Optional['BackfillCache'] = None,
+        ignore_words: Optional[List[str]] = None,
     ) -> None:
         self.audio_path = audio_path
         self.model_name = model_name
@@ -881,6 +882,8 @@ class BackfillTranscriber:
         self.snippet_prefix = snippet_prefix or "backfill"
         self._snippet_counter = 0
         self.cache = cache
+        # Store ignore words in lowercase for case-insensitive matching
+        self.ignore_words = set(ignore_words or [])
 
     def _ensure_model_loaded(self) -> None:
         if self._model is None:
