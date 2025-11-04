@@ -434,13 +434,17 @@ class SpeakerAssigner:
         # Check multiple points in the word for robustness
         segments = list(diarization_result.itertracks(yield_label=True))
         word_mid = word_start + (word_end - word_start) / 2
-        check_points = [word_start + 0.01, word_mid, word_end - 0.01]
+        # Check at the very beginning, middle, and very end of the word
+        # Use small offsets to avoid boundary edge cases
+        check_points = [word_start, word_mid, word_end]
         
         speaker_votes = {}
         
         for check_time in check_points:
             for turn, _, speaker_label in segments:
-                if turn.start <= check_time < turn.end:
+                # Use <= for both boundaries to handle edge cases where word boundaries
+                # align exactly with speaker turn boundaries
+                if turn.start <= check_time <= turn.end:
                     speaker_votes[speaker_label] = speaker_votes.get(speaker_label, 0) + 1
                     break
         
