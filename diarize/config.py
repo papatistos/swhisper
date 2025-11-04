@@ -154,11 +154,11 @@ class DiarizationConfig:
     # Output preamble for transcript files
     output_preamble: str = os.getenv("SWHISPER_OUTPUT_PREAMBLE", """This transcript was generated using swhisper (https://github.com/papatistos/swhisper). 
                                      
-Note 1: If the transcript contains markers like [*], [**], [***] they indicate sounds that could not be transcribed. The number of asterisks roughly reflects the sound's duration in tenths of a second. This can be turned off in the swisper settings.
+Note 1: If the transcript contains markers like [*], [**], [***] they indicate sounds that could not be transcribed. The number of asterisks roughly reflects the sound's duration in tenths of a second. This can be turned off in the swisper settings. If there is a number before the asterisks, e.g. [S02**], this indicates overlapping speech by another speaker (in this case: speaker 02). Not all (possibly not even the majority of) overlapping speech is detected.
 
 Note 2: You may also find parentheses with a number inside, e.g. (.3). These indicate silences and the number indicates the duration of the silence in seconds. Currently, not all silences are reliably detected, but those that are may be useful, especially when they indicate longer pauses. This can also be turned off in the swhisper settings. Long silences are surrounded by blank lines (even when there is no speaker change). This can be adjusted or turned off in the swhisper settings.
 
-Note 3: Speaker detection is not perfect. The transcript may show too many different speakers, but the excess (or unknown) speakers should have few turns attributed to them, so it should be easy to fix manually.
+Note 3: Speaker detection is not perfect. The transcript may show too few or too many different speakers, but the excess (or unknown) speakers should have few turns attributed to them, so it should be easy to fix manually.
 """)
     
     def get_preamble_with_transcript_id(self, transcript_id: str) -> str:
@@ -276,6 +276,7 @@ Note 3: Speaker detection is not perfect. The transcript may show too many diffe
             'rtf': os.path.join(self.final_output_dir, 'rtf'),
             'txt': os.path.join(self.final_output_dir, 'txt'),
             'tsv': os.path.join(self.final_output_dir, 'tsv'),
+            'json': os.path.join(self.final_output_dir, 'json'),
             'stats': os.path.join(self.final_output_dir, 'stats'),
             'logs': os.path.join(self.final_output_dir, 'logs')
         }

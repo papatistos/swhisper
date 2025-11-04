@@ -50,7 +50,7 @@ from diarize import (
     DiarizationConfig, DEFAULT_DIARIZATION_CONFIG,
     DiarizationPipeline, SpeakerAligner,
     DiarizationAnalyzer, SegmentAnalyzer, BoundaryAnalyzer, StatsExporter,
-    VTTFormatter, RTTMFormatter, RTFFormatter, TXTFormatter, TSVFormatter, PyannoteSegmentFormatter
+    VTTFormatter, RTTMFormatter, RTFFormatter, TXTFormatter, TSVFormatter, PyannoteSegmentFormatter, JSONFormatter
 )
 from diarize.utils import logger_manager, BackfillTranscriber, BackfillCache, WordProcessor
 from transcribe import TranscriptionConfig, WhisperSettings
@@ -322,19 +322,27 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                 recovered_segments = backfill_outcome.get('segments', [])
                 if recovered_segments:
                     recovered_word_count = backfill_outcome.get('word_count', 0)
-                    segments.extend(recovered_segments)
-                    segments.sort(key=lambda seg: seg.get('start', 0.0))
+                    
+                    # Merge backfilled words into existing segments instead of appending
+                    from diarize.utils import BackfillMerger
+                    segments = BackfillMerger.merge_backfilled_words(segments, recovered_segments)
 
                     word_stats['total'] += recovered_word_count
                     word_stats['assigned'] += recovered_word_count
-                    segment_stats['total'] += len(recovered_segments)
-                    segment_stats['high_conf'] += len(recovered_segments)
+                    # Note: segment count may change after merging/splitting
+                    original_segment_count = segment_stats['total']
+                    segment_stats['total'] = len(segments)
+                    segment_diff = segment_stats['total'] - original_segment_count
+                    if segment_diff > 0:
+                        segment_stats['high_conf'] += segment_diff
 
                     alignment_result['segments'] = segments
                     alignment_result['word_stats'] = word_stats
                     alignment_result['segment_stats'] = segment_stats
 
                     print(f"  -> Backfilled {len(recovered_segments)} diarization segments ({recovered_word_count} new words)")
+                    if segment_diff != 0:
+                        print(f"  -> Segment count changed by {segment_diff:+d} after merging (total now {segment_stats['total']})")
                 else:
                     print("  -> Targeted transcription did not recover any words")
 
@@ -447,7 +455,13 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             print(f'Saving speaker-grouped transcript in RTF format...')
             rtf_filename = f"{base_filename}_{log_timestamp}.rtf" 
             rtf_output_path = os.path.join(subdirs['rtf'], rtf_filename)
-            RTFFormatter().format(segments, rtf_output_path, config=config, transcript_id=log_timestamp)
+            RTFFormatter().format(
+                segments,
+                rtf_output_path,
+                config=config,
+                transcript_id=log_timestamp,
+                speaker_stats=speaker_stats,
+            )
             print(f"RTF file saved to rtf/{rtf_filename}")
             output_files['rtf'] = rtf_filename
             
@@ -455,7 +469,13 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             print(f'Saving speaker-grouped transcript in TXT format...')
             txt_filename = f"{base_filename}_{log_timestamp}.txt"
             txt_output_path = os.path.join(subdirs['txt'], txt_filename)
-            TXTFormatter().format(segments, txt_output_path, config=config, transcript_id=log_timestamp)
+            TXTFormatter().format(
+                segments,
+                txt_output_path,
+                config=config,
+                transcript_id=log_timestamp,
+                speaker_stats=speaker_stats
+            )
             print(f"TXT file saved to txt/{txt_filename}")
             output_files['txt'] = txt_filename
 
@@ -476,6 +496,24 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             output_files['tsv_pyannote_overlap'] = overlap_segments_filename
             if exclusive_segments_filename:
                 output_files['tsv_pyannote_exclusive'] = exclusive_segments_filename
+
+            # JSON format (enriched transcript)
+            print(f'Saving enriched transcript in JSON format...')
+            json_filename = f"{base_filename}_{log_timestamp}_diarized.json"
+            json_output_path = os.path.join(subdirs['json'], json_filename)
+            json_metadata = {
+                'audio_file': audio_basename,
+                'timestamp': log_timestamp,
+                'script_version': SCRIPT_VERSION,
+                'language': whisper_result.get('language', 'unknown'),
+                'diarization_model': config.pipeline_model,
+                'word_stats': word_stats,
+                'segment_stats': segment_stats,
+                'speaker_stats': speaker_stats
+            }
+            JSONFormatter().format(segments, json_output_path, metadata=json_metadata)
+            print(f"Enriched JSON saved to json/{json_filename}")
+            output_files['json'] = json_filename
 
             # Stats JSON
             print(f'Saving analysis statistics...')

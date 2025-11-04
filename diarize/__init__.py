@@ -5,7 +5,7 @@ from .pipeline import DiarizationPipeline, SpeakerAligner
 from .analysis import DiarizationAnalyzer, SegmentAnalyzer, BoundaryAnalyzer
 from .output import (
     TranscriptFormatter, VTTFormatter, RTTMFormatter, 
-    RTFFormatter, TXTFormatter, TSVFormatter, PyannoteSegmentFormatter, StatsExporter
+    RTFFormatter, TXTFormatter, TSVFormatter, PyannoteSegmentFormatter, JSONFormatter, StatsExporter
 )
 from .utils import (
     DeviceManager, LoggerManager, SilenceMarkerProcessor,
@@ -45,6 +45,7 @@ __all__ = [
     'TXTFormatter',
     'TSVFormatter',
     'PyannoteSegmentFormatter',
+    'JSONFormatter',
     'StatsExporter',
     'DeviceManager',
     'LoggerManager',

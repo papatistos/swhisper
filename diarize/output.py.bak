@@ -1,0 +1,1016 @@
+"""Output formatters for various transcript formats."""
+
+import os
+import re
+import json
+import csv
+from typing import Any, Dict, List, Optional
+from .utils import WordProcessor, _is_silence_token
+
+
+def format_vtt_timestamp(seconds: float) -> str:
+    """Formats time in seconds to VTT format HH:MM:SS.mmm."""
+    if seconds < 0:
+        seconds = 0
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    millis = int((seconds - int(seconds)) * 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}.{millis:03d}"
+
+
+class TranscriptFormatter:
+    """Base class for transcript formatters."""
+    
+    def __init__(self):
+        pass
+    
+    def format(self, segments: List[Dict], output_path: str, **kwargs) -> None:
+        """Format segments and save to output path."""
+        raise NotImplementedError
+
+
+class VTTFormatter(TranscriptFormatter):
+    """Formats transcripts in VTT format."""
+
+    def format(self, segments: List[Dict], output_path: str, **kwargs) -> None:
+        @classmethod
+        def _get_speaker_summary_table_data(
+            cls,
+            segments: List[Dict[str, Any]],
+            speaker_stats: Optional[Dict[str, Dict[str, Any]]] = None
+        ) -> Optional[Dict[str, Any]]:
+            """Compute speaker summary data shared across multiple output formats."""
+            metrics: Dict[str, Dict[str, float]] = {}
+
+            def ensure_entry(label: Optional[str]) -> Dict[str, float]:
+                normalized = label or 'UNKNOWN'
+                entry = metrics.get(normalized)
+                if entry is None:
+                    entry = {'words': 0.0, 'speech': 0.0, 'pauses': 0.0, 'turns': 0.0}
+                    metrics[normalized] = entry
+                return entry
+
+            for segment in segments:
+                segment_speaker = segment.get('speaker') or 'UNKNOWN'
+                if segment_speaker in (None, ''):
+                    segment_speaker = 'UNKNOWN'
+
+                if segment_speaker != 'SILENCE':
+                    ensure_entry(segment_speaker)['turns'] += 1.0
+
+                words = segment.get('words', []) or []
+                if not words:
+                    continue
+
+                for word in words:
+                    if not isinstance(word, dict):
+                        continue
+
+                    raw_speaker = word.get('speaker')
+                    speaker_label = raw_speaker or segment_speaker
+                    if not speaker_label or speaker_label == 'SILENCE':
+                        speaker_label = segment_speaker if segment_speaker != 'SILENCE' else 'UNKNOWN'
+                    if not speaker_label:
+                        speaker_label = 'UNKNOWN'
+
+                    if speaker_label == 'SILENCE':
+                        continue
+
+                    entry = ensure_entry(speaker_label)
+
+                    start = word.get('start')
+                    end = word.get('end')
+                    duration = 0.0
+                    if start is not None and end is not None:
+                        try:
+                            duration = max(0.0, float(end) - float(start))
+                        except (TypeError, ValueError):
+                            duration = 0.0
+
+                    if _is_silence_token(word):
+                        entry['pauses'] += duration
+                        continue
+
+                    entry['words'] += 1
+                    entry['speech'] += duration
+
+            if speaker_stats:
+                for label in speaker_stats.keys():
+                    if label == 'SILENCE':
+                        continue
+                    ensure_entry(label)
+
+            non_silence_segments = [
+                seg for seg in segments
+                if not seg.get('is_silence_marker', False)
+            ]
+            non_silence_segments.sort(key=lambda seg: float(seg.get('start', 0.0) or 0.0))
+
+            gap_total = 0.0
+            for prev_seg, next_seg in zip(non_silence_segments, non_silence_segments[1:]):
+                prev_speaker = prev_seg.get('speaker') or 'UNKNOWN'
+                next_speaker = next_seg.get('speaker') or 'UNKNOWN'
+
+                if prev_speaker == 'SILENCE' or next_speaker == 'SILENCE':
+                    continue
+                if prev_speaker == next_speaker:
+                    continue
+
+                prev_end = prev_seg.get('end')
+                next_start = next_seg.get('start')
+                try:
+                    prev_end_f = float(prev_end) if prev_end is not None else 0.0
+                    next_start_f = float(next_start) if next_start is not None else prev_end_f
+                except (TypeError, ValueError):
+                    continue
+
+                gap = next_start_f - prev_end_f
+                if gap > 0:
+                    gap_total += gap
+
+            if not metrics:
+                return None
+
+            speaker_names = [name for name in metrics.keys() if name != 'UNKNOWN']
+            speaker_names.sort(key=cls._speaker_sort_key)
+            if 'UNKNOWN' in metrics:
+                speaker_names.append('UNKNOWN')
+
+            rows: List[Dict[str, Any]] = []
+            total_words = 0.0
+            total_speech = 0.0
+            total_pauses = 0.0
+            total_turns = 0.0
+
+            for name in speaker_names:
+                data = metrics[name]
+                words = int(round(data.get('words', 0.0)))
+                speech = float(data.get('speech', 0.0))
+                pauses = float(data.get('pauses', 0.0))
+                turns = float(data.get('turns', 0.0))
+                speed = (words / speech * 60.0) if speech > 0 else 0.0
+                words_per_turn_value = (words / turns) if turns > 0 else 0.0
+
+                rows.append({
+                    'speaker': name,
+                    'words_value': float(words),
+                    'speech_value': speech,
+                    'turns_value': turns,
+                    'words_per_turn_value': words_per_turn_value,
+                    'words_per_turn': f"{words_per_turn_value:.1f}" if turns > 0 else '--',
+                    'speed': f"{int(round(speed))} wpm" if speech > 0 else "--",
+                    'pauses': cls._format_seconds(pauses)
+                })
+
+                total_words += words
+                total_speech += speech
+                total_pauses += pauses
+                total_turns += turns
+
+            gaps_row = None
+            if gap_total > 0:
+                gaps_row = {
+                    'speaker': 'GAPS',
+                    'turns': '',
+                    'words': '',
+                    'words_per_turn': '',
+                    'speech': '',
+                    'speed': '',
+                    'pauses': cls._format_seconds(gap_total)
+                }
+                total_pauses += gap_total
+
+            total_row = None
+            if rows or gap_total > 0:
+                total_speed = (total_words / total_speech * 60.0) if total_speech > 0 else 0.0
+                total_duration = total_speech + total_pauses
+                silence_pct = (total_pauses / total_duration * 100.0) if total_duration > 0 else 0.0
+                if total_pauses > 0:
+                    pauses_text = f"{cls._format_seconds(total_pauses)} ({silence_pct:.1f}%)"
+                else:
+                    pauses_text = cls._format_seconds(total_pauses)
+                words_per_turn_total = (total_words / total_turns) if total_turns > 0 else 0.0
+                total_row = {
+                    'speaker': 'Total',
+                    'words_value': float(total_words),
+                    'speech_value': total_speech,
+                    'turns_value': float(total_turns),
+                    'words_per_turn_value': words_per_turn_total,
+                    'words_per_turn': f"{words_per_turn_total:.1f}" if total_turns > 0 else '--',
+                    'speed': f"{int(round(total_speed))} wpm" if total_speech > 0 else "--",
+                    'pauses': pauses_text
+                }
+
+            def format_words(value: float) -> str:
+                return cls._format_with_percentage(value, total_words, as_int=True)
+
+            def format_speech(value: float) -> str:
+                return cls._format_with_percentage(value, total_speech, decimals=1)
+
+            def format_turns(value: float) -> str:
+                return cls._format_with_percentage(value, total_turns, as_int=True)
+
+            display_rows: List[Dict[str, str]] = []
+            for row in rows:
+                display_rows.append({
+                    'speaker': row['speaker'],
+                    'turns': format_turns(row['turns_value']),
+                    'words': format_words(row['words_value']),
+                    'words_per_turn': row['words_per_turn'],
+                    'speech': format_speech(row['speech_value']),
+                    'speed': row['speed'],
+                    'pauses': row['pauses']
+                })
+
+            display_gaps = gaps_row
+
+            if total_row:
+                display_total = {
+                    'speaker': total_row['speaker'],
+                    'turns': format_turns(total_row['turns_value']),
+                    'words': format_words(total_row['words_value']),
+                    'words_per_turn': total_row['words_per_turn'],
+                    'speech': format_speech(total_row['speech_value']),
+                    'speed': total_row['speed'],
+                    'pauses': total_row['pauses']
+                }
+            else:
+                display_total = None
+
+            columns = [
+                ('speaker', 'SPEAKER', 'left'),
+                ('turns', 'TURNS', 'right'),
+                ('words', 'WORDS', 'right'),
+                ('words_per_turn', 'WORD/TURN', 'right'),
+                ('speech', 'SPEECH', 'right'),
+                ('speed', 'SPEED', 'right'),
+                ('pauses', 'PAUSES', 'right'),
+            ]
+
+            width_source = list(display_rows)
+            if display_gaps:
+                width_source.append(display_gaps)
+            if display_total:
+                width_source.append(display_total)
+
+            if not width_source:
+                return None
+
+            return {
+                'columns': columns,
+                'rows': display_rows,
+                'gap_row': display_gaps,
+                'total_row': display_total,
+            }
+
+        @classmethod
+        def _build_speaker_summary(
+            cls,
+            segments: List[Dict[str, Any]],
+            speaker_stats: Optional[Dict[str, Dict[str, Any]]] = None
+        ) -> List[str]:
+            """Generate aligned speaker statistics table as a list of text lines."""
+            table_data = cls._get_speaker_summary_table_data(segments, speaker_stats)
+            if not table_data:
+                return []
+
+            columns = table_data['columns']
+            display_rows = table_data['rows']
+            display_gaps = table_data['gap_row']
+            display_total = table_data['total_row']
+
+            width_rows: List[Dict[str, str]] = list(display_rows)
+            if display_gaps:
+                width_rows.append(display_gaps)
+            if display_total:
+                width_rows.append(display_total)
+
+            if not width_rows:
+                return []
+
+            column_widths: Dict[str, int] = {}
+            for key, label, _alignment in columns:
+                max_length = len(label)
+                for row in width_rows:
+                    cell_value = row.get(key, '') if row else ''
+                    if cell_value is None:
+                        cell_value = ''
+                    max_length = max(max_length, len(cell_value))
+                column_widths[key] = max_length
+
+            header_parts: List[str] = []
+            for key, label, alignment in columns:
+                width = column_widths[key]
+                if alignment == 'left':
+                    header_parts.append(f"{label:<{width}}")
+                elif alignment == 'center':
+                    header_parts.append(f"{label:^{width}}")
+                else:
+                    header_parts.append(f"{label:>{width}}")
+            header = "  ".join(header_parts)
+
+            def format_line(row: Dict[str, str]) -> str:
+                parts: List[str] = []
+                for key, _label, alignment in columns:
+                    width = column_widths[key]
+                    value = row.get(key, '') or ''
+                    if alignment == 'left':
+                        parts.append(f"{value:<{width}}")
+                    elif alignment == 'center':
+                        parts.append(f"{value:^{width}}")
+                    else:
+                        parts.append(f"{value:>{width}}")
+                return "  ".join(parts)
+
+            lines = ["Speaker statistics", "", header]
+            for row in display_rows:
+                lines.append(format_line(row))
+
+            if display_gaps:
+                lines.append(format_line(display_gaps))
+
+            if display_total:
+                lines.append(format_line(display_total))
+
+            return lines
+            timestamp = f"[{hours:02d}:{minutes:02d}:{seconds:02d}]"
+            
+            # Get speaker color
+            color = speaker_colors.get(speaker, r'\cf1')
+            
+            # Add speaker header with timestamp
+            rtf_content.append(f"{color}\\b {speaker} {timestamp}:\\b0\\cf1\\par")
+            
+            # Add paragraph text
+            rtf_content.append(f"{text}\\par")
+            rtf_content.append("\\par")  # Extra line break between speakers
+        
+        # RTF footer
+        rtf_content.append("}")
+        
+        # Write RTF file with proper encoding
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(rtf_content))
+
+
+class TXTFormatter(TranscriptFormatter):
+    """Formats transcripts in plain text format."""
+
+    @staticmethod
+    def _speaker_sort_key(label: str) -> tuple[int, str]:
+        match = re.match(r"^SPEAKER_(\d+)$", label)
+        if match:
+            return (0, f"{int(match.group(1)):03d}")
+        return (1, label)
+
+    @staticmethod
+    def _format_seconds(seconds: float) -> str:
+        if seconds <= 0.05:
+            return "0s"
+        if seconds >= 9.95:
+            return f"{seconds:.0f}s"
+        if seconds >= 1.0:
+            return f"{seconds:.1f}s"
+        return f"{seconds:.2f}s"
+
+    @staticmethod
+    def _format_with_percentage(value: float, total: float, *, decimals: int = 1, as_int: bool = False) -> str:
+        if as_int:
+            base_value = str(int(round(value)))
+        else:
+            base_value = f"{value:.{decimals}f}"
+
+        if total <= 0 or value <= 0:
+            return base_value
+
+        percentage = (value / total) * 100.0
+        return f"{base_value} ({percentage:.1f}%)"
+
+    @classmethod
+    def _build_speaker_summary(
+        cls,
+        segments: List[Dict[str, Any]],
+        speaker_stats: Optional[Dict[str, Dict[str, Any]]] = None
+    ) -> List[str]:
+        """Generate aligned speaker statistics table as a list of text lines."""
+        metrics: Dict[str, Dict[str, float]] = {}
+
+        def ensure_entry(label: Optional[str]) -> Dict[str, float]:
+            normalized = label or 'UNKNOWN'
+            entry = metrics.get(normalized)
+            if entry is None:
+                entry = {'words': 0.0, 'speech': 0.0, 'pauses': 0.0, 'turns': 0.0}
+                metrics[normalized] = entry
+            return entry
+
+        for segment in segments:
+            segment_speaker = segment.get('speaker') or 'UNKNOWN'
+            if segment_speaker in (None, ''):
+                segment_speaker = 'UNKNOWN'
+
+            if segment_speaker != 'SILENCE':
+                ensure_entry(segment_speaker)['turns'] += 1.0
+
+            words = segment.get('words', []) or []
+            if not words:
+                continue
+
+            for word in words:
+                if not isinstance(word, dict):
+                    continue
+
+                raw_speaker = word.get('speaker')
+                speaker_label = raw_speaker or segment_speaker
+                if not speaker_label or speaker_label == 'SILENCE':
+                    speaker_label = segment_speaker if segment_speaker != 'SILENCE' else 'UNKNOWN'
+                if not speaker_label:
+                    speaker_label = 'UNKNOWN'
+
+                if speaker_label == 'SILENCE':
+                    continue
+
+                entry = ensure_entry(speaker_label)
+
+                start = word.get('start')
+                end = word.get('end')
+                duration = 0.0
+                if start is not None and end is not None:
+                    try:
+                        duration = max(0.0, float(end) - float(start))
+                    except (TypeError, ValueError):
+                        duration = 0.0
+
+                if _is_silence_token(word):
+                    entry['pauses'] += duration
+                    continue
+
+                entry['words'] += 1
+                entry['speech'] += duration
+
+        if speaker_stats:
+            for label in speaker_stats.keys():
+                if label == 'SILENCE':
+                    continue
+                ensure_entry(label)
+
+        non_silence_segments = [
+            seg for seg in segments
+            if not seg.get('is_silence_marker', False)
+        ]
+        non_silence_segments.sort(key=lambda seg: float(seg.get('start', 0.0) or 0.0))
+
+        gap_total = 0.0
+        for prev_seg, next_seg in zip(non_silence_segments, non_silence_segments[1:]):
+            prev_speaker = prev_seg.get('speaker') or 'UNKNOWN'
+            next_speaker = next_seg.get('speaker') or 'UNKNOWN'
+
+            if prev_speaker == 'SILENCE' or next_speaker == 'SILENCE':
+                continue
+            if prev_speaker == next_speaker:
+                continue
+
+            prev_end = prev_seg.get('end')
+            next_start = next_seg.get('start')
+            try:
+                prev_end_f = float(prev_end) if prev_end is not None else 0.0
+                next_start_f = float(next_start) if next_start is not None else prev_end_f
+            except (TypeError, ValueError):
+                continue
+
+            gap = next_start_f - prev_end_f
+            if gap > 0:
+                gap_total += gap
+
+        if not metrics:
+            return []
+
+        speaker_names = [name for name in metrics.keys() if name != 'UNKNOWN']
+        speaker_names.sort(key=cls._speaker_sort_key)
+        if 'UNKNOWN' in metrics:
+            speaker_names.append('UNKNOWN')
+
+        rows: List[Dict[str, Any]] = []
+        total_words = 0.0
+        total_speech = 0.0
+        total_pauses = 0.0
+        total_turns = 0.0
+
+        for name in speaker_names:
+            data = metrics[name]
+            words = int(round(data.get('words', 0.0)))
+            speech = float(data.get('speech', 0.0))
+            pauses = float(data.get('pauses', 0.0))
+            turns = float(data.get('turns', 0.0))
+            speed = (words / speech * 60.0) if speech > 0 else 0.0
+            words_per_turn = (words / turns) if turns > 0 else 0.0
+
+            rows.append({
+                'speaker': name,
+                'words_value': float(words),
+                'speech_value': speech,
+                'turns_value': turns,
+                'words_per_turn_display': f"{words_per_turn:.1f}" if turns > 0 else '--',
+                'speed': f"{int(round(speed))} wpm" if speech > 0 else "--",
+                'pauses': cls._format_seconds(pauses)
+            })
+
+            total_words += words
+            total_speech += speech
+            total_pauses += pauses
+            total_turns += turns
+
+        gaps_row = None
+        if gap_total > 0:
+            gaps_row = {
+                'speaker': 'GAPS',
+                'words': '',
+                'speech': '',
+                'speed': '',
+                'pauses': cls._format_seconds(gap_total)
+            }
+            total_pauses += gap_total
+
+        total_row = None
+        if rows or gap_total > 0:
+            total_speed = (total_words / total_speech * 60.0) if total_speech > 0 else 0.0
+            total_duration = total_speech + total_pauses
+            silence_pct = (total_pauses / total_duration * 100.0) if total_duration > 0 else 0.0
+            if total_pauses > 0:
+                pauses_text = f"{cls._format_seconds(total_pauses)} ({silence_pct:.1f}%)"
+            else:
+                pauses_text = cls._format_seconds(total_pauses)
+            words_per_turn_total = (total_words / total_turns) if total_turns > 0 else 0.0
+            total_row = {
+                'speaker': 'Total',
+                'words_value': float(total_words),
+                'speech_value': total_speech,
+                'turns_value': float(total_turns),
+                'words_per_turn_display': f"{words_per_turn_total:.1f}" if total_turns > 0 else '--',
+                'speed': f"{int(round(total_speed))} wpm" if total_speech > 0 else "--",
+                'pauses': pauses_text
+            }
+
+        def format_words(value: float) -> str:
+            return cls._format_with_percentage(value, total_words, as_int=True)
+
+        def format_speech(value: float) -> str:
+            return cls._format_with_percentage(value, total_speech, decimals=1)
+
+        def format_turns(value: float) -> str:
+            return cls._format_with_percentage(value, total_turns, as_int=True)
+
+        display_rows: List[Dict[str, str]] = []
+        for row in rows:
+            display_rows.append({
+                'speaker': row['speaker'],
+                'turns': format_turns(row['turns_value']),
+                'words': format_words(row['words_value']),
+                'words_per_turn': row['words_per_turn_display'],
+                'speech': format_speech(row['speech_value']),
+                'speed': row['speed'],
+                'pauses': row['pauses']
+            })
+
+        display_gaps = None
+        if gaps_row:
+            display_gaps = {
+                'speaker': gaps_row['speaker'],
+                'turns': '',
+                'words': '',
+                'words_per_turn': '',
+                'speech': '',
+                'speed': '',
+                'pauses': gaps_row['pauses']
+            }
+
+        display_total = None
+        if total_row:
+            display_total = {
+                'speaker': total_row['speaker'],
+                'turns': format_turns(total_row['turns_value']),
+                'words': format_words(total_row['words_value']),
+                'words_per_turn': total_row['words_per_turn_display'],
+                'speech': format_speech(total_row['speech_value']),
+                'speed': total_row['speed'],
+                'pauses': total_row['pauses']
+            }
+
+        width_source = list(display_rows)
+        if display_gaps:
+            width_source.append(display_gaps)
+        if display_total:
+            width_source.append(display_total)
+
+        if not width_source:
+            return []
+
+        speaker_width = max(len('SPEAKER'), max(len(row['speaker']) for row in width_source))
+        turns_width = max(len('TURNS'), max(len(row['turns']) for row in width_source))
+        words_width = max(len('WORDS'), max(len(row['words']) for row in width_source))
+        words_per_turn_width = max(len('WORDS/TURN'), max(len(row['words_per_turn']) for row in width_source))
+        speech_width = max(len('SPEECH'), max(len(row['speech']) for row in width_source))
+        speed_width = max(len('SPEED'), max(len(row['speed']) for row in width_source))
+        pauses_width = max(len('PAUSES'), max(len(row['pauses']) for row in width_source))
+
+        header = (
+            f"{'       ':<{speaker_width}}  "  # no heading for speaker column
+            f"{'TURNS':>{turns_width}}  "
+            f"{'WORDS':>{words_width}}  "
+            f"{'WORD/TURN':>{words_per_turn_width}}  "
+            f"{'SPEECH':>{speech_width}}  "
+            f"{'SPEED':>{speed_width}}  "
+            f"{'PAUSES':>{pauses_width}}"
+        )
+
+        lines = ["Approximate speaker statistics (may be very inaccurate, especially if number of detected speakers is incorrect)", "", header]
+        for row in display_rows:
+            lines.append(
+                f"{row['speaker']:<{speaker_width}}  "
+                f"{row['turns']:>{turns_width}}  "
+                f"{row['words']:>{words_width}}  "
+                f"{row['words_per_turn']:>{words_per_turn_width}}  "
+                f"{row['speech']:>{speech_width}}  "
+                f"{row['speed']:>{speed_width}}  "
+                f"{row['pauses']:>{pauses_width}}"
+            )
+
+        if display_gaps:
+            lines.append(
+                f"{display_gaps['speaker']:<{speaker_width}}  "
+                f"{display_gaps['turns']:>{turns_width}}  "
+                f"{display_gaps['words']:>{words_width}}  "
+                f"{display_gaps['words_per_turn']:>{words_per_turn_width}}  "
+                f"{display_gaps['speech']:>{speech_width}}  "
+                f"{display_gaps['speed']:>{speed_width}}  "
+                f"{display_gaps['pauses']:>{pauses_width}}"
+            )
+
+        if display_total:
+            lines.append(
+                f"{display_total['speaker']:<{speaker_width}}  "
+                f"{display_total['turns']:>{turns_width}}  "
+                f"{display_total['words']:>{words_width}}  "
+                f"{display_total['words_per_turn']:>{words_per_turn_width}}  "
+                f"{display_total['speech']:>{speech_width}}  "
+                f"{display_total['speed']:>{speed_width}}  "
+                f"{display_total['pauses']:>{pauses_width}}"
+            )
+
+        return lines
+
+    def format(
+        self,
+        segments: List[Dict],
+        output_path: str,
+        include_silence: bool = True,
+        config=None,
+        transcript_id: str = None,
+        speaker_stats: Optional[Dict[str, Dict[str, Any]]] = None,
+        **kwargs
+    ) -> None:
+        """
+        Create a plain text transcript with speaker paragraphs.
+        Adjacent segments from the same speaker are joined together.
+        Depending on settings, blank lines may be added around long silence (even when there is no speaker change).
+        """
+        # Group segments by speaker (but handle silence markers separately)
+        gap_threshold = getattr(config, 'silence_gap_linebreak_threshold', None) if config else None
+        
+        paragraphs = []
+        current_speaker = None
+        current_paragraph = []
+        current_start_time = None
+        
+        def smart_join(parts):
+            """Join text parts intelligently, preserving newlines around long silences."""
+            if not parts:
+                return ""
+            
+            result = parts[0]
+            for i in range(1, len(parts)):
+                prev_part = parts[i-1]
+                curr_part = parts[i]
+                
+                # If either part contains newlines (indicating a long silence),
+                # don't add a space between them
+                if '\n' in prev_part or '\n' in curr_part:
+                    result += curr_part
+                else:
+                    result += ' ' + curr_part
+            
+            return result
+
+        for segment in segments:
+            is_silence = segment.get('is_silence_marker', False)
+            speaker = segment.get('speaker', 'UNKNOWN')
+
+            text = WordProcessor.create_paragraph_text_from_words(segment, gap_threshold=gap_threshold)
+            
+            if not text:
+                continue
+
+            if is_silence:
+                # For silence segments, check if it's a long silence and format accordingly
+                if current_paragraph:
+                    # Parse the duration from the silence text (e.g., "(1.5s)" -> 1.5)
+                    duration = WordProcessor._parse_silence_duration(text)
+                    if duration is not None and gap_threshold and duration >= gap_threshold:
+                        # Long silence - add with blank lines (two newlines create empty lines)
+                        formatted_text = f"\n\n{text}\n\n"
+                    else:
+                        # Short silence - keep inline
+                        formatted_text = text
+                    current_paragraph.append(formatted_text)
+                continue
+            
+            text = WordProcessor.create_paragraph_text_from_words(segment, gap_threshold=gap_threshold)
+            
+            if speaker != current_speaker:
+                # Save the previous paragraph if it exists
+                if current_paragraph and current_speaker:
+                    paragraph_text = smart_join(current_paragraph)
+                    paragraphs.append({
+                        'speaker': current_speaker,
+                        'text': paragraph_text,
+                        'start_time': current_start_time,
+                        'is_silence': False
+                    })
+                
+                # Start new paragraph
+                current_speaker = speaker
+                current_paragraph = [text] if text else []
+                current_start_time = segment.get('start', 0)
+            else:
+                # Continue current paragraph
+                if text:
+                    current_paragraph.append(text)
+        
+        # Don't forget the last paragraph
+        if current_paragraph and current_speaker:
+            paragraph_text = smart_join(current_paragraph)
+            paragraphs.append({
+                'speaker': current_speaker,
+                'text': paragraph_text,
+                'start_time': current_start_time,
+                'is_silence': False
+            })
+        
+        # Create text content
+        txt_content = []
+        
+        # Add preamble if config is provided and has output_preamble
+        if config and hasattr(config, 'output_preamble') and config.output_preamble:
+            if transcript_id and hasattr(config, 'get_preamble_with_transcript_id'):
+                preamble_text = config.get_preamble_with_transcript_id(transcript_id)
+            else:
+                preamble_text = config.output_preamble
+            txt_content.append(preamble_text)
+            txt_content.append("")        # Empty line after preamble
+
+            summary_lines = self._build_speaker_summary(segments, speaker_stats)
+            if summary_lines:
+                txt_content.extend(summary_lines)
+                txt_content.append("")
+
+            txt_content.append("=" * 90)  # Separator line
+            txt_content.append("")        # Empty line after separator
+        
+        for para in paragraphs:
+            speaker = para['speaker']
+            text = para['text']
+            start_time = para['start_time']
+            is_silence = para.get('is_silence', False)
+            
+            if not is_silence:
+                # Format timestamp
+                hours = int(start_time // 3600)
+                minutes = int((start_time % 3600) // 60)
+                seconds = int(start_time % 60)
+                timestamp = f"[{hours:02d}:{minutes:02d}:{seconds:02d}]"
+                
+                # Add speaker header with timestamp
+                txt_content.append(f"{speaker} {timestamp}:")
+                txt_content.append(text)
+                txt_content.append("")  # Empty line between speakers
+        
+        # Write text file
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(txt_content))
+
+
+class TSVFormatter(TranscriptFormatter):
+    """Formats transcripts in TSV format."""
+
+    def format(
+        self,
+        segments: List[Dict],
+        output_path: str,
+        include_silence: bool = True,
+        include_word_details: bool = True,
+        config=None,
+        word_per_line: bool = False,  # DO NOT CHANGE, this is just the default. Change DiarizationConfig.tsv_word_per_line instead
+        **kwargs
+    ) -> None:
+        """Create a TSV transcript with optional word-level metadata."""
+
+        fieldnames = [
+            'segment_index',
+            'start',
+            'end',
+            'duration',
+            'speaker',
+            'speaker_confidence',
+            'is_silence',
+            'text',
+            'word_count'
+        ]
+
+        if include_word_details and not word_per_line:
+            fieldnames.append('words')
+
+        if word_per_line:
+            fieldnames.extend([
+                'word',
+                'word_start',
+                'word_end',
+                'word_speaker',
+                'word_confidence',
+                'word_is_silence'
+            ])
+
+        with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames, delimiter='\t', quoting=csv.QUOTE_MINIMAL)
+            writer.writeheader()
+
+            for index, segment in enumerate(segments):
+                is_silence_marker = segment.get('is_silence_marker', False)
+                if is_silence_marker and not include_silence:
+                    continue
+
+                start_time = float(segment.get('start', 0) or 0)
+                end_time = float(segment.get('end', 0) or 0)
+                duration = max(end_time - start_time, 0.0)
+                speaker = segment.get('speaker', 'UNKNOWN')
+                speaker_confidence = segment.get('speaker_confidence')
+                text = WordProcessor.create_paragraph_text_from_words(segment, gap_threshold=None)
+                if not text:
+                    text = segment.get('text', '').strip()
+
+                if text:
+                    # Collapse blank lines created for silence markers and keep markers inline
+                    text_lines = [line.strip() for line in text.splitlines() if line.strip()]
+                    text = ' '.join(text_lines)
+                    text = text.replace('\t', ' ')
+
+                words = segment.get('words', []) or []
+                word_count = sum(1 for w in words if not w.get('is_silence_marker', False))
+
+                base_row = {
+                    'segment_index': index,
+                    'start': round(start_time, 3),
+                    'end': round(end_time, 3),
+                    'duration': round(duration, 3),
+                    'speaker': speaker,
+                    'speaker_confidence': round(speaker_confidence, 3) if isinstance(speaker_confidence, (int, float)) else '',
+                    'is_silence': bool(is_silence_marker),
+                    'text': text,
+                    'word_count': word_count
+                }
+
+                if word_per_line:
+                    for word in words:
+                        if word.get('is_silence_marker', False) and not include_silence:
+                            continue
+
+                        word_text = word.get('word', word.get('text', '')) or ''
+                        word_row = base_row.copy()
+                        word_row.update({
+                            'word': word_text.replace('\t', ' '),
+                            'word_start': round(word.get('start', start_time), 3) if word.get('start') is not None else '',
+                            'word_end': round(word.get('end', end_time), 3) if word.get('end') is not None else '',
+                            'word_speaker': word.get('speaker', speaker),
+                            'word_confidence': round(word.get('confidence'), 3) if isinstance(word.get('confidence'), (int, float)) else '',
+                            'word_is_silence': word.get('is_silence_marker', False)
+                        })
+                        writer.writerow(word_row)
+
+                    if not words:
+                        writer.writerow(base_row)
+
+                else:
+                    row = dict(base_row)
+                    if include_word_details:
+                        row['words'] = json.dumps([
+                            {
+                                'word': word.get('word', word.get('text', '')),
+                                'start': word.get('start'),
+                                'end': word.get('end'),
+                                'speaker': word.get('speaker'),
+                                'confidence': word.get('confidence'),
+                                'is_silence_marker': word.get('is_silence_marker', False)
+                            }
+                            for word in words
+                        ], ensure_ascii=False).replace('\t', ' ')
+
+                    writer.writerow(row)
+
+
+class PyannoteSegmentFormatter(TranscriptFormatter):
+    """Formats pyannote diarization segments in TSV format."""
+
+    def format(
+        self,
+        diarization_result,
+        output_path: str,
+        audio_basename: str = "",
+        **kwargs
+    ) -> None:
+        """Create a TSV file with pyannote segment boundaries."""
+
+        fieldnames = [
+            'segment_index',
+            'start',
+            'end',
+            'duration',
+            'speaker',
+            'confidence'
+        ]
+
+        with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames, delimiter='\t', quoting=csv.QUOTE_MINIMAL)
+            writer.writeheader()
+
+            for index, (segment, _, speaker) in enumerate(diarization_result.itertracks(yield_label=True)):
+                start_time = float(segment.start)
+                end_time = float(segment.end)
+                duration = end_time - start_time
+                
+                # Get confidence if available (some diarization results include this)
+                confidence = getattr(segment, 'confidence', None)
+                if confidence is None:
+                    confidence = ''
+                else:
+                    confidence = round(float(confidence), 3)
+
+                row = {
+                    'segment_index': index,
+                    'start': round(start_time, 3),
+                    'end': round(end_time, 3),
+                    'duration': round(duration, 3),
+                    'speaker': speaker,
+                    'confidence': confidence
+                }
+
+                writer.writerow(row)
+
+
+class StatsExporter:
+    """Exports analysis statistics to JSON format."""
+    
+    @staticmethod
+    def save_analysis_stats(segments: List[Dict], diarization_result, word_stats: Dict, 
+                          segment_stats: Dict, speaker_stats: Dict, boundary_stats: Dict,
+                          settings: Dict, output_path: str) -> None:
+        """Save comprehensive analysis statistics to JSON file."""
+        
+        # Create comprehensive stats dictionary
+        analysis_stats = {
+            "metadata": {
+                "script_version": settings.get("script_version", "unknown"),
+                "audio_file": settings.get("audio_file", "unknown"),
+                "json_input_file": settings.get("json_input_file", "unknown"),
+                "processing_timestamp": settings.get("processing_timestamp", "unknown"),
+                "total_segments": len(segments)
+            },
+            "configuration": {
+                "device": settings.get("device", "unknown"),
+                "diarization": settings.get("diarization", {}),
+                "word_level_processing": settings.get("word_level_processing", {}),
+                "output_formats": settings.get("output_formats", [])
+            },
+            "statistics": {
+                "word_level": word_stats,
+                "segment_level": segment_stats,
+                "speaker_level": speaker_stats,
+                "boundary_analysis": boundary_stats
+            },
+            "segments_summary": {
+                "total_segments": len(segments),
+                "speakers_detected": len(set(seg.get('speaker', 'UNKNOWN') for seg in segments)),
+                "total_duration": max((seg.get('end', 0) for seg in segments), default=0),
+                "segments_by_speaker": {}
+            }
+        }
+        
+        # Add speaker-specific segment counts
+        for segment in segments:
+            speaker = segment.get('speaker', 'UNKNOWN')
+            if speaker not in analysis_stats["segments_summary"]["segments_by_speaker"]:
+                analysis_stats["segments_summary"]["segments_by_speaker"][speaker] = 0
+            analysis_stats["segments_summary"]["segments_by_speaker"][speaker] += 1
+        
+        # Save to JSON file
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(analysis_stats, f, indent=2, ensure_ascii=False)

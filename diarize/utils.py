@@ -364,10 +364,16 @@ class WordProcessor:
 
                 assigned_speaker = word.get('speaker') or segment.get('speaker') or "UNKNOWN"
                 assigned_hint = format_speaker_hint(assigned_speaker)
+                assigned_norm = _normalize_speaker_label(assigned_speaker)
 
                 overlapping_labels = set()
                 for overlap_segment, _, label in diarization_tracks:
-                    if label == assigned_speaker or label in {"SILENCE", "UNKNOWN", None}:
+                    if label in {"SILENCE", "UNKNOWN", None}:
+                        continue
+                    normalized_label = _normalize_speaker_label(label)
+                    if assigned_norm and normalized_label and normalized_label == assigned_norm:
+                        continue
+                    if label == assigned_speaker:
                         continue
                     if overlap_segment.end <= start_f or overlap_segment.start >= end_f:
                         continue
@@ -590,6 +596,257 @@ class SpeakerAssigner:
         if markers_preserved > 0:
             print(f"Preserved {markers_preserved} discontinuity markers without smoothing")
         return segments
+
+
+class BackfillMerger:
+    """Merge backfilled words into existing transcript segments."""
+    
+    @staticmethod
+    def merge_backfilled_words(
+        segments: List[Dict[str, Any]],
+        backfilled_segments: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Insert backfilled words into the correct positions within existing segments.
+        
+        Instead of adding backfilled segments as standalone entries, this merges their
+        words into the existing segments based on timestamps, then splits segments
+        where speaker changes occur.
+        
+        Args:
+            segments: Original transcript segments with words
+            backfilled_segments: New segments from backfill transcription
+            
+        Returns:
+            Merged and re-split segments with backfilled words in correct positions
+        """
+        if not backfilled_segments:
+            return segments
+        
+        # Extract all backfilled words with their metadata
+        backfilled_words = []
+        for bf_seg in backfilled_segments:
+            for word in bf_seg.get('words', []):
+                backfilled_words.append(word)
+        
+        if not backfilled_words:
+            return segments
+        
+        print(f"  -> Merging {len(backfilled_words)} backfilled words into existing segments...")
+        
+        # Sort backfilled words by start time
+        backfilled_words.sort(key=lambda w: w.get('start', 0.0))
+        
+        # For each segment, find and insert backfilled words that belong within its time range
+        # Split silence markers that overlap with backfilled words
+        modified_segments = []
+        for segment in segments:
+            seg_start = segment.get('start', 0.0)
+            seg_end = segment.get('end', float('inf'))
+            original_words = segment.get('words', [])
+            
+            # Find backfilled words that overlap with this segment's time range
+            words_to_merge = []
+            for bf_word in backfilled_words:
+                bf_start = bf_word.get('start', 0.0)
+                bf_end = bf_word.get('end', 0.0)
+                
+                # Check if backfilled word overlaps with this segment
+                if bf_start < seg_end and bf_end > seg_start:
+                    words_to_merge.append(bf_word)
+            
+            if not words_to_merge:
+                # No backfilled words for this segment, keep as-is
+                modified_segments.append(segment)
+                continue
+            
+            # Process original words: split silence markers that overlap with backfilled words
+            processed_words = []
+            for orig_word in original_words:
+                if not orig_word.get('is_silence_marker', False):
+                    # Regular word - keep as-is
+                    processed_words.append(orig_word)
+                    continue
+                
+                # Silence marker - check if any backfilled words fall within it
+                silence_start = orig_word.get('start', 0.0)
+                silence_end = orig_word.get('end', 0.0)
+                
+                # Find backfilled words that overlap this silence
+                overlapping_bf = [
+                    w for w in words_to_merge
+                    if w.get('start', 0.0) < silence_end and w.get('end', 0.0) > silence_start
+                ]
+                
+                if not overlapping_bf:
+                    # No overlap - keep silence as-is
+                    processed_words.append(orig_word)
+                    continue
+                
+                # Split the silence around backfilled words
+                # Get earliest and latest backfilled word times
+                bf_earliest_start = min(w.get('start', 0.0) for w in overlapping_bf)
+                bf_latest_end = max(w.get('end', 0.0) for w in overlapping_bf)
+                
+                # Create "before" silence if there's a gap
+                before_duration = bf_earliest_start - silence_start
+                if before_duration >= 0.1:  # Minimum 0.1s silence
+                    before_silence = BackfillMerger._create_silence_marker(
+                        silence_start,
+                        bf_earliest_start,
+                        before_duration
+                    )
+                    processed_words.append(before_silence)
+                
+                # Backfilled words will be added separately
+                
+                # Create "after" silence if there's a gap
+                after_duration = silence_end - bf_latest_end
+                if after_duration >= 0.1:  # Minimum 0.1s silence
+                    after_silence = BackfillMerger._create_silence_marker(
+                        bf_latest_end,
+                        silence_end,
+                        after_duration
+                    )
+                    processed_words.append(after_silence)
+            
+            # Merge processed words with backfilled words and sort by time
+            merged_words = processed_words + words_to_merge
+            merged_words.sort(key=lambda w: w.get('start', 0.0))
+            
+            # Update segment with merged words
+            updated_segment = segment.copy()
+            updated_segment['words'] = merged_words
+            
+            # Recalculate segment boundaries to match word range
+            if merged_words:
+                real_words = [w for w in merged_words if not w.get('is_silence_marker', False)]
+                if real_words:
+                    updated_segment['start'] = real_words[0].get('start', seg_start)
+                    updated_segment['end'] = real_words[-1].get('end', seg_end)
+            
+            modified_segments.append(updated_segment)
+        
+        # Now split segments where speaker changes occur mid-segment
+        # Silence markers stay attached to the preceding speaker
+        final_segments = []
+        for segment in modified_segments:
+            words = segment.get('words', [])
+            if not words:
+                final_segments.append(segment)
+                continue
+            
+            # Group consecutive words by speaker (keeping silence markers with preceding speaker)
+            current_group = []
+            current_speaker = None
+            
+            for word in words:
+                word_speaker = word.get('speaker', 'UNKNOWN')
+                
+                # Silence markers stay with current speaker group
+                if word_speaker == 'SILENCE':
+                    if current_group:  # Attach to current/preceding speaker
+                        current_group.append(word)
+                    # If no current speaker yet, skip leading silence
+                    continue
+                
+                # Real speaker word found
+                if word_speaker != current_speaker:
+                    # Flush previous group (includes any trailing silence)
+                    if current_group and current_speaker:
+                        final_segments.append(
+                            BackfillMerger._create_segment_from_words(
+                                current_group,
+                                current_speaker,
+                                segment
+                            )
+                        )
+                    
+                    # Start new group
+                    current_speaker = word_speaker
+                    current_group = [word]
+                else:
+                    # Same speaker - continue group
+                    current_group.append(word)
+            
+            # Flush final group (includes any trailing silence)
+            if current_group and current_speaker:
+                final_segments.append(
+                    BackfillMerger._create_segment_from_words(
+                        current_group,
+                        current_speaker,
+                        segment
+                    )
+                )
+        
+        # Sort final segments by start time
+        final_segments.sort(key=lambda seg: seg.get('start', 0.0))
+        
+        return final_segments
+    
+    @staticmethod
+    def _create_silence_marker(start: float, end: float, duration: float) -> Dict[str, Any]:
+        """Create a silence marker word with proper formatting."""
+        # Round to nearest 0.1 seconds
+        rounded_duration = round(duration, 1)
+        
+        # Format the silence duration (omit leading zero for values < 1.0)
+        silence_text = f"({rounded_duration:.1f})"
+        silence_text = silence_text.replace("(0.", "(.")
+        
+        return {
+            'start': start,
+            'end': end,
+            'word': silence_text,
+            'text': silence_text,
+            'speaker': 'SILENCE',
+            'confidence': 1.0,
+            'is_silence_marker': True
+        }
+    
+    @staticmethod
+    def _create_segment_from_words(
+        words: List[Dict[str, Any]],
+        speaker: str,
+        template_segment: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Create a segment from a group of words."""
+        if not words:
+            return template_segment
+        
+        # Calculate boundaries from words (excluding silence markers)
+        real_words = [w for w in words if not w.get('is_silence_marker', False)]
+        if not real_words:
+            real_words = words
+        
+        start_time = real_words[0].get('start', 0.0)
+        end_time = real_words[-1].get('end', start_time)
+        
+        # Build text from words
+        text_tokens = []
+        for word in words:
+            token = word.get('word', word.get('text', ''))
+            if isinstance(token, str) and token.strip():
+                text_tokens.append(token.strip())
+        
+        text = ' '.join(text_tokens)
+        
+        # Check if any word is marked as backfilled
+        has_backfill = any(word.get('is_backfill', False) for word in words)
+        
+        new_segment = {
+            'start': start_time,
+            'end': end_time,
+            'text': text,
+            'speaker': speaker,
+            'speaker_confidence': template_segment.get('speaker_confidence', 1.0),
+            'words': words
+        }
+        
+        if has_backfill:
+            new_segment['contains_backfill'] = True
+        
+        return new_segment
 
 
 class BackfillTranscriber:
@@ -1152,6 +1409,21 @@ def format_speaker_hint(label: Optional[str]) -> str:
     if len(alnum) <= 3:
         return alnum
     return alnum[:3]
+
+
+def _normalize_speaker_label(label: Optional[str]) -> str:
+    """Normalize speaker labels for comparisons, ignoring formatting differences."""
+    if not label or not isinstance(label, str):
+        return ""
+
+    cleaned = label.strip().upper()
+    match = re.search(r"(\d+)", cleaned)
+    if match:
+        digits = match.group(1).lstrip('0')
+        return digits or "0"
+
+    alnum = re.sub(r"[^A-Z0-9]", "", cleaned)
+    return alnum
 
 
 def is_marker_token(token: str) -> bool:

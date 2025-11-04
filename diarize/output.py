@@ -1,10 +1,11 @@
 """Output formatters for various transcript formats."""
 
 import os
+import re
 import json
 import csv
-from typing import Dict, List, Any
-from .utils import WordProcessor
+from typing import Any, Dict, List, Optional
+from .utils import WordProcessor, _is_silence_token
 
 
 def format_vtt_timestamp(seconds: float) -> str:
@@ -137,7 +138,15 @@ class RTTMFormatter(TranscriptFormatter):
 class RTFFormatter(TranscriptFormatter):
     """Formats transcripts in RTF format with speaker colors."""
     
-    def format(self, segments: List[Dict], output_path: str, config=None, transcript_id: str = None, **kwargs) -> None:
+    def format(
+        self,
+        segments: List[Dict],
+        output_path: str,
+        config=None,
+        transcript_id: str = None,
+        speaker_stats: Optional[Dict[str, Dict[str, Any]]] = None,
+        **kwargs
+    ) -> None:
         """
         Create an RTF transcript with speaker paragraphs.
         Silences are embedded within the text as word-level markers.
@@ -175,6 +184,70 @@ class RTFFormatter(TranscriptFormatter):
             
             return result
         
+        summary_data = TXTFormatter._get_speaker_summary_table_data(segments, speaker_stats)
+
+        def build_summary_table(table_data: Dict[str, Any]) -> List[str]:
+            if not table_data:
+                return []
+
+            columns = table_data['columns']
+            display_rows = table_data['rows']
+            display_gaps = table_data['gap_row']
+            display_total = table_data['total_row']
+            column_widths = table_data['column_widths']
+
+            # Approximate column width in twips (characters * 160 twips)
+            base_twip_per_char = 160
+            min_column_twips = 1200
+            column_twips: List[int] = []
+            for key, _label, _alignment in columns:
+                char_width = column_widths.get(key, len(_label))
+                width = max(min_column_twips, (char_width + 2) * base_twip_per_char)
+                column_twips.append(width)
+
+            cell_edges: List[int] = []
+            cumulative = 0
+            for width in column_twips:
+                cumulative += width
+                cell_edges.append(cumulative)
+
+            align_map = {
+                'left': r'\ql',
+                'right': r'\qr',
+                'center': r'\qc',
+            }
+
+            table_lines: List[str] = []
+
+            def append_row(cells: List[str], *, bold: bool = False) -> None:
+                table_lines.append(r"\trowd\trgaph108")
+                for edge in cell_edges:
+                    table_lines.append(fr"\cellx{edge}")
+
+                for (cell_value, (_key, _label, alignment)) in zip(cells, columns):
+                    alignment_ctrl = align_map.get(alignment, r'\ql')
+                    content = escape_rtf_text(cell_value)
+                    if bold:
+                        content = f"\\b {content}\\b0" if content else r"\b\b0"
+                    table_lines.append(rf"\pard\intbl{alignment_ctrl}\sb0\sa0 {content}\cell")
+
+                table_lines.append(r"\row")
+
+            header_cells = [label for _key, label, _alignment in columns]
+            append_row(header_cells, bold=True)
+
+            for row in display_rows:
+                append_row([row.get(key, '') or '' for key, _label, _alignment in columns])
+
+            if display_gaps:
+                append_row([display_gaps.get(key, '') or '' for key, _label, _alignment in columns])
+
+            if display_total:
+                append_row([display_total.get(key, '') or '' for key, _label, _alignment in columns], bold=True)
+
+            table_lines.append(r"\pard\par")
+            return table_lines
+
         paragraphs = []
         current_speaker = None
         current_paragraph = []
@@ -279,21 +352,26 @@ class RTFFormatter(TranscriptFormatter):
         }
 
         
-        # Add paragraphs to RTF
-        # First, add preamble if config is provided and has output_preamble
+        # Add preamble and optional summary table
         if config and hasattr(config, 'output_preamble') and config.output_preamble:
-            # Add preamble as a separate section
             if transcript_id and hasattr(config, 'get_preamble_with_transcript_id'):
                 preamble_text = config.get_preamble_with_transcript_id(transcript_id)
             else:
                 preamble_text = config.output_preamble
-            
+
             escaped_preamble = escape_rtf_text(preamble_text)
             rtf_content.append(f"{escaped_preamble}\\par")
-            rtf_content.append("\\par")  # Extra line break
-            # Add separator line
+            rtf_content.append("\\par")
+
+            if summary_data:
+                rtf_content.append(r"\pard\sb200\sa120\b Speaker statistics\b0\par")
+                rtf_content.extend(build_summary_table(summary_data))
+
             rtf_content.append("\\line " + "=" * 80 + "\\par")
-            rtf_content.append("\\par")  # Extra line break after separator
+            rtf_content.append("\\par")
+        elif summary_data:
+            rtf_content.append(r"\pard\sb200\sa120\b Speaker statistics\b0\par")
+            rtf_content.extend(build_summary_table(summary_data))
         
         for i, para in enumerate(paragraphs):
             speaker = para['speaker']
@@ -326,38 +404,344 @@ class RTFFormatter(TranscriptFormatter):
 
 class TXTFormatter(TranscriptFormatter):
     """Formats transcripts in plain text format."""
-    
-    def format(self, segments: List[Dict], output_path: str, include_silence: bool = True, config=None, transcript_id: str = None, **kwargs) -> None:
-        """
-        Create a plain text transcript with speaker paragraphs.
-        Adjacent segments from the same speaker are joined together.
-        Depending on settings, blank lines may be added around long silence (even when there is no speaker change).
-        """
-        # Group segments by speaker (but handle silence markers separately)
+
+    @staticmethod
+    def _speaker_sort_key(label: str) -> tuple[int, str]:
+        match = re.match(r"^SPEAKER_(\d+)$", label)
+        if match:
+            return (0, f"{int(match.group(1)):03d}")
+        return (1, label)
+
+    @staticmethod
+    def _format_seconds(seconds: float) -> str:
+        if seconds <= 0.05:
+            return "0s"
+        if seconds >= 9.95:
+            return f"{seconds:.0f}s"
+        if seconds >= 1.0:
+            return f"{seconds:.1f}s"
+        return f"{seconds:.2f}s"
+
+    @staticmethod
+    def _format_with_percentage(value: float, total: float, *, decimals: int = 1, as_int: bool = False) -> str:
+        if as_int:
+            base_value = str(int(round(value)))
+        else:
+            base_value = f"{value:.{decimals}f}"
+
+        if total <= 0 or value <= 0:
+            return base_value
+
+        percentage = (value / total) * 100.0
+        return f"{base_value} ({percentage:.1f}%)"
+
+    @classmethod
+    def _get_speaker_summary_table_data(
+        cls,
+        segments: List[Dict[str, Any]],
+        speaker_stats: Optional[Dict[str, Dict[str, Any]]] = None
+    ) -> Optional[Dict[str, Any]]:
+        metrics: Dict[str, Dict[str, float]] = {}
+
+        def ensure_entry(label: Optional[str]) -> Dict[str, float]:
+            normalized = label or 'UNKNOWN'
+            entry = metrics.get(normalized)
+            if entry is None:
+                entry = {'words': 0.0, 'speech': 0.0, 'pauses': 0.0, 'turns': 0.0}
+                metrics[normalized] = entry
+            return entry
+
+        for segment in segments:
+            segment_speaker = segment.get('speaker') or 'UNKNOWN'
+            if segment_speaker != 'SILENCE':
+                ensure_entry(segment_speaker)['turns'] += 1.0
+
+            words = segment.get('words', []) or []
+            if not words:
+                continue
+
+            for word in words:
+                if not isinstance(word, dict):
+                    continue
+
+                raw_speaker = word.get('speaker')
+                speaker_label = raw_speaker or segment_speaker
+                if not speaker_label or speaker_label == 'SILENCE':
+                    speaker_label = segment_speaker if segment_speaker != 'SILENCE' else 'UNKNOWN'
+                if not speaker_label or speaker_label == 'SILENCE':
+                    continue
+
+                entry = ensure_entry(speaker_label)
+
+                start = word.get('start')
+                end = word.get('end')
+                duration = 0.0
+                if start is not None and end is not None:
+                    try:
+                        duration = max(0.0, float(end) - float(start))
+                    except (TypeError, ValueError):
+                        duration = 0.0
+
+                if _is_silence_token(word):
+                    entry['pauses'] += duration
+                    continue
+
+                entry['words'] += 1
+                entry['speech'] += duration
+
+        if speaker_stats:
+            for label in speaker_stats.keys():
+                if label == 'SILENCE':
+                    continue
+                ensure_entry(label)
+
+        non_silence_segments = [
+            seg for seg in segments
+            if not seg.get('is_silence_marker', False)
+        ]
+        non_silence_segments.sort(key=lambda seg: float(seg.get('start', 0.0) or 0.0))
+
+        gap_total = 0.0
+        for prev_seg, next_seg in zip(non_silence_segments, non_silence_segments[1:]):
+            prev_speaker = prev_seg.get('speaker') or 'UNKNOWN'
+            next_speaker = next_seg.get('speaker') or 'UNKNOWN'
+
+            if prev_speaker in ('SILENCE', None) or next_speaker in ('SILENCE', None):
+                continue
+            if prev_speaker == next_speaker:
+                continue
+
+            prev_end = prev_seg.get('end')
+            next_start = next_seg.get('start')
+            try:
+                prev_end_f = float(prev_end) if prev_end is not None else 0.0
+                next_start_f = float(next_start) if next_start is not None else prev_end_f
+            except (TypeError, ValueError):
+                continue
+
+            gap = next_start_f - prev_end_f
+            if gap > 0:
+                gap_total += gap
+
+        if not metrics:
+            return None
+
+        speaker_names = [name for name in metrics.keys() if name != 'UNKNOWN']
+        speaker_names.sort(key=cls._speaker_sort_key)
+        if 'UNKNOWN' in metrics:
+            speaker_names.append('UNKNOWN')
+
+        rows: List[Dict[str, Any]] = []
+        total_words = 0.0
+        total_speech = 0.0
+        total_pauses = 0.0
+        total_turns = 0.0
+
+        for name in speaker_names:
+            data = metrics[name]
+            words = int(round(data.get('words', 0.0)))
+            speech = float(data.get('speech', 0.0))
+            pauses = float(data.get('pauses', 0.0))
+            turns = float(data.get('turns', 0.0))
+            speed = (words / speech * 60.0) if speech > 0 else 0.0
+            words_per_turn_value = (words / turns) if turns > 0 else 0.0
+
+            rows.append(
+                {
+                    'speaker': name,
+                    'words_value': float(words),
+                    'speech_value': speech,
+                    'turns_value': turns,
+                    'words_per_turn_value': words_per_turn_value,
+                    'speed': f"{int(round(speed))} wpm" if speech > 0 else "--",
+                    'pauses': cls._format_seconds(pauses),
+                }
+            )
+
+            total_words += words
+            total_speech += speech
+            total_pauses += pauses
+            total_turns += turns
+
+        gaps_row = None
+        if gap_total > 0:
+            gaps_row = {
+                'speaker': 'GAPS',
+                'turns': '',
+                'words': '',
+                'words_per_turn': '',
+                'speech': '',
+                'speed': '',
+                'pauses': cls._format_seconds(gap_total),
+            }
+            total_pauses += gap_total
+
+        total_row = None
+        if rows or gap_total > 0:
+            total_speed = (total_words / total_speech * 60.0) if total_speech > 0 else 0.0
+            total_duration = total_speech + total_pauses
+            silence_pct = (total_pauses / total_duration * 100.0) if total_duration > 0 else 0.0
+            if total_pauses > 0:
+                pauses_text = f"{cls._format_seconds(total_pauses)} ({silence_pct:.1f}%)"
+            else:
+                pauses_text = cls._format_seconds(total_pauses)
+            words_per_turn_total = (total_words / total_turns) if total_turns > 0 else 0.0
+            total_row = {
+                'speaker': 'Total',
+                'turns_value': float(total_turns),
+                'words_value': float(total_words),
+                'speech_value': total_speech,
+                'words_per_turn_value': words_per_turn_total,
+                'speed': f"{int(round(total_speed))} wpm" if total_speech > 0 else "--",
+                'pauses': pauses_text,
+            }
+
+        def format_words(value: float) -> str:
+            return cls._format_with_percentage(value, total_words, as_int=True)
+
+        def format_speech(value: float) -> str:
+            return cls._format_with_percentage(value, total_speech, decimals=1)
+
+        def format_turns(value: float) -> str:
+            return cls._format_with_percentage(value, total_turns, as_int=True)
+
+        display_rows: List[Dict[str, str]] = []
+        for row in rows:
+            display_rows.append(
+                {
+                    'speaker': row['speaker'],
+                    'turns': format_turns(row['turns_value']),
+                    'words': format_words(row['words_value']),
+                    'words_per_turn': f"{row['words_per_turn_value']:.1f}" if row['words_per_turn_value'] > 0 else '--',
+                    'speech': format_speech(row['speech_value']),
+                    'speed': row['speed'],
+                    'pauses': row['pauses'],
+                }
+            )
+
+        display_gaps = gaps_row
+
+        display_total = None
+        if total_row:
+            display_total = {
+                'speaker': total_row['speaker'],
+                'turns': format_turns(total_row['turns_value']),
+                'words': format_words(total_row['words_value']),
+                'words_per_turn': f"{total_row['words_per_turn_value']:.1f}" if total_row['words_per_turn_value'] > 0 else '--',
+                'speech': format_speech(total_row['speech_value']),
+                'speed': total_row['speed'],
+                'pauses': total_row['pauses'],
+            }
+
+        columns = [
+            ('speaker', '', 'left'),
+            ('turns', 'TURNS', 'right'),
+            ('words', 'WORDS', 'right'),
+            ('words_per_turn', 'WORD/TURN', 'right'),
+            ('speech', 'SPEECH', 'right'),
+            ('speed', 'SPEED', 'right'),
+            ('pauses', 'PAUSES', 'right'),
+        ]
+
+        width_rows: List[Dict[str, str]] = list(display_rows)
+        if display_gaps:
+            width_rows.append(display_gaps)
+        if display_total:
+            width_rows.append(display_total)
+
+        if not width_rows:
+            return None
+
+        column_widths: Dict[str, int] = {}
+        for key, label, _alignment in columns:
+            max_length = len(label)
+            for row in width_rows:
+                cell_value = row.get(key, '') if row else ''
+                if cell_value is None:
+                    cell_value = ''
+                max_length = max(max_length, len(cell_value))
+            column_widths[key] = max_length
+
+        return {
+            'columns': columns,
+            'rows': display_rows,
+            'gap_row': display_gaps,
+            'total_row': display_total,
+            'column_widths': column_widths,
+        }
+
+    @classmethod
+    def _build_speaker_summary(
+        cls,
+        segments: List[Dict[str, Any]],
+        speaker_stats: Optional[Dict[str, Dict[str, Any]]] = None
+    ) -> List[str]:
+        table_data = cls._get_speaker_summary_table_data(segments, speaker_stats)
+        if not table_data:
+            return []
+
+        columns = table_data['columns']
+        display_rows = table_data['rows']
+        display_gaps = table_data['gap_row']
+        display_total = table_data['total_row']
+        column_widths = table_data['column_widths']
+
+        def format_line(row: Dict[str, str]) -> str:
+            parts: List[str] = []
+            for key, _label, alignment in columns:
+                width = column_widths[key]
+                value = row.get(key, '') or ''
+                if alignment == 'left':
+                    parts.append(f"{value:<{width}}")
+                elif alignment == 'center':
+                    parts.append(f"{value:^{width}}")
+                else:
+                    parts.append(f"{value:>{width}}")
+            return "  ".join(parts)
+
+        header_parts: List[str] = []
+        for key, label, alignment in columns:
+            width = column_widths[key]
+            if alignment == 'left':
+                header_parts.append(f"{label:<{width}}")
+            elif alignment == 'center':
+                header_parts.append(f"{label:^{width}}")
+            else:
+                header_parts.append(f"{label:>{width}}")
+        header = "  ".join(header_parts)
+
+        lines = ["Approximate speaker statistics:\n(may be very inaccurate, especially if number of detected speakers is incorrect)", "", header, ""]
+        for row in display_rows:
+            lines.append(format_line(row))
+
+        if display_gaps:
+            lines.append(format_line(display_gaps))
+
+        if display_total:
+            lines.append(format_line(display_total))
+
+        return lines
+
+    def format(self, segments: List[Dict], output_path: str, include_silence: bool = True, config=None, transcript_id: str = None, speaker_stats: Optional[Dict[str, Dict[str, Any]]] = None, **kwargs) -> None:
+        """Create a plain text transcript with speaker paragraphs."""
         gap_threshold = getattr(config, 'silence_gap_linebreak_threshold', None) if config else None
-        
-        paragraphs = []
+
+        paragraphs: List[Dict[str, Any]] = []
         current_speaker = None
-        current_paragraph = []
+        current_paragraph: List[str] = []
         current_start_time = None
-        
-        def smart_join(parts):
-            """Join text parts intelligently, preserving newlines around long silences."""
+
+        def smart_join(parts: List[str]) -> str:
             if not parts:
                 return ""
-            
             result = parts[0]
             for i in range(1, len(parts)):
-                prev_part = parts[i-1]
+                prev_part = parts[i - 1]
                 curr_part = parts[i]
-                
-                # If either part contains newlines (indicating a long silence),
-                # don't add a space between them
                 if '\n' in prev_part or '\n' in curr_part:
                     result += curr_part
                 else:
                     result += ' ' + curr_part
-            
             return result
 
         for segment in segments:
@@ -365,89 +749,82 @@ class TXTFormatter(TranscriptFormatter):
             speaker = segment.get('speaker', 'UNKNOWN')
 
             text = WordProcessor.create_paragraph_text_from_words(segment, gap_threshold=gap_threshold)
-            
             if not text:
                 continue
 
             if is_silence:
-                # For silence segments, check if it's a long silence and format accordingly
                 if current_paragraph:
-                    # Parse the duration from the silence text (e.g., "(1.5s)" -> 1.5)
                     duration = WordProcessor._parse_silence_duration(text)
                     if duration is not None and gap_threshold and duration >= gap_threshold:
-                        # Long silence - add with blank lines (two newlines create empty lines)
                         formatted_text = f"\n\n{text}\n\n"
                     else:
-                        # Short silence - keep inline
                         formatted_text = text
                     current_paragraph.append(formatted_text)
                 continue
-            
-            text = WordProcessor.create_paragraph_text_from_words(segment, gap_threshold=gap_threshold)
-            
+
             if speaker != current_speaker:
-                # Save the previous paragraph if it exists
-                if current_paragraph and current_speaker:
+                if current_paragraph and current_speaker is not None:
                     paragraph_text = smart_join(current_paragraph)
-                    paragraphs.append({
-                        'speaker': current_speaker,
-                        'text': paragraph_text,
-                        'start_time': current_start_time,
-                        'is_silence': False
-                    })
-                
-                # Start new paragraph
+                    paragraphs.append(
+                        {
+                            'speaker': current_speaker,
+                            'text': paragraph_text,
+                            'start_time': current_start_time,
+                        }
+                    )
+
                 current_speaker = speaker
-                current_paragraph = [text] if text else []
+                current_paragraph = [text]
                 current_start_time = segment.get('start', 0)
             else:
-                # Continue current paragraph
-                if text:
-                    current_paragraph.append(text)
-        
-        # Don't forget the last paragraph
-        if current_paragraph and current_speaker:
+                current_paragraph.append(text)
+
+        if current_paragraph and current_speaker is not None:
             paragraph_text = smart_join(current_paragraph)
-            paragraphs.append({
-                'speaker': current_speaker,
-                'text': paragraph_text,
-                'start_time': current_start_time,
-                'is_silence': False
-            })
-        
-        # Create text content
-        txt_content = []
-        
-        # Add preamble if config is provided and has output_preamble
+            paragraphs.append(
+                {
+                    'speaker': current_speaker,
+                    'text': paragraph_text,
+                    'start_time': current_start_time,
+                }
+            )
+
+        txt_content: List[str] = []
+
+        summary_lines = self._build_speaker_summary(segments, speaker_stats)
+
         if config and hasattr(config, 'output_preamble') and config.output_preamble:
             if transcript_id and hasattr(config, 'get_preamble_with_transcript_id'):
                 preamble_text = config.get_preamble_with_transcript_id(transcript_id)
             else:
                 preamble_text = config.output_preamble
             txt_content.append(preamble_text)
-            txt_content.append("")        # Empty line after preamble
-            txt_content.append("=" * 80)  # Separator line
-            txt_content.append("")        # Empty line after separator
-        
-        for para in paragraphs:
-            speaker = para['speaker']
-            text = para['text']
-            start_time = para['start_time']
-            is_silence = para.get('is_silence', False)
-            
-            if not is_silence:
-                # Format timestamp
-                hours = int(start_time // 3600)
-                minutes = int((start_time % 3600) // 60)
-                seconds = int(start_time % 60)
-                timestamp = f"[{hours:02d}:{minutes:02d}:{seconds:02d}]"
-                
-                # Add speaker header with timestamp
-                txt_content.append(f"{speaker} {timestamp}:")
-                txt_content.append(text)
-                txt_content.append("")  # Empty line between speakers
-        
-        # Write text file
+            txt_content.append("")
+
+            if summary_lines:
+                txt_content.extend(summary_lines)
+                txt_content.append("")
+
+            txt_content.append("=" * 90) # separator line
+            txt_content.append("")
+        elif summary_lines:
+            txt_content.extend(summary_lines)
+            txt_content.append("")
+
+        for paragraph in paragraphs:
+            speaker = paragraph['speaker']
+            text = paragraph['text']
+            start_time = paragraph['start_time'] or 0
+
+            hours = int(start_time // 3600)
+            minutes = int((start_time % 3600) // 60)
+            seconds = int(start_time % 60)
+            timestamp = f"[{hours:02d}:{minutes:02d}:{seconds:02d}]"
+
+            txt_content.append(f"{speaker} {timestamp}:")
+            txt_content.append(text)
+            txt_content.append("")
+
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(txt_content))
 
@@ -616,6 +993,33 @@ class PyannoteSegmentFormatter(TranscriptFormatter):
                 }
 
                 writer.writerow(row)
+
+
+class JSONFormatter(TranscriptFormatter):
+    """Formats the complete enriched transcript in JSON format."""
+    
+    def format(
+        self,
+        segments: List[Dict],
+        output_path: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ) -> None:
+        """
+        Save the enriched transcript with all metadata to JSON.
+        
+        Args:
+            segments: List of segment dictionaries with words and metadata
+            output_path: Path to save the JSON file
+            metadata: Optional metadata about the transcription/diarization process
+        """
+        output_data = {
+            'metadata': metadata or {},
+            'segments': segments
+        }
+        
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(output_data, f, indent=2, ensure_ascii=False)
 
 
 class StatsExporter:
