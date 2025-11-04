@@ -356,6 +356,33 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             speaker_stats = SegmentAnalyzer.analyze_final_segments(segments)
             boundary_stats = BoundaryAnalyzer.analyze_boundary_issues(segments, diarization_result, return_data=True)
 
+            is_pyannote_v4 = (
+                exclusive_result is not None
+                or 'community-1' in (getattr(config, 'pipeline_model', '') or '')
+                or getattr(config, 'use_precision_service', False)
+            )
+
+            overlap_marker_stats = None
+            if (
+                is_pyannote_v4
+                and config.preserve_markers
+                and standard_result is not None
+                and hasattr(standard_result, 'crop')
+            ):
+                overlap_marker_stats = WordProcessor.annotate_disfluency_overlap_markers(
+                    segments,
+                    standard_result
+                )
+                annotated = overlap_marker_stats.get('annotated', 0)
+                cleared = overlap_marker_stats.get('cleared', 0)
+                if annotated or cleared:
+                    summary_parts = []
+                    if annotated:
+                        summary_parts.append(f"{annotated} tagged")
+                    if cleared:
+                        summary_parts.append(f"{cleared} cleared")
+                    print("  -> Disfluency overlap hints: " + ", ".join(summary_parts))
+
             # 5. Create settings dictionary for stats
             settings = {
                 "script_version": f"diarize.py (modified: {SCRIPT_VERSION})",
