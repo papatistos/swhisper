@@ -286,8 +286,8 @@ class WordProcessor:
             filtered_words = []
             removed_any = False
             for word in words:
-                marker_text = word.get('word', word.get('text', ''))
-                cleaned = marker_text.strip() if isinstance(marker_text, str) else ''
+                marker_text = WordProcessor._get_word_text(word)
+                cleaned = strip_marker_hint(marker_text)
                 if cleaned and DISFLUENCY_MARKER_PATTERN.match(cleaned):
                     removed_any = True
                     continue
