@@ -299,6 +299,123 @@ class WordProcessor:
 
         return segments
 
+    @staticmethod
+    def annotate_disfluency_overlap_markers(
+        segments: List[Dict],
+        diarization_result
+    ) -> Dict[str, int]:
+        """Tag disfluency markers with overlapping speaker hints based on diarization output."""
+        stats = {'total_markers': 0, 'annotated': 0, 'cleared': 0}
+
+        try:
+            from pyannote.core import Segment as PyannoteSegment  # type: ignore
+        except ImportError:
+            print("⚠️  Pyannote not available; skipping disfluency overlap tagging")
+            return stats
+
+        if diarization_result is None:
+            return stats
+
+        try:
+            diarization_tracks = list(diarization_result.itertracks(yield_label=True))
+        except Exception:
+            diarization_tracks = []
+
+        if not diarization_tracks:
+            return stats
+
+        for segment in segments:
+            words = segment.get('words', [])
+            if not words:
+                continue
+
+            segment_updated = False
+
+            for word in words:
+                token = WordProcessor._get_word_text(word)
+                if not token:
+                    continue
+
+                cleaned = strip_marker_hint(token)
+                if not cleaned or not DISFLUENCY_MARKER_PATTERN.match(cleaned):
+                    continue
+
+                start = word.get('start')
+                end = word.get('end')
+                if start is None or end is None:
+                    continue
+
+                try:
+                    start_f = float(start)
+                    end_f = float(end)
+                except (TypeError, ValueError):
+                    continue
+
+                if not math.isfinite(start_f) or not math.isfinite(end_f):
+                    continue
+
+                if end_f <= start_f:
+                    end_f = start_f + 0.05
+
+                try:
+                    region = PyannoteSegment(start_f, end_f)
+                except Exception:
+                    continue
+
+                assigned_speaker = word.get('speaker') or segment.get('speaker') or "UNKNOWN"
+                assigned_hint = format_speaker_hint(assigned_speaker)
+
+                overlapping_labels = set()
+                for overlap_segment, _, label in diarization_tracks:
+                    if label == assigned_speaker or label in {"SILENCE", "UNKNOWN", None}:
+                        continue
+                    if overlap_segment.end <= start_f or overlap_segment.start >= end_f:
+                        continue
+                    try:
+                        intersection = overlap_segment & region  # type: ignore[operator]
+                        overlap_duration = getattr(intersection, 'duration', None)
+                        if overlap_duration is None:
+                            overlap_duration = overlap_segment.duration
+                    except Exception:
+                        overlap_duration = overlap_segment.duration
+
+                    if overlap_duration is None or overlap_duration <= 0:
+                        continue
+
+                    overlapping_labels.add(label)
+
+                stats['total_markers'] += 1
+
+                current_hint, base_marker = split_marker_hint_and_body(token)
+                hint_tokens = []
+                for label in overlapping_labels:
+                    hint = format_speaker_hint(label)
+                    if not hint:
+                        continue
+                    if assigned_hint and hint == assigned_hint:
+                        continue
+                    hint_tokens.append(hint)
+                hint_tokens = sorted(set(hint_tokens))
+
+                if hint_tokens:
+                    new_hint = '+'.join(hint_tokens)
+                    if new_hint != current_hint or strip_marker_hint(token) != base_marker:
+                        new_marker = inject_hint_into_marker(base_marker, new_hint)
+                        WordProcessor._set_word_text(word, new_marker)
+                        word['overlap_speakers'] = hint_tokens
+                        stats['annotated'] += 1
+                        segment_updated = True
+                elif current_hint:
+                    WordProcessor._set_word_text(word, base_marker)
+                    word.pop('overlap_speakers', None)
+                    stats['cleared'] += 1
+                    segment_updated = True
+
+            if segment_updated:
+                segment['text'] = WordProcessor.create_paragraph_text_from_words(segment)
+
+        return stats
+
 
 class SpeakerAssigner:
     """Handles speaker assignment logic."""

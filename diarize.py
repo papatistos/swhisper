@@ -52,7 +52,7 @@ from diarize import (
     DiarizationAnalyzer, SegmentAnalyzer, BoundaryAnalyzer, StatsExporter,
     VTTFormatter, RTTMFormatter, RTFFormatter, TXTFormatter, TSVFormatter, PyannoteSegmentFormatter
 )
-from diarize.utils import logger_manager, BackfillTranscriber, BackfillCache
+from diarize.utils import logger_manager, BackfillTranscriber, BackfillCache, WordProcessor
 from transcribe import TranscriptionConfig, WhisperSettings
 
 
