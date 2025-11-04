@@ -20,6 +20,7 @@ import json
 import signal as sys_signal
 import atexit
 import multiprocessing as mp
+from typing import Optional
 from contextlib import contextmanager
 from datetime import datetime
 
@@ -74,16 +75,38 @@ class TranscriptionApp:
             print(f"💾 Checkpoints will be read/written in: {checkpoint_root}")
 
             # Find and convert audio files
-            source_output_dir = os.path.join(self.workspace_manager.original_audio_dir, self.config.json_dir)
-            wav_files = self.file_manager.find_and_convert_audio_files(audio_dir, output_dir, source_output_dir)
-            
-            if not wav_files:
+            source_output_dir = os.path.join(source_audio_dir, self.config.json_dir)
+            audio_queue = self.file_manager.get_audio_files_to_process(source_audio_dir, source_output_dir)
+
+            if not audio_queue:
                 print("✅ No new audio files to process.")
                 return
             
             # Process each audio file
-            for wav_file in wav_files:
-                self._process_single_file(wav_file, audio_dir, output_dir)
+            total_files = len(audio_queue)
+            for index, original_file in enumerate(audio_queue, start=1):
+                print(f"\n📦 Audio file {index}/{total_files}: {original_file}")
+                staged_path = self.workspace_manager.stage_audio_file(original_file)
+                if not staged_path:
+                    print(f"❌ Skipping {original_file} (staging failed)")
+                    continue
+
+                staged_dir = os.path.dirname(staged_path)
+                staged_filename = os.path.basename(staged_path)
+                wav_filename = self.file_manager.prepare_staged_audio_file(staged_dir, staged_filename)
+
+                if not wav_filename:
+                    print(f"❌ Skipping {original_file} (failed to prepare staged copy)")
+                    continue
+
+                self._process_single_file(
+                    wav_filename,
+                    staged_dir,
+                    output_dir,
+                    index,
+                    total_files,
+                    original_label=original_file
+                )
             
             print("\n" + "=" * 60)
             print("✅ All transcriptions completed successfully!")
