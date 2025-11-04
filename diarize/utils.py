@@ -127,6 +127,21 @@ class WordProcessor:
     """Processes words and segments for speaker assignment."""
     
     @staticmethod
+    def _get_word_text(word: Dict[str, Any]) -> str:
+        """Fetch the primary textual representation for a word token."""
+        value = word.get('word')
+        if isinstance(value, str) and value:
+            return value
+        value = word.get('text')
+        return value if isinstance(value, str) else ""
+
+    @staticmethod
+    def _set_word_text(word: Dict[str, Any], new_text: str) -> None:
+        """Synchronize word/text fields after updating marker contents."""
+        word['word'] = new_text
+        word['text'] = new_text
+
+    @staticmethod
     def align_segment_boundaries_to_words(segments: List[Dict]) -> List[Dict]:
         """
         Adjust segment start/end timestamps to match first/last word timestamps.
@@ -933,13 +948,100 @@ class SilenceMarkerProcessor:
 STATIC_MARKERS = {"[DISCONTINUITY]", "[SILENCE]", "[OVERLAP]"}
 DISFLUENCY_MARKER_PATTERN = re.compile(r"^\[\*+\]$")
 SPACED_MARKER_PATTERN = re.compile(r"^\[\s\*{1,50}\s\]$")
+MARKER_INLINE_HINT_PATTERN = re.compile(r"^\[(\s*)(S\d{2}(?:[+/]S\d{2})*)(\*+)(\s*)\]$")
+MARKER_PREFIX_HINT_PATTERN = re.compile(r"^(S\d{2}(?:[+/]S\d{2})*)\s+")
+
+
+def strip_marker_hint(token: str) -> str:
+    """Remove leading speaker hint prefixes from a marker token."""
+    if not isinstance(token, str):
+        return ""
+    cleaned = token.strip()
+    inline = MARKER_INLINE_HINT_PATTERN.match(cleaned)
+    if inline:
+        leading_spaces = inline.group(1)
+        stars = inline.group(3)
+        trailing_spaces = inline.group(4)
+        return f"[{leading_spaces}{stars}{trailing_spaces}]"
+    return MARKER_PREFIX_HINT_PATTERN.sub("", cleaned)
+
+
+def split_marker_hint_and_body(token: str) -> Tuple[str, str]:
+    """Return the hint prefix (if present) and the base marker body."""
+    if not isinstance(token, str):
+        return "", ""
+    cleaned = token.strip()
+    inline = MARKER_INLINE_HINT_PATTERN.match(cleaned)
+    if inline:
+        leading_spaces = inline.group(1)
+        hint = inline.group(2)
+        stars = inline.group(3)
+        trailing_spaces = inline.group(4)
+        base_marker = f"[{leading_spaces}{stars}{trailing_spaces}]"
+        return hint, base_marker
+    match = MARKER_PREFIX_HINT_PATTERN.match(cleaned)
+    if match:
+        hint = match.group(1)
+        remainder = cleaned[match.end():].lstrip()
+        return hint, remainder
+    return "", cleaned
+
+
+def inject_hint_into_marker(marker_body: str, hint: str) -> str:
+    """Place the speaker hint immediately inside the marker brackets."""
+    if not marker_body or not hint:
+        return marker_body
+
+    cleaned = marker_body.strip()
+
+    inline = MARKER_INLINE_HINT_PATTERN.match(cleaned)
+    if inline:
+        leading_spaces = inline.group(1)
+        stars = inline.group(3)
+        trailing_spaces = inline.group(4)
+        return f"[{leading_spaces}{hint}{stars}{trailing_spaces}]"
+
+    if cleaned.startswith('[') and cleaned.endswith(']'):
+        inner = cleaned[1:-1]
+        if inner:
+            first_star = inner.find('*')
+            if first_star != -1:
+                return f"[{inner[:first_star]}{hint}{inner[first_star:]}]"
+            if set(inner.replace(' ', '')) <= {'*'}:
+                return f"[{hint}{inner}]"
+
+    return f"{hint} {marker_body}".strip()
+
+
+def format_speaker_hint(label: Optional[str]) -> str:
+    """Convert diarization speaker labels into the compact Sxx hint form."""
+    if not label or not isinstance(label, str):
+        return ""
+
+    if label.upper() in {"SILENCE", "UNKNOWN"}:
+        return ""
+
+    match = re.search(r"(\d+)", label)
+    if match:
+        try:
+            index = int(match.group(1))
+            return f"S{index + 1:02d}"
+        except ValueError:
+            pass
+
+    alnum = re.sub(r"[^A-Za-z0-9]", "", label).upper()
+    if not alnum:
+        return ""
+    if len(alnum) <= 3:
+        return alnum
+    return alnum[:3]
 
 
 def is_marker_token(token: str) -> bool:
     """Return True for preserved markers, including variable-length asterisk forms."""
     if not token:
         return False
-    cleaned = token.strip()
+    cleaned = strip_marker_hint(token)
     return (
         cleaned in STATIC_MARKERS
         or bool(DISFLUENCY_MARKER_PATTERN.match(cleaned))
