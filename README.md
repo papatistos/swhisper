@@ -146,7 +146,7 @@ See `.swhisper.env.example` for the complete list of all 100+ available settings
 
 ### Running the transcription and diarization pipeline§
 
-To run the full transcription and diarization pipeline, simply execute:
+To run the full transcription and diarization pipeline, simply execute: 
 
 ```bash
 python transcribe.py
