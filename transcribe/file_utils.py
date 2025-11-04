@@ -94,6 +94,14 @@ class AudioConverter:
         except Exception:
             return False
 
+    def probe_wav(self, wav_path: str) -> Tuple[Optional[int], Optional[int]]:
+        """Inspect WAV metadata, returning sample rate and channel count if available."""
+        try:
+            with sf.SoundFile(wav_path) as f:
+                return f.samplerate, f.channels
+        except Exception:
+            return None, None
+
 
 class FileManager:
     """Manage file discovery and organization."""
@@ -120,14 +128,21 @@ class FileManager:
             print(f"Error: The directory '{audio_dir}' was not found.")
             return []
     
-    def find_and_convert_audio_files(self, audio_dir: str, output_dir: str, source_output_dir: str) -> List[str]:
-        """Find audio files, filter out processed ones, and convert if needed."""
+    def get_audio_files_to_process(self, audio_dir: str, source_output_dir: str) -> List[str]:
+        """Identify audio files that still need processing, respecting file limits."""
         audio_files = self.find_audio_files(audio_dir)
         print(f"Found {len(audio_files)} audio/video files")
 
-        unprocessed_files = []
+        if not audio_files:
+            return []
+
         if not self.config.force_reprocess and os.path.exists(source_output_dir):
-            existing_json_basenames = {os.path.splitext(f)[0] for f in os.listdir(source_output_dir) if f.endswith('.json')}
+            existing_json_basenames = {
+                os.path.splitext(f)[0]
+                for f in os.listdir(source_output_dir)
+                if f.endswith('.json')
+            }
+            unprocessed_files = []
             for audio_file in audio_files:
                 base_name = os.path.splitext(audio_file)[0]
                 if base_name in existing_json_basenames:
@@ -137,74 +152,108 @@ class FileManager:
         else:
             unprocessed_files = audio_files
 
-        # Apply file limit *after* filtering
-        files_to_consider = unprocessed_files[:self.config.file_limit]
+        if self.config.file_limit is not None:
+            files_to_consider = unprocessed_files[:self.config.file_limit]
+        else:
+            files_to_consider = unprocessed_files
 
-        # Separate WAV files from non-WAV files
-        wav_files = [f for f in files_to_consider if f.lower().endswith('.wav')]
-        non_wav_files = [f for f in files_to_consider if not f.lower().endswith('.wav')]
-        
-        ready_wav_files = []
-        wav_files_to_convert = []
-        
-        # Process existing WAV files
-        for wav_file in wav_files:
-            input_path = os.path.join(audio_dir, wav_file)
-            if self.converter.is_wav_ready(input_path):
-                ready_wav_files.append(wav_file)
-                print(f"  ✅ {wav_file} (ready)")
-            else:
-                wav_files_to_convert.append(wav_file)
-                print(f"  🔄 {wav_file} (needs format conversion)")
-        
-        # Mark non-WAV files for conversion
-        non_wavs_to_convert = non_wav_files
-        for audio_file in non_wavs_to_convert:
-            print(f"  🔄 {audio_file} (needs conversion to WAV)")
-
-        print(f"\n📊 File Status Summary:")
-        print(f"   Ready WAV files: {len(ready_wav_files)}")
-        print(f"   WAV files needing format conversion: {len(wav_files_to_convert)}")
-        print(f"   Non-WAV files needing conversion: {len(non_wavs_to_convert)}")
-        
-        final_wav_files = ready_wav_files.copy()
-        converted_files = []
-
-        # Convert files as needed
-        if len(final_wav_files) < len(files_to_consider):
-            # Convert WAV format issues first (faster)
-            for wav_file in wav_files_to_convert:
-                if self._convert_wav_file(audio_dir, wav_file):
-                    final_wav_files.append(wav_file)
-                    converted_files.append(wav_file)
-            
-            # Convert non-WAV files
-            for audio_file in non_wavs_to_convert:
-                if self.config.file_limit is not None and len(final_wav_files) >= self.config.file_limit:
-                    break
-                if self._convert_non_wav_file(audio_dir, audio_file):
-                    base_name = os.path.splitext(audio_file)[0]
-                    wav_filename = f"{base_name}.wav"
-                    final_wav_files.append(wav_filename)
-                    converted_files.append(wav_filename)
-
-        # Remove duplicates while preserving order
-        final_wav_files = list(dict.fromkeys(final_wav_files))
-        
-        if converted_files:
-            print(f"\n📁 Converted {len(converted_files)} files:")
-            for f in converted_files:
-                print(f"  ✅ {f}")
-        
-        if not final_wav_files:
-            print(f"❌ No new audio files to process in '{audio_dir}'")
+        if not files_to_consider:
+            print("❌ No new audio files to process.")
             return []
-        
-        print(f"\n🎵 Ready to process {len(final_wav_files)} WAV files:")
-        for f in sorted(final_wav_files):
+
+        if ENABLE_EARLY_FORMAT_SUMMARY:
+            ready_wavs: List[str] = []
+            wavs_to_fix: List[str] = []
+            non_wavs: List[str] = []
+
+            for filename in files_to_consider:
+                if filename.lower().endswith('.wav'):
+                    input_path = os.path.join(audio_dir, filename)
+                    if self.converter.is_wav_ready(input_path):
+                        ready_wavs.append(filename)
+                    else:
+                        wavs_to_fix.append(filename)
+                else:
+                    non_wavs.append(filename)
+
+            print("\n📊 File Status Summary:")
+            print(f"   Ready WAV files: {len(ready_wavs)}")
+            print(f"   WAV files needing format conversion: {len(wavs_to_fix)}")
+            print(f"   Non-WAV files needing conversion: {len(non_wavs)}")
+        else:
+            wav_candidates = [f for f in files_to_consider if f.lower().endswith('.wav')]
+            non_wav_candidates = [f for f in files_to_consider if not f.lower().endswith('.wav')]
+
+            print("\n📊 File Status Summary:")
+            print(f"   WAV files detected: {len(wav_candidates)} (format will be verified when staged)")
+            print(f"   Non-WAV files: {len(non_wav_candidates)} (will convert on demand)")
+
+        listed = sorted(files_to_consider)
+        preview_count = min(10, len(listed))
+        print(f"\n🎵 Queued {len(files_to_consider)} files for staged processing:")
+        for f in listed[:preview_count]:
             print(f"  - {f}")
-        
-        return final_wav_files
+        if len(listed) > preview_count:
+            print(f"  … and {len(listed) - preview_count} more")
+
+        return files_to_consider
+
+    def prepare_staged_audio_file(self, staging_dir: str, staged_filename: str) -> Optional[str]:
+        """Ensure the staged file is a 16kHz mono WAV and return its filename."""
+        staged_path = os.path.join(staging_dir, staged_filename)
+        if not os.path.exists(staged_path):
+            print(f"❌ Staged file missing: {staged_filename}")
+            return None
+
+        if staged_filename.lower().endswith('.wav'):
+            sample_rate, channels = self.converter.probe_wav(staged_path)
+            ready = sample_rate == 16000 and (channels in (None, 1))
+
+            if ready:
+                info = "16kHz"
+                if channels:
+                    info += f", {channels} channel{'s' if channels != 1 else ''}"
+                print(f"  ✅ {staged_filename} ({info})")
+                return staged_filename
+
+            print(f"  🔄 {staged_filename} (needs format conversion)")
+            if sample_rate and channels:
+                print(
+                    f"      Detected {sample_rate}Hz, {channels} channel"
+                    f"{'s' if channels != 1 else ''}; converting to 16kHz mono"
+                )
+            elif sample_rate:
+                print(f"      Detected {sample_rate}Hz; converting to 16kHz mono")
+            elif channels:
+                print(
+                    f"      Detected {channels} channel"
+                    f"{'s' if channels != 1 else ''}; ensuring 16kHz mono"
+                )
+            else:
+                print("      Could not read WAV metadata reliably; forcing conversion")
+
+            if self._convert_wav_file(staging_dir, staged_filename):
+                return staged_filename
+            return None
+
+        print(f"  🔄 {staged_filename} (converting staged copy to WAV)")
+        if self._convert_non_wav_file(staging_dir, staged_filename):
+            base_name = os.path.splitext(staged_filename)[0]
+            wav_filename = f"{base_name}.wav"
+            original_path = staged_path
+            if os.path.exists(original_path):
+                try:
+                    os.remove(original_path)
+                except Exception as exc:
+                    print(f"⚠️  Warning: Could not remove staged original '{staged_filename}': {exc}")
+            return wav_filename
+
+        return None
+
+    def find_and_convert_audio_files(self, audio_dir: str, output_dir: str, source_output_dir: str) -> List[str]:
+        """Deprecated helper retained for backward compatibility."""
+        print("⚠️  find_and_convert_audio_files is deprecated; using staged processing plan instead.")
+        return self.get_audio_files_to_process(audio_dir, source_output_dir)
     
     def _convert_wav_file(self, audio_dir: str, wav_file: str) -> bool:
         """Convert WAV file to correct format."""
