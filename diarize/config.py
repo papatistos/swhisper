@@ -145,6 +145,7 @@ class DiarizationConfig:
     backfill_cache_enabled: bool = _get_env_bool("SWHISPER_BACKFILL_CACHE_ENABLED", True)
     backfill_cache_dir: Optional[str] = os.getenv("SWHISPER_BACKFILL_CACHE_DIR") if os.getenv("SWHISPER_BACKFILL_CACHE_DIR") else None
     backfill_min_duration: float = _get_env_float("SWHISPER_BACKFILL_MIN_DURATION", 0.1)
+    backfill_ignore_words: List[str] = None  # Words to replace with disfluency markers (e.g., hallucinations like "Balans")
 
 
     
@@ -200,6 +201,14 @@ Note 3: Speaker detection is not perfect. The transcript may show too few or too
                 if token:
                     self.precision_api_token = token
                     break
+        # Parse comma-separated list of words to ignore in backfill
+        if self.backfill_ignore_words is None:
+            ignore_words_str = os.getenv("SWHISPER_BACKFILL_IGNORE_WORDS", "")
+            if ignore_words_str:
+                # Split by comma and normalize (strip whitespace, convert to lowercase for case-insensitive matching)
+                self.backfill_ignore_words = [w.strip().lower() for w in ignore_words_str.split(",") if w.strip()]
+            else:
+                self.backfill_ignore_words = []
     
     @property
     def audio_dir(self) -> str:
