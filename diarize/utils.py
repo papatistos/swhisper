@@ -1037,6 +1037,19 @@ class BackfillTranscriber:
                     print(f"   -> Backfill error for {speaker} {start:.2f}-{end:.2f}s: {exc}")
                     segment, word_count = None, 0
 
+            # Apply word filtering (for both cached and newly transcribed)
+            if segment:
+                segment, filtered_count = self._apply_word_filtering(segment)
+                if filtered_count > 0:
+                    filtered_originals = [
+                        w.get('original_word', '') 
+                        for w in segment.get('words', []) 
+                        if w.get('is_filtered_hallucination')
+                    ]
+                    print(f"      🚫 Filtered {filtered_count} hallucinated word(s): {', '.join(filtered_originals)}")
+                    # Update word count after filtering
+                    word_count = len(segment.get('words', []))
+
             is_placeholder = bool(segment and segment.get('is_placeholder'))
 
             if segment and (word_count or is_placeholder):
