@@ -127,13 +127,17 @@ class TranscriptionApp:
         finally:
             self._cleanup()
 
-    def _process_single_file(self, wav_file: str, audio_dir: str, output_dir: str):
+    def _process_single_file(self, wav_file: str, audio_dir: str, output_dir: str,
+                              file_index: int, total_files: int,
+                              original_label: Optional[str] = None):
         """Process a single audio file."""
         audiofile_path = os.path.join(audio_dir, wav_file)
         base_name = os.path.splitext(wav_file)[0]
         output_path = os.path.join(output_dir, f"{base_name}.json")
+
+        file_label = original_label or wav_file
         
-        print(f"\n🎵 Processing: {wav_file}")
+        print(f"\n🎵 Processing ({file_index}/{total_files}): {file_label}")
         print("-" * 40)
         
         # Check for existing checkpoint
@@ -189,11 +193,24 @@ class TranscriptionApp:
 
             # Use unified processing path with resume parameters
             result = self.transcription_pipeline.process_audio_file(
-                audiofile_path, boundaries, output_path, start_chunk, chunk_results
+                audiofile_path,
+                boundaries,
+                output_path,
+                start_chunk,
+                chunk_results,
+                file_label=file_label,
+                file_index=file_index,
+                total_files=total_files
             )
         else:
             # Start fresh processing
-            result = self._process_from_start(audiofile_path, output_path)
+            result = self._process_from_start(
+                audiofile_path,
+                output_path,
+                file_label,
+                file_index,
+                total_files
+            )
         
         # Save final result
         self._save_transcription_result(result, output_path)
@@ -206,7 +223,10 @@ class TranscriptionApp:
         if checkpoint_path:
             self.checkpoint_manager.cleanup_checkpoint(checkpoint_path)
     
-    def _process_from_start(self, audiofile_path: str, output_path: str) -> dict:
+    def _process_from_start(self, audiofile_path: str, output_path: str,
+                            file_label: str,
+                            file_index: int,
+                            total_files: int) -> dict:
         """Process audio file from the beginning."""
         # Get audio duration
         duration, sample_rate = self.audio_processor.get_audio_duration(audiofile_path)
@@ -215,7 +235,7 @@ class TranscriptionApp:
         # Determine if chunking is needed
         if duration <= self.config.target_chunk_duration:
             print("🔄 File is short enough - processing as single chunk")
-            return self._process_single_chunk(audiofile_path)
+            return self._process_single_chunk(audiofile_path, file_label, file_index, total_files)
         
         print("🔄 File requires chunking - analyzing speech patterns...")
         
@@ -231,21 +251,29 @@ class TranscriptionApp:
             print(f"   Chunk {i+1}: {boundaries[i]:.1f}s - {boundaries[i+1]:.1f}s ({chunk_duration:.1f}s)")
         
         # Process chunks
-        return self.transcription_pipeline.process_audio_file(audiofile_path, boundaries, output_path)
+        return self.transcription_pipeline.process_audio_file(
+            audiofile_path,
+            boundaries,
+            output_path,
+            file_label=file_label,
+            file_index=file_index,
+            total_files=total_files
+        )
     
-    def _process_single_chunk(self, audiofile_path: str) -> dict:
+    def _process_single_chunk(self, audiofile_path: str, file_label: str,
+                              file_index: int, total_files: int) -> dict:
         """Process a single audio file without chunking."""
         # Implementation for single chunk processing
         # This would use the existing whisper transcription directly
         import whisper_timestamped as whisper
         
         with self._safe_whisper_model() as model:
-            print("🔄 Loading audio...")
+            print(f"[{file_label}] 🔄 Loading audio (file {file_index}/{total_files})...")
             audio_data, _ = self.audio_processor.load_audio_chunk(
                 audiofile_path, 0, float('inf')
             )
             
-            print("🔄 Transcribing...")
+            print(f"[{file_label}] 🔄 Transcribing...")
             result = whisper.transcribe(model, audio_data, **self.whisper_settings.to_dict())
             
             return result
