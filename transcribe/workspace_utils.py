@@ -1,5 +1,6 @@
 """Workspace and temporary directory management."""
 
+import errno
 import os
 import tempfile
 import shutil
@@ -51,44 +52,94 @@ class WorkspaceManager:
         print(f"   📁 Output files: {self.temp_output_dir}")
         print(f"   💾 Checkpoint preservation: {'Enabled' if self.config.preserve_checkpoints else 'Disabled'}")
         
-        self._copy_audio_files_to_temp()
-        
         return self.temp_dir
     
-    def _copy_audio_files_to_temp(self):
-        """Copy audio files from source to temp directory."""
+    def stage_audio_file(self, filename: str) -> Optional[str]:
+        """Copy a single audio file into the temp workspace, replacing any previous file."""
+        if not self.original_audio_dir:
+            self.original_audio_dir = self.config.audio_dir
+
+        if not self.original_audio_dir:
+            print("❌ No source audio directory configured")
+            return None
+
+        if not self.temp_audio_dir:
+            print("❌ Temporary audio workspace is not initialized")
+            return None
+
+        src_path = os.path.join(self.original_audio_dir, filename)
+        if not os.path.exists(src_path):
+            print(f"❌ Source file not found: {filename}")
+            return None
+
+        # Try to ensure the file is hydrated locally if it lives in cloud storage.
+        if not self._ensure_local_file(src_path):
+            return None
+
+        # Remove any previously staged audio before copying the next file.
+        self._cleanup_temp_audio()
+
+        os.makedirs(self.temp_audio_dir, exist_ok=True)
+        dst_path = os.path.join(self.temp_audio_dir, filename)
+
         try:
-            files_in_dir = os.listdir(self.original_audio_dir)
-            audio_files = [f for f in files_in_dir if self._is_audio_file(f)]
-            
-            if not audio_files:
-                print("📋 No audio files found to copy")
-                return
-            
-            print(f"📋 Copying {len(audio_files)} audio files to temp workspace...")
-            
-            copied_files = []
-            failed_files = []
-            
-            for audio_file in audio_files:
-                src_path = os.path.join(self.original_audio_dir, audio_file)
-                dst_path = os.path.join(self.temp_audio_dir, audio_file)
-                
+            shutil.copy2(src_path, dst_path)
+            print(f"🚚 Staged '{filename}' → {self.temp_audio_dir}")
+            return dst_path
+        except Exception as exc:
+            # Retry once after forcing hydration, in case the cloud provider
+            # delivered the bytes lazily.
+            if self._ensure_local_file(src_path, force=True):
                 try:
                     shutil.copy2(src_path, dst_path)
-                    copied_files.append(audio_file)
-                    print(f"  ✅ {audio_file}")
-                except Exception as e:
-                    failed_files.append(audio_file)
-                    print(f"  ❌ {audio_file}: {e}")
-            
-            if failed_files:
-                print(f"⚠️  Warning: {len(failed_files)} files could not be copied")
-            
-            print(f"✅ Successfully copied {len(copied_files)} files to temp workspace")
-            
-        except Exception as e:
-            print(f"❌ Error copying files to temp workspace: {e}")
+                    print(f"🚚 Staged '{filename}' → {self.temp_audio_dir}")
+                    return dst_path
+                except Exception as retry_exc:
+                    print(f"❌ Failed to stage {filename}: {retry_exc}")
+                    return None
+
+            print(f"❌ Failed to stage {filename}: {exc}")
+            return None
+
+    def _ensure_local_file(self, path: str, *, force: bool = False) -> bool:
+        """Best-effort hydration for cloud-managed files (OneDrive, iCloud, etc.)."""
+        if not os.path.exists(path):
+            print(f"❌ Source file not found on disk: {os.path.basename(path)}")
+            return False
+
+        # When not forcing, try a single quick touch to avoid unnecessary waits.
+        attempts = 2 if not force else 4
+        backoff = 1.0
+
+        for attempt in range(1, attempts + 1):
+            try:
+                with open(path, "rb") as handle:
+                    handle.read(4096)
+                return True
+            except (FileNotFoundError, PermissionError, OSError) as exc:
+                errno_code = getattr(exc, "errno", None)
+                transient_codes = {
+                    errno.EBUSY,
+                    errno.EIO,
+                    errno.ENOENT,
+                    errno.EAGAIN,
+                    errno.EACCES,
+                }
+                transient = errno_code in transient_codes or isinstance(exc, PermissionError)
+
+                if not transient and not isinstance(exc, FileNotFoundError):
+                    print(f"❌ Unable to access {os.path.basename(path)}: {exc}")
+                    return False
+
+                print(
+                    f"⏳ Waiting for cloud file to hydrate: {os.path.basename(path)}"
+                    f" (attempt {attempt}/{attempts})"
+                )
+                time.sleep(backoff)
+                backoff *= 1.5
+
+        print(f"❌ File never became available locally: {os.path.basename(path)}")
+        return False
     
     def _cleanup_temp_audio(self):
         """Clean up any existing audio files from previous runs to ensure fresh start."""
@@ -98,18 +149,26 @@ class WorkspaceManager:
         if os.path.exists(self.temp_audio_dir):
             try:
                 # Remove all files in the temp audio directory
+                removed_any = False
                 for item in os.listdir(self.temp_audio_dir):
                     item_path = os.path.join(self.temp_audio_dir, item)
                     try:
                         if os.path.isfile(item_path):
                             os.remove(item_path)
+                            removed_any = True
                         elif os.path.isdir(item_path):
                             shutil.rmtree(item_path)
+                            removed_any = True
                     except Exception as e:
                         print(f"⚠️  Warning: Could not remove {item_path}: {e}")
-                print(f"🧹 Cleaned up existing temp audio files")
+                if removed_any:
+                    print("🧹 Cleaned up existing temp audio files")
             except Exception as e:
                 print(f"⚠️  Warning: Could not clean temp audio directory: {e}")
+
+    def get_source_audio_dir(self) -> str:
+        """Return the directory where original audio files reside."""
+        return self.original_audio_dir or self.config.audio_dir
 
     def _is_audio_file(self, filename: str) -> bool:
         """Check if file is a supported audio format."""

@@ -66,7 +66,7 @@ class TranscriptionApp:
 
             # Setup workspace
             workspace_dir = self.workspace_manager.setup_temp_workspace()
-            audio_dir = self.workspace_manager.get_audio_dir()
+            source_audio_dir = self.workspace_manager.get_source_audio_dir()
             output_dir = self.workspace_manager.get_output_dir()
             # Use a single, deterministic checkpoint root for both save and load.
             checkpoint_root = getattr(self.workspace_manager, "temp_dir", None) or output_dir
