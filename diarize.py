@@ -153,6 +153,27 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             print(f"{starttime.strftime('%Y-%m-%d %H:%M:%S')} - Step 1: Loading transcription from {json_file}...")
             with open(json_path, 'r', encoding='utf-8') as f:
                 whisper_result = json.load(f)
+            
+            # Apply timestamp offset for better alignment with audio and pyannote segments
+            if config.whisper_timestamp_offset != 0.0:
+                print(f"  -> Applying Whisper timestamp offset: {config.whisper_timestamp_offset:+.3f}s")
+                for segment in whisper_result.get('segments', []):
+                    if 'start' in segment:
+                        segment['start'] += config.whisper_timestamp_offset
+                    if 'end' in segment:
+                        segment['end'] += config.whisper_timestamp_offset
+                    for word in segment.get('words', []):
+                        if 'start' in word:
+                            word['start'] += config.whisper_timestamp_offset
+                        if 'end' in word:
+                            word['end'] += config.whisper_timestamp_offset
+                # Also adjust VAD segments if present
+                for vad_span in whisper_result.get('speech_activity', []):
+                    if 'start' in vad_span:
+                        vad_span['start'] += config.whisper_timestamp_offset
+                    if 'end' in vad_span:
+                        vad_span['end'] += config.whisper_timestamp_offset
+            
             endtime = datetime.now()
             duration = endtime - starttime
             print(f"{endtime.strftime('%Y-%m-%d %H:%M:%S')} - Transcription loaded. (Duration: {duration})")

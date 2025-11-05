@@ -129,6 +129,9 @@ class DiarizationConfig:
     log_silence_gaps: bool = _get_env_bool("SWHISPER_LOG_SILENCE", False)  # If true, between-word-gap-durations will be logged in separate file
     silence_gap_linebreak_threshold: Optional[float] = _get_env_float("SWHISPER_SILENCE_LINEBREAK", 1.0) if os.getenv("SWHISPER_SILENCE_LINEBREAK") else 1.0  # Surround long silences with blank lines in transcripts. Set to 0 for no linebreaks
 
+    # Timestamp correction
+    whisper_timestamp_offset: float = _get_env_float("SWHISPER_WHISPER_TIMESTAMP_OFFSET", 0.1)  # Offset to add to all Whisper timestamps for better alignment with audio and pyannote segments (default: 0.1s)
+
     # Word-level processing
     smoothing_enabled: bool = _get_env_bool("SWHISPER_SMOOTHING_ENABLED", True)
     min_speaker_words: int = _get_env_int("SWHISPER_MIN_SPEAKER_WORDS", 3)
