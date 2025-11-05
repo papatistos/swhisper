@@ -31,6 +31,9 @@ def _load_env_file() -> None:
         key, value = line.split("=", 1)
         key = key.strip()
         value = value.strip().strip('"').strip("'")
+        # Strip inline comments (but not from quoted values)
+        if '#' in value and ('"' not in value and "'" not in value):
+            value = value.split('#')[0].strip()
         # Decode common escape sequences
         value = value.replace('\\n', '\n').replace('\\t', '\t').replace('\\r', '\r')
         if key and value and key not in os.environ:

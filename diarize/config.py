@@ -147,6 +147,10 @@ class DiarizationConfig:
     backfill_min_duration: float = _get_env_float("SWHISPER_BACKFILL_MIN_DURATION", 0.1)
     backfill_ignore_words: List[str] = None  # Words to replace with disfluency markers (e.g., hallucinations like "Balans")
 
+    # Diarization caching (cache raw pyannote results)
+    diarization_cache_enabled: bool = _get_env_bool("SWHISPER_DIARIZATION_CACHE_ENABLED", True)
+    diarization_cache_dir: Optional[str] = os.getenv("SWHISPER_DIARIZATION_CACHE_DIR") if os.getenv("SWHISPER_DIARIZATION_CACHE_DIR") else None
+
 
     
     # Output formatting
