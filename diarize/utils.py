@@ -789,6 +789,206 @@ class BackfillMerger:
         return final_segments
     
     @staticmethod
+    def split_leading_and_trailing_crosstalk(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Split out leading and trailing cross-talk markers into separate turns.
+        
+        Examples:
+          - Trailing: "word [S02****] (.7)" becomes two turns:
+            * Turn 1: "word"
+            * Turn 2: "[****] (.7)"  (assigned to S02)
+          
+          - Leading: "[S03*****] (.3) word" becomes two turns:
+            * Turn 1: "[*****] (.3)" (assigned to S03)
+            * Turn 2: "word"
+        """
+        import re
+        result_segments = []
+        trailing_split_count = 0
+        leading_split_count = 0
+        
+        for segment in segments:
+            words = segment.get('words', [])
+            if not words:
+                result_segments.append(segment)
+                continue
+            
+            # Check for LEADING cross-talk markers (at the beginning)
+            # Work forwards from the start
+            leading_split_index = None
+            leading_crosstalk_speaker = None
+            
+            for i in range(len(words)):
+                word = words[i]
+                word_text = word.get('word', word.get('text', ''))
+                
+                # Skip leading silence markers
+                if word.get('is_silence_marker', False):
+                    continue
+                
+                # Check if this is a disfluency marker with cross-talk hint
+                match = re.match(r'\[S(\d+)\*+\]', word_text)
+                if match:
+                    # Found leading cross-talk marker
+                    speaker_num = match.group(1)
+                    leading_crosstalk_speaker = f"SPEAKER_{speaker_num}"
+                    # Find the end of the cross-talk section (last consecutive marker or silence)
+                    leading_split_index = i + 1
+                    # Continue to include any following silence or cross-talk markers
+                    for j in range(i + 1, len(words)):
+                        next_word = words[j]
+                        next_text = next_word.get('word', next_word.get('text', ''))
+                        if next_word.get('is_silence_marker', False) or re.match(r'\[S(\d+)\*+\]', next_text):
+                            leading_split_index = j + 1
+                        else:
+                            break
+                    break
+                else:
+                    # Found a regular word, no leading cross-talk
+                    break
+            
+            # Check for TRAILING cross-talk markers (at the end)
+            # Work backwards from the end
+            trailing_split_index = None
+            trailing_crosstalk_speaker = None
+            
+            for i in range(len(words) - 1, -1, -1):
+                word = words[i]
+                word_text = word.get('word', word.get('text', ''))
+                
+                # Skip trailing silence markers
+                if word.get('is_silence_marker', False):
+                    continue
+                
+                # Check if this is a disfluency marker with cross-talk hint
+                match = re.match(r'\[S(\d+)\*+\]', word_text)
+                if match:
+                    # Found trailing cross-talk marker
+                    speaker_num = match.group(1)
+                    trailing_crosstalk_speaker = f"SPEAKER_{speaker_num}"
+                    trailing_split_index = i
+                    break
+                else:
+                    # Found a regular word, no trailing cross-talk
+                    break
+            
+            # Now handle the splits
+            # If we found both leading and trailing cross-talk, split into 3 segments
+            if leading_split_index is not None and trailing_split_index is not None and leading_split_index < trailing_split_index:
+                leading_split_count += 1
+                trailing_split_count += 1
+                print(f"[DEBUG] Found leading AND trailing cross-talk: leading_speaker={leading_crosstalk_speaker}, trailing_speaker={trailing_crosstalk_speaker}, segment_speaker={segment.get('speaker')}")
+                
+                # Three parts: leading cross-talk | middle content | trailing cross-talk
+                leading_words = words[:leading_split_index]
+                middle_words = words[leading_split_index:trailing_split_index]
+                trailing_words = words[trailing_split_index:]
+                
+                # Clean and reassign leading cross-talk words
+                for word in leading_words:
+                    if not word.get('is_silence_marker', False):
+                        word_text = word.get('word', word.get('text', ''))
+                        cleaned_text = re.sub(r'\[S\d+(\*+)\]', r'[\1]', word_text)
+                        word['word'] = cleaned_text
+                        word['text'] = cleaned_text
+                    word['speaker'] = leading_crosstalk_speaker
+                
+                # Clean and reassign trailing cross-talk words
+                for word in trailing_words:
+                    if not word.get('is_silence_marker', False):
+                        word_text = word.get('word', word.get('text', ''))
+                        cleaned_text = re.sub(r'\[S\d+(\*+)\]', r'[\1]', word_text)
+                        word['word'] = cleaned_text
+                        word['text'] = cleaned_text
+                    word['speaker'] = trailing_crosstalk_speaker
+                
+                # Create three segments
+                leading_segment = BackfillMerger._create_segment_from_words(
+                    leading_words, leading_crosstalk_speaker, segment
+                )
+                result_segments.append(leading_segment)
+                
+                if middle_words:
+                    middle_segment = BackfillMerger._create_segment_from_words(
+                        middle_words, segment.get('speaker', 'UNKNOWN'), segment
+                    )
+                    result_segments.append(middle_segment)
+                
+                trailing_segment = BackfillMerger._create_segment_from_words(
+                    trailing_words, trailing_crosstalk_speaker, segment
+                )
+                result_segments.append(trailing_segment)
+                
+            elif leading_split_index is not None:
+                # Only leading cross-talk
+                leading_split_count += 1
+                print(f"[DEBUG] Found leading cross-talk: speaker={leading_crosstalk_speaker}, segment_speaker={segment.get('speaker')}")
+                
+                leading_words = words[:leading_split_index]
+                remaining_words = words[leading_split_index:]
+                
+                # Clean and reassign leading cross-talk words
+                for word in leading_words:
+                    if not word.get('is_silence_marker', False):
+                        word_text = word.get('word', word.get('text', ''))
+                        cleaned_text = re.sub(r'\[S\d+(\*+)\]', r'[\1]', word_text)
+                        word['word'] = cleaned_text
+                        word['text'] = cleaned_text
+                    word['speaker'] = leading_crosstalk_speaker
+                
+                # Create two segments
+                leading_segment = BackfillMerger._create_segment_from_words(
+                    leading_words, leading_crosstalk_speaker, segment
+                )
+                print(f"[DEBUG]   Leading segment: {leading_segment['start']:.2f}s - {leading_segment['end']:.2f}s")
+                result_segments.append(leading_segment)
+                
+                if remaining_words:
+                    remaining_segment = BackfillMerger._create_segment_from_words(
+                        remaining_words, segment.get('speaker', 'UNKNOWN'), segment
+                    )
+                    print(f"[DEBUG]   Remaining segment: {remaining_segment['start']:.2f}s - {remaining_segment['end']:.2f}s")
+                    result_segments.append(remaining_segment)
+                
+            elif trailing_split_index is not None:
+                # Only trailing cross-talk
+                trailing_split_count += 1
+                print(f"[DEBUG] Found trailing cross-talk at index {trailing_split_index}: speaker={trailing_crosstalk_speaker}, segment_speaker={segment.get('speaker')}")
+                
+                before_words = words[:trailing_split_index]
+                trailing_words = words[trailing_split_index:]
+                
+                # Only split if there are words before (don't create empty segments)
+                if before_words:
+                    # Create segment for original speaker
+                    before_segment = BackfillMerger._create_segment_from_words(
+                        before_words, segment.get('speaker', 'UNKNOWN'), segment
+                    )
+                    result_segments.append(before_segment)
+                
+                # Clean and reassign trailing cross-talk words
+                for word in trailing_words:
+                    if not word.get('is_silence_marker', False):
+                        word_text = word.get('word', word.get('text', ''))
+                        cleaned_text = re.sub(r'\[S\d+(\*+)\]', r'[\1]', word_text)
+                        word['word'] = cleaned_text
+                        word['text'] = cleaned_text
+                    word['speaker'] = trailing_crosstalk_speaker
+                
+                trailing_segment = BackfillMerger._create_segment_from_words(
+                    trailing_words, trailing_crosstalk_speaker, segment
+                )
+                result_segments.append(trailing_segment)
+            else:
+                # No cross-talk, keep segment as-is
+                result_segments.append(segment)
+        
+        if leading_split_count > 0 or trailing_split_count > 0:
+            print(f"[DEBUG] split_leading_and_trailing_crosstalk: {leading_split_count} leading, {trailing_split_count} trailing")
+        
+        return result_segments
+    
+    @staticmethod
     def _create_silence_marker(start: float, end: float, duration: float) -> Dict[str, Any]:
         """Create a silence marker word with proper formatting."""
         # Round to nearest 0.1 seconds
