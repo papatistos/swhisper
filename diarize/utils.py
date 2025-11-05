@@ -758,6 +758,11 @@ class BackfillMerger:
         # Silence markers stay attached to the preceding speaker
         final_segments = []
         for segment in modified_segments:
+            # Preserve standalone silence segments
+            if segment.get('speaker') == 'SILENCE':
+                final_segments.append(segment)
+                continue
+            
             words = segment.get('words', [])
             if not words:
                 final_segments.append(segment)
