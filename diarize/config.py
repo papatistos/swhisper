@@ -274,6 +274,16 @@ Note 3: Speaker detection is not perfect. The transcript may show too few or too
             }
         }
         
+        # Add VBx clustering parameters (for community-1 pipeline)
+        if hasattr(self, 'vbx_clustering_threshold'):
+            config["vbx_clustering_threshold"] = self.vbx_clustering_threshold
+        if hasattr(self, 'vbx_fa'):
+            config["vbx_fa"] = self.vbx_fa
+        if hasattr(self, 'vbx_fb'):
+            config["vbx_fb"] = self.vbx_fb
+        if hasattr(self, 'community_min_duration_off'):
+            config["community_min_duration_off"] = self.community_min_duration_off
+        
         # Add advanced settings if available
         if hasattr(self, 'use_temporal_constraints') and self.use_temporal_constraints:
             config["temporal_constraints"] = True
