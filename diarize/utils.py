@@ -1116,12 +1116,30 @@ class BackfillTranscriber:
             DeviceManager.clear_device_memory()
 
     def _should_filter_word(self, word_text: str) -> bool:
-        """Check if a word should be filtered (replaced with disfluency marker)."""
+        """Check if a word should be filtered (replaced with disfluency marker).
+        
+        Supports wildcard patterns with asterisk (*) as a wildcard character.
+        Examples: 
+            "*:" matches any word ending with colon (e.g., "Musik:", "Hej:")
+            "test*" matches any word starting with "test"
+            "*test*" matches any word containing "test"
+        """
         if not self.ignore_words:
             return False
-        # Case-insensitive matching - strip punctuation for comparison
-        cleaned = word_text.strip().lower().strip('.,!?;:"\'-')
-        return cleaned in self.ignore_words
+        # Case-insensitive matching - strip some punctuation but keep colon for matching
+        cleaned = word_text.strip().lower().strip('.,!?"\'-')
+        
+        # Check for exact matches first (faster)
+        if cleaned in self.ignore_words:
+            return True
+        
+        # Check for wildcard patterns
+        import fnmatch
+        for pattern in self.ignore_words:
+            if '*' in pattern and fnmatch.fnmatch(cleaned, pattern):
+                return True
+        
+        return False
 
     def _create_disfluency_marker_for_word(self, word: Dict[str, Any]) -> Dict[str, Any]:
         """Replace a word with a disfluency marker based on its duration."""
