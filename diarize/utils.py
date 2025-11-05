@@ -422,6 +422,117 @@ class WordProcessor:
 
         return stats
 
+    @staticmethod
+    def remove_nonoverlapping_markers(
+        segments: List[Dict],
+        diarization_result
+    ) -> Dict[str, int]:
+        """
+        Check all disfluency markers (like [*], [**], etc) against pyannote speaker segments.
+        If a marker doesn't overlap with ANY speaker segment, remove it.
+        The resulting gaps will be handled by the silence marker insertion step.
+        
+        Args:
+            segments: List of transcript segments with words
+            diarization_result: Pyannote diarization result
+            
+        Returns:
+            Dictionary with statistics about removals
+        """
+        stats = {'total_markers': 0, 'removed': 0, 'kept_as_markers': 0}
+
+        if diarization_result is None:
+            return stats
+
+        try:
+            diarization_tracks = list(diarization_result.itertracks(yield_label=True))
+        except Exception:
+            diarization_tracks = []
+
+        if not diarization_tracks:
+            return stats
+
+        for segment in segments:
+            words = segment.get('words', [])
+            if not words:
+                continue
+
+            filtered_words = []
+            segment_updated = False
+
+            for word in words:
+                token = WordProcessor._get_word_text(word)
+                if not token:
+                    filtered_words.append(word)
+                    continue
+
+                # Check if this is a disfluency marker
+                cleaned = strip_marker_hint(token)
+                if not cleaned or not DISFLUENCY_MARKER_PATTERN.match(cleaned):
+                    filtered_words.append(word)
+                    continue
+
+                start = word.get('start')
+                end = word.get('end')
+                if start is None or end is None:
+                    filtered_words.append(word)
+                    continue
+
+                try:
+                    start_f = float(start)
+                    end_f = float(end)
+                except (TypeError, ValueError):
+                    filtered_words.append(word)
+                    continue
+
+                if not math.isfinite(start_f) or not math.isfinite(end_f):
+                    filtered_words.append(word)
+                    continue
+
+                if end_f <= start_f:
+                    filtered_words.append(word)
+                    continue
+
+                stats['total_markers'] += 1
+
+                # Check if this marker overlaps with ANY speaker segment
+                has_overlap = False
+                for overlap_segment, _, label in diarization_tracks:
+                    # Check for temporal overlap
+                    if overlap_segment.end <= start_f or overlap_segment.start >= end_f:
+                        continue
+                    
+                    # There is some overlap
+                    has_overlap = True
+                    break
+
+                if not has_overlap:
+                    # Remove this marker - don't add it to filtered_words
+                    stats['removed'] += 1
+                    segment_updated = True
+                else:
+                    # Keep this marker
+                    stats['kept_as_markers'] += 1
+                    filtered_words.append(word)
+
+            if segment_updated:
+                segment['words'] = filtered_words
+                
+                # Adjust segment boundaries to match remaining words
+                real_words = [w for w in filtered_words if not w.get('is_silence_marker', False)]
+                if real_words:
+                    first_word_start = real_words[0].get('start')
+                    last_word_end = real_words[-1].get('end')
+                    if first_word_start is not None:
+                        segment['start'] = first_word_start
+                    if last_word_end is not None:
+                        segment['end'] = last_word_end
+                
+                # Rebuild segment text
+                segment['text'] = WordProcessor.create_paragraph_text_from_words(segment)
+
+        return stats
+
 
 class SpeakerAssigner:
     """Handles speaker assignment logic."""
