@@ -11,6 +11,7 @@ from .utils import (
     DeviceManager, LoggerManager, SilenceMarkerProcessor,
     WordProcessor, SpeakerAssigner, BackfillTranscriber
 )
+from .diarization_cache import DiarizationCache
 
 # Import the main function from the diarize.py script
 import importlib.util
@@ -52,5 +53,6 @@ __all__ = [
     'SilenceMarkerProcessor',
     'WordProcessor',
     'SpeakerAssigner',
-    'BackfillTranscriber'
+    'BackfillTranscriber',
+    'DiarizationCache'
 ]
