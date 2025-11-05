@@ -265,12 +265,19 @@ class RTFFormatter(TranscriptFormatter):
                 prev_part = parts[i-1]
                 curr_part = parts[i]
                 
-                # If either part contains newlines (indicating a long silence),
-                # don't add a space between them
-                if '\n' in prev_part or '\n' in curr_part:
-                    result += curr_part
-                else:
+                # Check if we need a space separator
+                # Add space unless the previous part ends with whitespace (including newlines)
+                # or the current part starts with whitespace
+                needs_space = True
+                if prev_part and prev_part[-1] in (' ', '\n', '\t', '\r'):
+                    needs_space = False
+                if curr_part and curr_part[0] in (' ', '\n', '\t', '\r'):
+                    needs_space = False
+                
+                if needs_space:
                     result += ' ' + curr_part
+                else:
+                    result += curr_part
             
             return result
         
@@ -738,10 +745,20 @@ class TXTFormatter(TranscriptFormatter):
             for i in range(1, len(parts)):
                 prev_part = parts[i - 1]
                 curr_part = parts[i]
-                if '\n' in prev_part or '\n' in curr_part:
-                    result += curr_part
-                else:
+                
+                # Check if we need a space separator
+                # Add space unless the previous part ends with whitespace (including newlines)
+                # or the current part starts with whitespace
+                needs_space = True
+                if prev_part and prev_part[-1] in (' ', '\n', '\t', '\r'):
+                    needs_space = False
+                if curr_part and curr_part[0] in (' ', '\n', '\t', '\r'):
+                    needs_space = False
+                
+                if needs_space:
                     result += ' ' + curr_part
+                else:
+                    result += curr_part
             return result
 
         for segment in segments:
