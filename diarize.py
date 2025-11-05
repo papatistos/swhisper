@@ -391,6 +391,10 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     if cleared:
                         summary_parts.append(f"{cleared} cleared")
                     print("  -> Disfluency overlap hints: " + ", ".join(summary_parts))
+                
+                # Split out leading/trailing cross-talk markers into separate turns (after overlap hints are added)
+                from diarize.utils import BackfillMerger
+                segments = BackfillMerger.split_leading_and_trailing_crosstalk(segments)
 
             # 5. Create settings dictionary for stats
             settings = {
