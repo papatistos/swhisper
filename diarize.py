@@ -160,16 +160,88 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             # 2. Diarize with Pyannote 
             starttime = datetime.now()
             print(f"{starttime.strftime('%Y-%m-%d %H:%M:%S')} - Step 2: Performing speaker diarization... (this can take a while)")
-            print("  -> Creating diarization pipeline object...")
-            sys.stdout.flush()  # Force immediate output
             
-            diarization_pipeline = DiarizationPipeline(config)
-            print("  -> Loading models and running diarization on audio file...")
-            sys.stdout.flush()  # Force immediate output
-            diarization_output = diarization_pipeline.diarize(audiofile_path)
+            # Initialize diarization cache if enabled
+            diarization_cache = None
+            if config.diarization_cache_enabled:
+                from diarize import DiarizationCache
+                cache_dir = config.diarization_cache_dir or os.path.join(config.final_output_dir, '.diarization_cache')
+                print(f"  -> Diarization cache enabled: {cache_dir}")
+                diarization_cache = DiarizationCache(cache_dir)
+            else:
+                print("  -> Diarization cache disabled")
+            
+            # Check cache for standard result
+            standard_result = None
+            exclusive_result = None
+            cache_hit = False
+            
+            if diarization_cache:
+                pipeline_config = config.get_pipeline_config()
+                standard_result = diarization_cache.load(
+                    audiofile_path,
+                    config.pipeline_model,
+                    config.min_speakers,
+                    config.max_speakers,
+                    pipeline_config,
+                    exclusive=False
+                )
+                
+                if standard_result is not None:
+                    cache_hit = True
+                    print("  -> Loaded diarization from cache (standard)")
+                    
+                    # Try to load exclusive result if available
+                    exclusive_result = diarization_cache.load(
+                        audiofile_path,
+                        config.pipeline_model,
+                        config.min_speakers,
+                        config.max_speakers,
+                        pipeline_config,
+                        exclusive=True
+                    )
+                    if exclusive_result is not None:
+                        print("  -> Loaded diarization from cache (exclusive)")
+            
+            # If no cache hit, run diarization
+            if not cache_hit:
+                print("  -> Creating diarization pipeline object...")
+                sys.stdout.flush()  # Force immediate output
+                
+                diarization_pipeline = DiarizationPipeline(config)
+                print("  -> Loading models and running diarization on audio file...")
+                sys.stdout.flush()  # Force immediate output
+                diarization_output = diarization_pipeline.diarize(audiofile_path)
 
-            standard_result = getattr(diarization_output, "speaker_diarization", diarization_output)
-            exclusive_result = getattr(diarization_output, "exclusive_speaker_diarization", None)
+                standard_result = getattr(diarization_output, "speaker_diarization", diarization_output)
+                exclusive_result = getattr(diarization_output, "exclusive_speaker_diarization", None)
+                
+                # Save to cache
+                if diarization_cache and standard_result is not None:
+                    print("  -> Saving diarization to cache...")
+                    pipeline_config = config.get_pipeline_config()
+                    diarization_cache.save(
+                        standard_result,
+                        audiofile_path,
+                        config.pipeline_model,
+                        config.min_speakers,
+                        config.max_speakers,
+                        pipeline_config,
+                        exclusive=False
+                    )
+                    print("  -> Saved standard diarization to cache")
+                    if exclusive_result is not None:
+                        diarization_cache.save(
+                            exclusive_result,
+                            audiofile_path,
+                            config.pipeline_model,
+                            config.min_speakers,
+                            config.max_speakers,
+                            pipeline_config,
+                            exclusive=True
+                        )
+                        print("  -> Saved exclusive diarization to cache")
+            
             diarization_result = standard_result
 
             exclusive_requested = getattr(config, "use_exclusive_speaker_diarization", False)
