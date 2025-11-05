@@ -1148,8 +1148,9 @@ class BackfillTranscriber:
         duration = max(0.0, word_end - word_start)
         
         # Calculate marker size based on duration (1 asterisk per 0.1 seconds)
+        # Use spaces around asterisks to distinguish from Whisper's disfluency markers [*]
         asterisk_count = max(1, min(50, math.ceil(duration / 0.1)))
-        marker_token = f"[{'*' * asterisk_count}]"
+        marker_token = f"[ {'*' * asterisk_count} ]"
         
         filtered_word = dict(word)
         filtered_word['word'] = marker_token
@@ -1160,7 +1161,10 @@ class BackfillTranscriber:
         return filtered_word
 
     def _apply_word_filtering(self, segment: Dict[str, Any]) -> tuple[Dict[str, Any], int]:
-        """Apply word filtering to a segment (works for both cached and newly transcribed)."""
+        """Apply word filtering to a segment (works for both cached and newly transcribed).
+        
+        Consecutive filtered words are merged into a single disfluency marker.
+        """
         if not segment or not self.ignore_words:
             return segment, 0
         
@@ -1170,15 +1174,73 @@ class BackfillTranscriber:
         
         filtered_count = 0
         filtered_words = []
+        pending_filtered = []  # Accumulate consecutive filtered words
+        
+        # Debug: show all words in segment
+        print(f"      DEBUG: Processing {len(words)} words in segment:")
+        for i, w in enumerate(words):
+            w_text = w.get('word', w.get('text', ''))
+            print(f"        [{i}] '{w_text}' (is_filtered={w.get('is_filtered_hallucination', False)})")
+        
+        def flush_pending_filtered():
+            """Merge accumulated filtered words into a single marker."""
+            nonlocal filtered_count
+            if not pending_filtered:
+                return
+            
+            # Calculate total duration of all filtered words
+            first_word = pending_filtered[0]
+            last_word = pending_filtered[-1]
+            start = first_word.get('start', 0.0)
+            end = last_word.get('end', start)
+            total_duration = max(0.0, end - start)
+            
+            # Create a single merged marker with spaces to distinguish from Whisper's [*] markers
+            asterisk_count = max(1, min(50, math.ceil(total_duration / 0.1)))
+            marker_token = f"[ {'*' * asterisk_count} ]"
+            
+            merged_marker = {
+                'word': marker_token,
+                'text': marker_token,
+                'start': start,
+                'end': end,
+                'is_filtered_hallucination': True,
+                'original_words': [w.get('word', w.get('text', '')) for w in pending_filtered],
+                'merged_count': len(pending_filtered)
+            }
+            
+            print(f"      DEBUG: Created merged marker {marker_token} for {len(pending_filtered)} words: {merged_marker['original_words']}")
+            filtered_words.append(merged_marker)
+            filtered_count += len(pending_filtered)
+            pending_filtered.clear()
         
         for word in words:
             word_text = word.get('word', word.get('text', '')).strip()
-            if word_text and self._should_filter_word(word_text):
-                filtered_word = self._create_disfluency_marker_for_word(word)
-                filtered_words.append(filtered_word)
-                filtered_count += 1
-            else:
+            
+            # Skip pre-existing markers that we created in a previous run
+            # Only check the flag - don't confuse Whisper's disfluency markers [*] with our filtered markers
+            if word.get('is_filtered_hallucination'):
+                flush_pending_filtered()
                 filtered_words.append(word)
+                continue
+            
+            # Check if this word should be filtered (Whisper's disfluency markers like [*] are treated as normal words)
+            if word_text and self._should_filter_word(word_text):
+                # Accumulate this filtered word
+                print(f"      DEBUG: Filtering word: '{word_text}' (start={word.get('start')}, end={word.get('end')})")
+                pending_filtered.append(word)
+            else:
+                # Flush any pending filtered words first
+                if pending_filtered:
+                    print(f"      DEBUG: Flushing {len(pending_filtered)} pending filtered words")
+                flush_pending_filtered()
+                # Then add the non-filtered word
+                filtered_words.append(word)
+        
+        # Flush any remaining filtered words at the end
+        if pending_filtered:
+            print(f"      DEBUG: Flushing {len(pending_filtered)} pending filtered words at end")
+        flush_pending_filtered()
         
         if filtered_count > 0:
             # Update segment with filtered words
@@ -1275,18 +1337,43 @@ class BackfillTranscriber:
                     print(f"   -> Backfill error for {speaker} {start:.2f}-{end:.2f}s: {exc}")
                     segment, word_count = None, 0
 
-            # Apply word filtering (for both cached and newly transcribed)
-            if segment:
-                segment, filtered_count = self._apply_word_filtering(segment)
-                if filtered_count > 0:
-                    filtered_originals = [
-                        w.get('original_word', '') 
-                        for w in segment.get('words', []) 
-                        if w.get('is_filtered_hallucination')
-                    ]
-                    print(f"      🚫 Filtered {filtered_count} hallucinated word(s): {', '.join(filtered_originals)}")
-                    # Update word count after filtering
-                    word_count = len(segment.get('words', []))
+            # Apply filtering ONLY if the entire segment text exactly matches an ignore string
+            # We don't partially delete results from whisper
+            if segment and self.ignore_words:
+                segment_text = segment.get('text', '').strip()
+                
+                # Check if segment text exactly matches any ignore pattern
+                should_filter = self._should_filter_word(segment_text)
+                
+                if should_filter:
+                    # Entire segment is a hallucination - replace with marker
+                    words = segment.get('words', [])
+                    if words:
+                        first_word = words[0]
+                        last_word = words[-1]
+                        start = first_word.get('start', segment.get('start', 0.0))
+                        end = last_word.get('end', segment.get('end', start))
+                        duration = max(0.0, end - start)
+                        
+                        # Create a single marker for the entire filtered segment
+                        asterisk_count = max(1, min(50, math.ceil(duration / 0.1)))
+                        marker_token = f"[ {'*' * asterisk_count} ]"
+                        
+                        marker = {
+                            'word': marker_token,
+                            'text': marker_token,
+                            'start': start,
+                            'end': end,
+                            'is_filtered_hallucination': True,
+                            'original_text': segment_text,
+                            'speaker': segment.get('speaker')
+                        }
+                        
+                        segment['words'] = [marker]
+                        segment['text'] = marker_token
+                        word_count = 1
+                        
+                        print(f"      🚫 Filtered hallucinated segment: {segment_text}")
 
             is_placeholder = bool(segment and segment.get('is_placeholder'))
 
