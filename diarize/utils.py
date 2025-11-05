@@ -449,7 +449,30 @@ class SpeakerAssigner:
                     break
         
         if speaker_votes:
-            return max(speaker_votes.items(), key=lambda x: x[1])[0]
+            # Find the maximum vote count
+            max_votes = max(speaker_votes.values())
+            # Get all speakers with the maximum vote count
+            top_speakers = [speaker for speaker, votes in speaker_votes.items() if votes == max_votes]
+            
+            # If there's a tie, use overlap as tiebreaker
+            if len(top_speakers) > 1:
+                speaker_overlaps = {}
+                for speaker in top_speakers:
+                    total_overlap = 0.0
+                    for turn, _, speaker_label in segments:
+                        if speaker_label == speaker:
+                            # Calculate overlap between word and this segment
+                            overlap_start = max(word_start, turn.start)
+                            overlap_end = min(word_end, turn.end)
+                            if overlap_start < overlap_end:
+                                total_overlap += (overlap_end - overlap_start)
+                    speaker_overlaps[speaker] = total_overlap
+                
+                # Return speaker with greatest overlap
+                return max(speaker_overlaps.items(), key=lambda x: x[1])[0]
+            
+            # No tie, return the winner
+            return top_speakers[0]
 
         # Fall back to nearest-neighbour assignment when no overlap is found
         max_gap = 0.5
