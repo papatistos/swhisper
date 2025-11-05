@@ -293,8 +293,14 @@ class RTFFormatter(TranscriptFormatter):
             if is_silence:
                 # For silence segments, check if it's a long silence and format accordingly
                 if current_paragraph:
-                    # Parse the duration from the silence text (e.g., "(1.5s)" -> 1.5)
-                    duration = WordProcessor._parse_silence_duration(text)
+                    # For silence segments, find the first silence marker word to get duration
+                    duration = None
+                    words = segment.get('words', [])
+                    for word in words:
+                        if word.get('is_silence_marker', False):
+                            duration = WordProcessor._parse_silence_duration(word.get('word', ''))
+                            break
+                    
                     if duration is not None and gap_threshold and duration >= gap_threshold:
                         # Long silence - add with blank lines (two newlines create empty lines)
                         formatted_text = f"\n\n{text}\n\n"
@@ -771,7 +777,14 @@ class TXTFormatter(TranscriptFormatter):
 
             if is_silence:
                 if current_paragraph:
-                    duration = WordProcessor._parse_silence_duration(text)
+                    # For silence segments, find the first silence marker word to get duration
+                    duration = None
+                    words = segment.get('words', [])
+                    for word in words:
+                        if word.get('is_silence_marker', False):
+                            duration = WordProcessor._parse_silence_duration(word.get('word', ''))
+                            break
+                    
                     if duration is not None and gap_threshold and duration >= gap_threshold:
                         formatted_text = f"\n\n{text}\n\n"
                     else:
