@@ -877,7 +877,6 @@ class BackfillMerger:
             if leading_split_index is not None and trailing_split_index is not None and leading_split_index < trailing_split_index:
                 leading_split_count += 1
                 trailing_split_count += 1
-                print(f"[DEBUG] Found leading AND trailing cross-talk: leading_speaker={leading_crosstalk_speaker}, trailing_speaker={trailing_crosstalk_speaker}, segment_speaker={segment.get('speaker')}")
                 
                 # Three parts: leading cross-talk | middle content | trailing cross-talk
                 leading_words = words[:leading_split_index]
@@ -922,7 +921,6 @@ class BackfillMerger:
             elif leading_split_index is not None:
                 # Only leading cross-talk
                 leading_split_count += 1
-                print(f"[DEBUG] Found leading cross-talk: speaker={leading_crosstalk_speaker}, segment_speaker={segment.get('speaker')}")
                 
                 leading_words = words[:leading_split_index]
                 remaining_words = words[leading_split_index:]
@@ -940,20 +938,17 @@ class BackfillMerger:
                 leading_segment = BackfillMerger._create_segment_from_words(
                     leading_words, leading_crosstalk_speaker, segment
                 )
-                print(f"[DEBUG]   Leading segment: {leading_segment['start']:.2f}s - {leading_segment['end']:.2f}s")
                 result_segments.append(leading_segment)
                 
                 if remaining_words:
                     remaining_segment = BackfillMerger._create_segment_from_words(
                         remaining_words, segment.get('speaker', 'UNKNOWN'), segment
                     )
-                    print(f"[DEBUG]   Remaining segment: {remaining_segment['start']:.2f}s - {remaining_segment['end']:.2f}s")
                     result_segments.append(remaining_segment)
                 
             elif trailing_split_index is not None:
                 # Only trailing cross-talk
                 trailing_split_count += 1
-                print(f"[DEBUG] Found trailing cross-talk at index {trailing_split_index}: speaker={trailing_crosstalk_speaker}, segment_speaker={segment.get('speaker')}")
                 
                 before_words = words[:trailing_split_index]
                 trailing_words = words[trailing_split_index:]
@@ -982,9 +977,6 @@ class BackfillMerger:
             else:
                 # No cross-talk, keep segment as-is
                 result_segments.append(segment)
-        
-        if leading_split_count > 0 or trailing_split_count > 0:
-            print(f"[DEBUG] split_leading_and_trailing_crosstalk: {leading_split_count} leading, {trailing_split_count} trailing")
         
         return result_segments
     
