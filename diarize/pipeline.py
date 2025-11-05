@@ -501,6 +501,17 @@ class SpeakerAligner:
             whisper_result['segments']
         )
         
+        # Remove non-overlapping disfluency markers (gaps will be handled by silence marker insertion)
+        if self.config.preserve_markers:
+            print("Checking disfluency markers against speaker segments...")
+            removal_stats = WordProcessor.remove_nonoverlapping_markers(
+                whisper_result['segments'],
+                diarization_result
+            )
+            if removal_stats['removed'] > 0:
+                print(f"   Removed {removal_stats['removed']} non-overlapping markers")
+                print(f"   Kept {removal_stats['kept_as_markers']} overlapping markers")
+        
         # Add silence markers if enabled
         if self.config.include_silence_markers:
             print("Adding silence markers...")
