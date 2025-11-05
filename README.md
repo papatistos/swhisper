@@ -170,10 +170,9 @@ Sucessfully processed files will be skipped. If you want to reprocess a specific
 
 This project builds upon the excellent work of:
 
-- **[KBLab](https://huggingface.co/KBLab)** for the [kb-whisper-large](https://huggingface.co/KBLab/kb-whisper-large) Swedish Whisper model. 
+- **[KBLab](https://huggingface.co/KBLab)** for the [kb-whisper-large](https://huggingface.co/KBLab/kb-whisper-large) Swedish Whisper model (which is based on **OpenAI**'s original [Whisper](https://github.com/openai/whisper) speech recognition model). 
 - **[whisper-timestamped](https://github.com/linto-ai/whisper-timestamped)** by Jérôme Louradour for precise word-level timestamps
-- **[pyannote-audio](https://github.com/pyannote/pyannote-audio)** by Hervé Bredin for speaker diarization capabilities
-- **OpenAI** for the original [Whisper](https://github.com/openai/whisper) speech recognition model
+- **[pyannote-audio](https://github.com/pyannote/pyannote-audio)** by Hervé Bredin for speaker diarization capabilities 
 
 ## Citations
 
