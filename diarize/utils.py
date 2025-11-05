@@ -210,7 +210,13 @@ class WordProcessor:
 
             if add_line_breaks:
                 flush_current_tokens()
-                if lines and lines[-1] != '':
+                # Always add blank line before long silence markers
+                # (even at start of segment, for visual separation)
+                if not lines:
+                    # First item is a long silence - add leading blank
+                    lines.append('')
+                elif lines[-1] != '':
+                    # Add blank line after non-blank line
                     lines.append('')
                 lines.append(word_text.strip())
                 lines.append('')
