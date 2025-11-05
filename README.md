@@ -38,6 +38,8 @@ Total       506 (100.0%)  2707 (100.0%)        5.3  737.0 (100.0%)  220 wpm  306
 
 - When the voice activity detection algorithm (VAD) failed to detect speech in parts of the audio, those parts will not be transcribed in the initial transcription step. If the diarization step then identifies a speaker segment in such a part, we send this segment for transcription and fill in the results into the "empty turn" (backfilling). While this recovers some missing words, it can also introduce hallucination artifacts (possibly due to the short duration of these segments). To at least partially work around this, you can specify a list of words to ignore during backfilling. For example, if you notice that the word "Balans" is frequently hallucinated in empty turns, you can add it to the ignore list in the `.swhisper.env` file using the `SWHISPER_BACKFILL_IGNORE_WORDS` variable. Alternatively, you can disable backfilling entirely via `SWHISPER_BACKFILL_ENABLED=false`.
 
+- I am seeing what looks like a relatively consisten time-shift of about 0.1s in the word-level timestamps provided by `whisper-timestamped` (relative to the actual audio). I'm not sure why this is happening, but I introduced an option to manually adjust such a shift via `SWHISPER_TIMESTAMP_ADJUSTMENT` in `.swhisper.env` (set to a negative value to move timestamps earlier). This adjustment is applied before diarization, so the diarized transcript will reflect the adjusted timestamps. Note that this is a manual workaround and may not be necessary for all use cases, but it is set to `-0.1` by default.
+
 ```
 ### Transcript formatting options
 
@@ -59,7 +61,7 @@ Total       506 (100.0%)  2707 (100.0%)        5.3  737.0 (100.0%)  220 wpm  306
 - [x] combine settings in one config file that is read by both `config.py`s
 - [x] fix caching of empty turns (the current code that should persist those transcriptions doesn't seem to work)
 - [ ] add (more) speaker stats
-- [ ] add speaker stats to the preamble
+- [x] add speaker stats to the preamble
 - [ ] process files via csv input list (with custom settings per file)
 - [ ] improve documentation (let me know what is particularly unclear)
 - [ ] add command line options?
