@@ -87,22 +87,23 @@ class TranscriptionApp:
             total_files = len(audio_queue)
             for index, original_file in enumerate(audio_queue, start=1):
                 print(f"\n📦 Audio file {index}/{total_files}: {original_file}")
-                staged_path = self.workspace_manager.stage_audio_file(original_file)
-                if not staged_path:
-                    print(f"❌ Skipping {original_file} (staging failed)")
+                
+                # Ensure cloud file is hydrated before processing
+                source_path = os.path.join(source_audio_dir, original_file)
+                if not self.workspace_manager._ensure_local_file(source_path):
+                    print(f"❌ Skipping {original_file} (file not accessible)")
                     continue
-
-                staged_dir = os.path.dirname(staged_path)
-                staged_filename = os.path.basename(staged_path)
-                wav_filename = self.file_manager.prepare_staged_audio_file(staged_dir, staged_filename)
+                
+                # Convert directly in source directory
+                wav_filename = self.file_manager.prepare_staged_audio_file(source_audio_dir, original_file)
 
                 if not wav_filename:
-                    print(f"❌ Skipping {original_file} (failed to prepare staged copy)")
+                    print(f"❌ Skipping {original_file} (conversion failed)")
                     continue
 
                 self._process_single_file(
                     wav_filename,
-                    staged_dir,
+                    source_audio_dir,
                     output_dir,
                     index,
                     total_files,

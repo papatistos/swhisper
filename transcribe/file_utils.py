@@ -190,7 +190,7 @@ class FileManager:
 
         listed = sorted(files_to_consider)
         preview_count = min(10, len(listed))
-        print(f"\n🎵 Queued {len(files_to_consider)} files for staged processing:")
+        print(f"\n🎵 Queued {len(files_to_consider)} files for processing:")
         for f in listed[:preview_count]:
             print(f"  - {f}")
         if len(listed) > preview_count:
