@@ -29,14 +29,21 @@ class AudioProcessor:
         """Load only a specific chunk of audio from file."""
         # Use soundfile for efficient chunk loading
         with sf.SoundFile(audiofile_path) as f:
-            # Get original sample rate
+            # Get original sample rate and file length
             orig_sr = f.samplerate
+            file_length_samples = len(f)
+            file_duration = file_length_samples / orig_sr
             
-            # Handle infinity case - use actual file length
-            if end_time == float('inf'):
-                # Calculate end_time based on actual file length
-                file_length_samples = len(f)
-                end_time = file_length_samples / orig_sr
+            # Handle infinity or values beyond file length
+            if end_time == float('inf') or end_time > file_duration:
+                end_time = file_duration
+            
+            # Clamp start_time to valid range
+            start_time = max(0.0, min(start_time, file_duration))
+            
+            # Ensure end_time is not before start_time
+            if end_time < start_time:
+                end_time = start_time
             
             overlap_samples = int(self.config.overlap_duration * sample_rate)
             start_sample = max(0, int(start_time * sample_rate) - overlap_samples)
@@ -46,9 +53,18 @@ class AudioProcessor:
             orig_start = int(start_sample * orig_sr / sample_rate)
             orig_end = int(end_sample * orig_sr / sample_rate)
             
+            # Clamp to actual file bounds to prevent reading beyond file
+            orig_start = max(0, min(orig_start, file_length_samples))
+            orig_end = max(orig_start, min(orig_end, file_length_samples))
+            
             # Seek and read
             f.seek(orig_start)
-            chunk_audio = f.read(orig_end - orig_start, dtype='float32')
+            samples_to_read = orig_end - orig_start
+            if samples_to_read > 0:
+                chunk_audio = f.read(samples_to_read, dtype='float32')
+            else:
+                # Edge case: no samples to read, return empty array
+                chunk_audio = np.array([], dtype='float32')
             
             # Convert to mono if stereo
             if len(chunk_audio.shape) > 1:

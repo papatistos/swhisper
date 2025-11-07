@@ -31,7 +31,8 @@ from transcribe import (
     TranscriptionConfig, WhisperSettings, DEFAULT_CONFIG, DEFAULT_WHISPER_SETTINGS,
     ResourceManager, resource_manager, 
     AudioProcessor, SpeechAnalyzer, ChunkBoundaryFinder,
-    FileManager, TranscriptionPipeline, WorkspaceManager, CheckpointManager
+    FileManager, TranscriptionPipeline, WorkspaceManager, CheckpointManager,
+    fix_zero_duration_words
 )
 
 
@@ -275,6 +276,9 @@ class TranscriptionApp:
             
             print(f"[{file_label}] 🔄 Transcribing...")
             result = whisper.transcribe(model, audio_data, **self.whisper_settings.to_dict())
+            
+            # Fix zero-duration words (workaround for whisper-timestamped limitation)
+            result = fix_zero_duration_words(result, min_duration=self.whisper_settings.min_word_duration)
             
             return result
     

@@ -79,6 +79,104 @@ def is_model_cached(model_name: str) -> bool:
         return False
 
 
+def fix_zero_duration_words(result: dict, min_duration: float = 0.02) -> dict:
+    """
+    Fix zero-duration words in transcription result by giving them a minimum duration.
+    
+    This is a workaround for whisper-timestamped not enforcing min_word_duration 
+    when trust_whisper_timestamps=False.
+    
+    Strategy:
+    - For words in the middle: try to extend end time if there's a gap before next word
+    - For words at the end: extend end time by min_duration
+    - For words at the beginning: extend start time backward by min_duration
+    - Ensure we never create overlaps with adjacent words
+    
+    Args:
+        result: The transcription result dictionary from whisper-timestamped
+        min_duration: Minimum duration to enforce (default 0.02s)
+    
+    Returns:
+        Modified result dictionary with zero-duration words fixed
+    """
+    if 'segments' not in result:
+        return result
+    
+    for segment in result['segments']:
+        if 'words' not in segment or not segment['words']:
+            continue
+        
+        words = segment['words']
+        
+        for i, word in enumerate(words):
+            if 'start' not in word or 'end' not in word:
+                continue
+            
+            # Check if word has zero or near-zero duration
+            duration = word['end'] - word['start']
+            if duration >= min_duration:
+                continue  # Word is fine
+            
+            # Calculate how much we need to add
+            needed = min_duration - duration
+            
+            # Strategy depends on position
+            if i == len(words) - 1:
+                # Last word in segment - extend end time
+                word['end'] = word['start'] + min_duration
+                # Also update segment end if this word extended beyond it
+                if word['end'] > segment['end']:
+                    segment['end'] = word['end']
+                    
+            elif i == 0:
+                # First word - try to extend start time backward
+                new_start = word['end'] - min_duration
+                # Make sure we don't go before segment start
+                if new_start < segment['start']:
+                    new_start = segment['start']
+                    # If we can't go back enough, extend forward instead
+                    word['end'] = word['start'] + min_duration
+                else:
+                    word['start'] = new_start
+                    
+            else:
+                # Middle word - try to extend end time into the gap before next word
+                next_word = words[i + 1]
+                gap_to_next = next_word['start'] - word['end']
+                
+                if gap_to_next >= needed:
+                    # Enough space, extend end time
+                    word['end'] = word['start'] + min_duration
+                elif gap_to_next > 0:
+                    # Some space, use what we have and try to extend start backward
+                    word['end'] += gap_to_next
+                    still_needed = min_duration - (word['end'] - word['start'])
+                    
+                    if still_needed > 0 and i > 0:
+                        prev_word = words[i - 1]
+                        gap_from_prev = word['start'] - prev_word['end']
+                        
+                        if gap_from_prev >= still_needed:
+                            word['start'] -= still_needed
+                        elif gap_from_prev > 0:
+                            word['start'] -= gap_from_prev
+                else:
+                    # No gap to next word, try extending start backward
+                    if i > 0:
+                        prev_word = words[i - 1]
+                        gap_from_prev = word['start'] - prev_word['end']
+                        
+                        if gap_from_prev >= needed:
+                            word['start'] -= needed
+                        elif gap_from_prev > 0:
+                            word['start'] -= gap_from_prev
+                            # Use remaining space by extending end (will touch next word)
+                            still_needed = min_duration - (word['end'] - word['start'])
+                            word['end'] += min(still_needed, 0.005)  # Very small extension
+    
+    return result
+
+
 class TranscriptionWorker:
     """Handle transcription in subprocess."""
 
@@ -150,6 +248,10 @@ class TranscriptionWorker:
             
             # Transcribe chunk
             result = whisper.transcribe(model, chunk_audio, **settings)
+            
+            # Fix zero-duration words (workaround for whisper-timestamped limitation)
+            min_word_dur = settings.get('min_word_duration', 0.02)
+            result = fix_zero_duration_words(result, min_duration=min_word_dur)
             
             print(f"    {prefix}🔧 Adjusting timestamps...")
             

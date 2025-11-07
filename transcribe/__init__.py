@@ -4,7 +4,7 @@ from .config import TranscriptionConfig, WhisperSettings, DEFAULT_CONFIG, DEFAUL
 from .memory_utils import ResourceManager, MemoryMonitor, resource_manager
 from .audio_utils import AudioProcessor, SpeechAnalyzer, ChunkBoundaryFinder
 from .file_utils import AudioConverter, FileManager
-from .transcription import TranscriptionPipeline, ChunkProcessor, ResultMerger
+from .transcription import TranscriptionPipeline, ChunkProcessor, ResultMerger, fix_zero_duration_words
 from .workspace_utils import WorkspaceManager
 from .checkpoint_utils import CheckpointManager
 
@@ -25,5 +25,6 @@ __all__ = [
     'ChunkProcessor',
     'ResultMerger',
     'WorkspaceManager',
-    'CheckpointManager'
+    'CheckpointManager',
+    'fix_zero_duration_words'
 ]
