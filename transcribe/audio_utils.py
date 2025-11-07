@@ -27,14 +27,20 @@ class AudioProcessor:
     def load_audio_chunk(self, audiofile_path: str, start_time: float, 
                         end_time: float, sample_rate: int = 16000) -> Tuple[np.ndarray, int]:
         """Load only a specific chunk of audio from file."""
-        overlap_samples = int(self.config.overlap_duration * sample_rate)
-        start_sample = max(0, int(start_time * sample_rate) - overlap_samples)
-        end_sample = int(end_time * sample_rate) + overlap_samples
-        
         # Use soundfile for efficient chunk loading
         with sf.SoundFile(audiofile_path) as f:
             # Get original sample rate
             orig_sr = f.samplerate
+            
+            # Handle infinity case - use actual file length
+            if end_time == float('inf'):
+                # Calculate end_time based on actual file length
+                file_length_samples = len(f)
+                end_time = file_length_samples / orig_sr
+            
+            overlap_samples = int(self.config.overlap_duration * sample_rate)
+            start_sample = max(0, int(start_time * sample_rate) - overlap_samples)
+            end_sample = int(end_time * sample_rate) + overlap_samples
             
             # Calculate actual start/end in original sample rate
             orig_start = int(start_sample * orig_sr / sample_rate)
