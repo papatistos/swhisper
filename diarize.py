@@ -16,6 +16,8 @@ multiple formats using a modular architecture.
 import os
 import json
 import sys
+import errno
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -66,6 +68,44 @@ except Exception:
 
 # Get script version from last modified timestamp
 SCRIPT_VERSION = datetime.fromtimestamp(os.path.getmtime(__file__)).strftime('%Y-%m-%d %H:%M:%S')
+
+
+def ensure_file_hydrated(path: str, max_attempts: int = 4) -> bool:
+    """Ensure cloud-managed file (OneDrive, iCloud, etc.) is fully downloaded before access."""
+    if not os.path.exists(path):
+        print(f"  -> ERROR: File not found: {os.path.basename(path)}")
+        return False
+    
+    backoff = 1.0
+    for attempt in range(1, max_attempts + 1):
+        try:
+            # Try to read the file to trigger hydration
+            with open(path, 'rb') as f:
+                f.read(4096)
+            return True
+        except (FileNotFoundError, PermissionError, OSError, TimeoutError) as exc:
+            errno_code = getattr(exc, "errno", None)
+            transient_codes = {
+                errno.EBUSY,
+                errno.EIO,
+                errno.ENOENT,
+                errno.EAGAIN,
+                errno.EACCES,
+                errno.ETIMEDOUT,
+            }
+            transient = errno_code in transient_codes or isinstance(exc, (PermissionError, TimeoutError))
+            
+            if not transient and not isinstance(exc, FileNotFoundError):
+                print(f"  -> ERROR: Unable to access {os.path.basename(path)}: {exc}")
+                return False
+            
+            if attempt < max_attempts:
+                print(f"  -> ⏳ Waiting for cloud file to download: {os.path.basename(path)} (attempt {attempt}/{max_attempts})")
+                time.sleep(backoff)
+                backoff *= 1.5
+    
+    print(f"  -> ERROR: File timed out during download: {os.path.basename(path)}")
+    return False
 
 
 def create_completion_marker(config: DiarizationConfig, base_filename: str, 
@@ -151,6 +191,12 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             # 1. Load the transcription data from the JSON file
             starttime = datetime.now()
             print(f"{starttime.strftime('%Y-%m-%d %H:%M:%S')} - Step 1: Loading transcription from {json_file}...")
+            
+            # Ensure JSON file is hydrated before reading (for cloud storage)
+            if not ensure_file_hydrated(json_path):
+                print(f"  -> ERROR: Could not access JSON file: {json_file}")
+                return False
+            
             with open(json_path, 'r', encoding='utf-8') as f:
                 whisper_result = json.load(f)
             
