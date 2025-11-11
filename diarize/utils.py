@@ -1258,6 +1258,32 @@ class BackfillTranscriber:
         
         return False
 
+    def _segment_contains_only_ignore_words(self, segment_text: str) -> bool:
+        """Check if a segment contains only ignore words (in any combination).
+        
+        Returns True if all words in the segment match ignore patterns.
+        Example: "Balans Tack" would be filtered if both "Balans" and "Tack" are in ignore list.
+        """
+        if not self.ignore_words or not segment_text:
+            return False
+        
+        # Split the text into words and check each one
+        # Split on whitespace and common punctuation
+        import re
+        words = re.findall(r'\b\w+[:]?\b', segment_text)
+        
+        if not words:
+            return False
+        
+        # Check if ALL words are in the ignore list
+        for word in words:
+            if not self._should_filter_word(word):
+                # Found a word that's NOT in ignore list
+                return False
+        
+        # All words matched - this segment should be filtered
+        return True
+
     def _create_disfluency_marker_for_word(self, word: Dict[str, Any]) -> Dict[str, Any]:
         """Replace a word with a disfluency marker based on its duration."""
         word_start = word.get('start', 0.0)
@@ -1445,6 +1471,7 @@ class BackfillTranscriber:
                 if segment:
                     words = segment.get('words', [])
                     if words:
+                        # First, update any markers with new formula
                         for word in words:
                             word_text = word.get('word', '')
                             # Check if this is a marker that needs updating (starts with [ and contains asterisks)
@@ -1457,8 +1484,14 @@ class BackfillTranscriber:
                                 marker_token = f"[ {'*' * asterisk_count} ]"
                                 word['word'] = marker_token
                                 word['text'] = marker_token
-                        # Update segment text
-                        segment['text'] = ' '.join(w.get('word', '') for w in words if w.get('word'))
+                        
+                        # ALWAYS rebuild segment text from words (cached segments may have stale text)
+                        text_tokens = []
+                        for w in words:
+                            token = w.get('word') or w.get('text', '')
+                            if token:
+                                text_tokens.append(token)
+                        segment['text'] = ' '.join(text_tokens)
                 
                 word_count = len(segment.get('words', []))
                 cache_hits += 1
@@ -1474,13 +1507,12 @@ class BackfillTranscriber:
                     print(f"   -> Backfill error for {speaker} {start:.2f}-{end:.2f}s: {exc}")
                     segment, word_count = None, 0
 
-            # Apply filtering ONLY if the entire segment text exactly matches an ignore string
-            # We don't partially delete results from whisper
+            # Apply filtering if the entire segment contains only ignore words
             if segment and self.ignore_words:
                 segment_text = segment.get('text', '').strip()
                 
-                # Check if segment text exactly matches any ignore pattern
-                should_filter = self._should_filter_word(segment_text)
+                # Check if segment contains only ignore words (any combination)
+                should_filter = self._segment_contains_only_ignore_words(segment_text)
                 
                 if should_filter:
                     # Entire segment is a hallucination - replace with marker
@@ -1493,7 +1525,7 @@ class BackfillTranscriber:
                         duration = max(0.0, end - start)
                         
                         # Create a single marker for the entire filtered segment
-                        asterisk_count = max(1, min(50, math.ceil(duration / 0.1)))
+                        asterisk_count = max(1, min(50, int(duration * 10 + 0.5)))
                         marker_token = f"[ {'*' * asterisk_count} ]"
                         
                         marker = {
