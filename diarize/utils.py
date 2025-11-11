@@ -1266,7 +1266,7 @@ class BackfillTranscriber:
         
         # Calculate marker size based on duration (1 asterisk per 0.1 seconds)
         # Use spaces around asterisks to distinguish from Whisper's disfluency markers [*]
-        asterisk_count = max(1, min(50, math.ceil(duration / 0.1)))
+        asterisk_count = max(1, min(50, int(duration * 10 + 0.5)))
         marker_token = f"[ {'*' * asterisk_count} ]"
         
         filtered_word = dict(word)
@@ -1440,6 +1440,26 @@ class BackfillTranscriber:
             # Check cache first
             if turn_key in cached_segments:
                 segment = cached_segments[turn_key]
+                
+                # Update ALL markers in cached segments to use new formula (placeholders and filtered hallucinations)
+                if segment:
+                    words = segment.get('words', [])
+                    if words:
+                        for word in words:
+                            word_text = word.get('word', '')
+                            # Check if this is a marker that needs updating (starts with [ and contains asterisks)
+                            if word_text.startswith('[') and '*' in word_text:
+                                word_start = word.get('start', 0.0)
+                                word_end = word.get('end', word_start)
+                                word_duration = max(0.0, word_end - word_start)
+                                # Recalculate with new formula
+                                asterisk_count = max(1, min(50, int(word_duration * 10 + 0.5)))
+                                marker_token = f"[ {'*' * asterisk_count} ]"
+                                word['word'] = marker_token
+                                word['text'] = marker_token
+                        # Update segment text
+                        segment['text'] = ' '.join(w.get('word', '') for w in words if w.get('word'))
+                
                 word_count = len(segment.get('words', []))
                 cache_hits += 1
                 print(f"----> Using cached result for {speaker}: {start:.2f}s - {end:.2f}s (duration {duration:.2f}s)")
@@ -1640,7 +1660,7 @@ class BackfillTranscriber:
         if duration <= 0.0:
             duration = 0.1
 
-        asterisk_count = max(1, min(50, math.ceil(duration / 0.1)))
+        asterisk_count = max(1, min(50, int(duration * 10 + 0.5)))
         marker_token = f"[ {'*' * asterisk_count} ]"
 
         placeholder_word = {
