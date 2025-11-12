@@ -7,6 +7,18 @@ import csv
 from typing import Any, Dict, List, Optional
 from .utils import WordProcessor, _is_silence_token
 
+# Warning text about speaker statistics used in both TXT and RTF outputs.
+# Keep the human-readable plain text here and an RTF-escaped version for use
+# in the RTF generator where backslashes and braces must be escaped.
+SPEAKER_STATS_WARNING = (
+    "Approximate speaker statistics:\n"
+    "(may be very inaccurate, especially if number of detected speakers is incorrect)"
+)
+
+# RTF needs backslashes and braces escaped and newlines converted to \par
+# We use the plain-text SPEAKER_STATS_WARNING for both TXT and RTF outputs.
+# For RTF, escape it at the point of use with `escape_rtf_text`.
+
 
 def format_vtt_timestamp(seconds: float) -> str:
     """Formats time in seconds to VTT format HH:MM:SS.mmm."""
@@ -377,13 +389,24 @@ class RTFFormatter(TranscriptFormatter):
             rtf_content.append("\\par")
 
             if summary_data:
-                rtf_content.append(r"\pard\sb200\sa120\b Speaker statistics\b0\par")
+                # Bold only the first line (heading) of the speaker statistics warning
+                heading, _sep, remainder = SPEAKER_STATS_WARNING.partition("\n")
+                rtf_content.append(r"\pard\sb200\sa120\b " + escape_rtf_text(heading) + r"\b0\par")
+                if remainder:
+                    rtf_content.append(escape_rtf_text(remainder) + r"\par")
                 rtf_content.extend(build_summary_table(summary_data))
 
-            rtf_content.append("\\line " + "=" * 80 + "\\par")
+            # Insert horizontal rule (paragraph border) instead of ASCII equals
+            # \\pard starts a new paragraph; \\brdrb specifies a bottom border (single line);
+            # \\brdrw10 sets border width; \\brsp sets spacing between border and text.
+            rtf_content.append(r"\pard\brdrb\brdrs\brdrw10\brsp20\par")
             rtf_content.append("\\par")
         elif summary_data:
-            rtf_content.append(r"\pard\sb200\sa120\b Speaker statistics\b0\par")
+            # Bold only the first line (heading) of the speaker statistics warning
+            heading, _sep, remainder = SPEAKER_STATS_WARNING.partition("\n")
+            rtf_content.append(r"\pard\sb200\sa120\b " + escape_rtf_text(heading) + r"\b0\par")
+            if remainder:
+                rtf_content.append(escape_rtf_text(remainder) + r"\par")
             rtf_content.extend(build_summary_table(summary_data))
         
         for i, para in enumerate(paragraphs):
@@ -723,7 +746,7 @@ class TXTFormatter(TranscriptFormatter):
                 header_parts.append(f"{label:>{width}}")
         header = "  ".join(header_parts)
 
-        lines = ["Approximate speaker statistics:\n(may be very inaccurate, especially if number of detected speakers is incorrect)", "", header, ""]
+        lines = [SPEAKER_STATS_WARNING, "", header, ""]
         for row in display_rows:
             lines.append(format_line(row))
 
