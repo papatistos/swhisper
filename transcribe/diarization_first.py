@@ -47,11 +47,13 @@ class DiarizationFirstPipeline:
         self,
         config: TranscriptionConfig,
         whisper_settings: WhisperSettings,
-        checkpoint_manager=None
+        checkpoint_manager=None,
+        diarization_config=None
     ):
         self.config = config
         self.whisper_settings = whisper_settings
         self.checkpoint_manager = checkpoint_manager
+        self.diarization_config = diarization_config
         self.resource_manager = ResourceManager()
         self.audio_processor = AudioProcessor(config)
     
@@ -166,7 +168,11 @@ class DiarizationFirstPipeline:
         
         # Step 5: Merge results
         print("\n🔀 Step 5: Merging chunk results...")
-        merged_result = self._merge_chunk_results(chunk_results, speaker_segments)
+        merged_result = self._merge_chunk_results(
+            chunk_results, 
+            speaker_segments,
+            diarization_result  # Pass for overlap annotations
+        )
         
         print("✅ Diarization-first processing complete!")
         
@@ -310,7 +316,8 @@ class DiarizationFirstPipeline:
     def _merge_chunk_results(
         self,
         chunk_results: List[Tuple[Dict[str, Any], float]],
-        speaker_segments: List[Dict[str, Any]]
+        speaker_segments: List[Dict[str, Any]],
+        diarization_result: Any = None
     ) -> Dict[str, Any]:
         """
         Merge results from multiple chunks.
@@ -318,6 +325,7 @@ class DiarizationFirstPipeline:
         Args:
             chunk_results: List of (result_dict, chunk_start_time) tuples
             speaker_segments: Original speaker segments for the entire file
+            diarization_result: Original diarization result (for overlap annotations)
             
         Returns:
             Merged transcription result

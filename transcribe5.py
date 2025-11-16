@@ -72,15 +72,16 @@ class TranscriptionAppV5(_transcribe4_module.TranscriptionAppV4):
         # Initialize parent (gets workspace manager, checkpoint manager, etc.)
         super().__init__(config, whisper_settings)
         
+        # Store diarization config
+        self.diarization_config = diarization_config or DiarizationConfig()
+        
         # Create diarization-first pipeline instead of standard pipeline
         self.diarization_first_pipeline = DiarizationFirstPipeline(
             self.config,
             self.whisper_settings,
-            self.checkpoint_manager
+            self.checkpoint_manager,
+            self.diarization_config  # Pass diarization config
         )
-        
-        # Store diarization config (will be passed to pipeline)
-        self.diarization_config = diarization_config or DiarizationConfig()
 
     def _process_single_file(
         self, 
