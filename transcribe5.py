@@ -125,6 +125,9 @@ class TranscriptionAppV5(_transcribe4_module.TranscriptionAppV4):
         # Persist VAD segments if available (speaker segments in this case)
         vad_output_path = os.path.join(output_dir, f"{base_name}_vad.tsv")
         self._save_speaker_segments(result, vad_output_path)
+        
+        # Generate additional output formats (VTT, RTTM, RTF, TXT, TSV)
+        self._generate_output_formats(result, audiofile_path, base_name, output_dir)
 
     def _save_speaker_segments(self, result: dict, vad_path: str) -> bool:
         """
@@ -157,6 +160,126 @@ class TranscriptionAppV5(_transcribe4_module.TranscriptionAppV4):
         except Exception as exc:
             print(f"⚠️ Failed to write speaker segments TSV: {exc}")
             return False
+    
+    def _generate_output_formats(
+        self,
+        result: dict,
+        audiofile_path: str,
+        base_name: str,
+        output_dir: str
+    ) -> None:
+        """
+        Generate additional output formats using diarize/output.py formatters.
+        
+        Args:
+            result: Transcription result with speaker labels
+            audiofile_path: Path to the audio file
+            base_name: Base filename without extension
+            output_dir: Output directory
+        """
+        # Import formatters from diarize module
+        from diarize import (
+            VTTFormatter, RTTMFormatter, RTFFormatter, 
+            TXTFormatter, TSVFormatter,
+            SegmentAnalyzer  # Import from main diarize module
+        )
+        from datetime import datetime
+        
+        segments = result.get('segments', [])
+        if not segments:
+            print("⚠️  No segments to export")
+            return
+        
+        # Create transcripts directory and subdirectories
+        transcripts_dir = os.path.join(output_dir, 'transcripts')
+        os.makedirs(transcripts_dir, exist_ok=True)
+        
+        subdirs = {}
+        for format_name in ['vtt', 'rttm', 'rtf', 'txt', 'tsv']:
+            subdir = os.path.join(transcripts_dir, format_name)
+            os.makedirs(subdir, exist_ok=True)
+            subdirs[format_name] = subdir
+        
+        timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+        audio_basename = os.path.basename(audiofile_path)
+        
+        # Analyze segments for statistics
+        speaker_stats = SegmentAnalyzer.analyze_final_segments(segments)
+        
+        print("\n📄 Generating output formats...")
+        
+        # VTT format
+        try:
+            vtt_filename = f"{base_name}_{timestamp}.vtt"
+            vtt_path = os.path.join(subdirs['vtt'], vtt_filename)
+            VTTFormatter().format(segments, vtt_path)
+            print(f"   ✅ VTT: {vtt_filename}")
+        except Exception as e:
+            print(f"   ⚠️  VTT generation failed: {e}")
+        
+        # RTTM format (standard)
+        try:
+            rttm_filename = f"{base_name}_{timestamp}.rttm"
+            rttm_path = os.path.join(subdirs['rttm'], rttm_filename)
+            RTTMFormatter().format(segments, rttm_path, audio_basename=audio_basename)
+            print(f"   ✅ RTTM: {rttm_filename}")
+        except Exception as e:
+            print(f"   ⚠️  RTTM generation failed: {e}")
+        
+        # RTTM format (detailed word-level)
+        try:
+            detailed_rttm_filename = f"{base_name}_{timestamp}_detailed.rttm"
+            detailed_rttm_path = os.path.join(subdirs['rttm'], detailed_rttm_filename)
+            RTTMFormatter().format_detailed(segments, detailed_rttm_path, audio_basename=audio_basename)
+            print(f"   ✅ RTTM (detailed): {detailed_rttm_filename}")
+        except Exception as e:
+            print(f"   ⚠️  Detailed RTTM generation failed: {e}")
+        
+        # RTF format
+        try:
+            rtf_filename = f"{base_name}_{timestamp}.rtf"
+            rtf_path = os.path.join(subdirs['rtf'], rtf_filename)
+            RTFFormatter().format(
+                segments,
+                rtf_path,
+                config=self.diarization_config,
+                transcript_id=timestamp,
+                speaker_stats=speaker_stats
+            )
+            print(f"   ✅ RTF: {rtf_filename}")
+        except Exception as e:
+            print(f"   ⚠️  RTF generation failed: {e}")
+        
+        # TXT format
+        try:
+            txt_filename = f"{base_name}_{timestamp}.txt"
+            txt_path = os.path.join(subdirs['txt'], txt_filename)
+            TXTFormatter().format(
+                segments,
+                txt_path,
+                config=self.diarization_config,
+                transcript_id=timestamp,
+                speaker_stats=speaker_stats
+            )
+            print(f"   ✅ TXT: {txt_filename}")
+        except Exception as e:
+            print(f"   ⚠️  TXT generation failed: {e}")
+        
+        # TSV format
+        try:
+            tsv_filename = f"{base_name}_{timestamp}.tsv"
+            tsv_path = os.path.join(subdirs['tsv'], tsv_filename)
+            TSVFormatter().format(
+                segments,
+                tsv_path,
+                include_silence=self.diarization_config.include_silence_markers,
+                include_word_details=False,
+                config=self.diarization_config,  # Pass diarization config for TSV
+                word_per_line=getattr(self.diarization_config, 'tsv_word_per_line', False)
+            )
+            print(f"   ✅ TSV: {tsv_filename}")
+        except Exception as e:
+            print(f"   ⚠️  TSV generation failed: {e}")
 
     def _run_diarization_pipeline(self) -> None:
         """
