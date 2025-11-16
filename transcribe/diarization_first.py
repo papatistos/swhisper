@@ -14,6 +14,8 @@ transcription process. This approach:
 import os
 import time
 import json
+import re
+import math
 from typing import Any, Dict, List, Optional, Tuple
 from contextlib import contextmanager
 
@@ -30,6 +32,9 @@ from .speaker_chunking import (
     analyze_chunk_distribution,
     get_speaker_for_timestamp
 )
+
+# Disfluency marker pattern for post-processing
+DISFLUENCY_MARKER_PATTERN = re.compile(r"^\[\*+\]$")
 
 
 class DiarizationFirstPipeline:
