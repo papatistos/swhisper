@@ -79,6 +79,13 @@ class TranscriptionConfig:
     min_silence_duration: float = _get_env_float("SWHISPER_MIN_SILENCE", 0.5)    # Minimum duration of silence to place the chunk boundary
     overlap_duration: float = _get_env_float("SWHISPER_OVERLAP_DURATION", 1.0)   # increasing this from 1 to make sure there are enough words to reliabley stitch the transcript together. But not too long, otherwise it will be removed as duplicate
 
+    # Diarization-first mode configuration (transcribe5.py)
+    diarization_first: bool = _get_env_bool("SWHISPER_DIARIZATION_FIRST", False)  # Run diarization before transcription
+    use_speaker_segments_as_vad: bool = _get_env_bool("SWHISPER_SPEAKER_VAD", True)  # Use speaker segments instead of Silero VAD
+    speaker_aware_chunking: bool = _get_env_bool("SWHISPER_SPEAKER_CHUNKING", True)  # Cut chunks at speaker boundaries
+    max_chunk_duration: int = _get_env_int("SWHISPER_MAX_CHUNK_DURATION", 200)  # Maximum chunk duration before forcing split
+    min_chunk_duration: float = _get_env_float("SWHISPER_MIN_CHUNK_DURATION", 30.0)  # Minimum chunk duration to avoid tiny chunks
+
     # Environment checks
     check_revision: bool = _get_env_bool("SWHISPER_CHECK_REVISION", False)
     check_environment: bool = _get_env_bool("SWHISPER_CHECK_ENVIRONMENT", True)
