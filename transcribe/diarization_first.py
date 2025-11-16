@@ -343,6 +343,18 @@ class DiarizationFirstPipeline:
             print("   🔧 Scaling disfluency markers...")
             result = self._scale_disfluency_markers(result)
             
+            print("   📐 Aligning segment boundaries...")
+            result = self._align_segment_boundaries(result)
+            
+            # Annotate disfluency markers with overlap hints if preserve_markers is enabled
+            if self.diarization_config and self.diarization_config.preserve_markers and diarization_result:
+                print("   🏷️  Annotating disfluency overlap markers...")
+                result = self._annotate_disfluency_overlaps(result, diarization_result)
+                
+                print("   ✂️  Splitting cross-talk segments...")
+                result = self._split_crosstalk_segments(result)
+            
+            return result
             return result
         
         # Multiple chunks - merge them
@@ -384,6 +396,17 @@ class DiarizationFirstPipeline:
         
         print("   🔧 Scaling disfluency markers...")
         merged = self._scale_disfluency_markers(merged)
+        
+        print("   📐 Aligning segment boundaries...")
+        merged = self._align_segment_boundaries(merged)
+        
+        # Annotate disfluency markers with overlap hints if preserve_markers is enabled
+        if self.diarization_config and self.diarization_config.preserve_markers and diarization_result:
+            print("   🏷️  Annotating disfluency overlap markers...")
+            merged = self._annotate_disfluency_overlaps(merged, diarization_result)
+            
+            print("   ✂️  Splitting cross-talk segments...")
+            merged = self._split_crosstalk_segments(merged)
         
         return merged
     
@@ -554,4 +577,100 @@ class DiarizationFirstPipeline:
                 if 'text' in word:
                     word['text'] = new_marker
         
+        return result
+    
+    def _align_segment_boundaries(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Align segment start/end timestamps to match first/last word timestamps.
+        
+        This ensures segment boundaries perfectly match their actual word content,
+        excluding silence markers from the boundary calculation.
+        """
+        segments = result.get('segments', [])
+        
+        for segment in segments:
+            words = segment.get('words', [])
+            if not words:
+                continue
+            
+            # Filter out silence markers for boundary calculation
+            real_words = [w for w in words if not w.get('is_silence_marker', False)]
+            
+            if real_words:
+                # Update segment boundaries to match actual word timestamps
+                first_word_start = real_words[0].get('start')
+                last_word_end = real_words[-1].get('end')
+                
+                if first_word_start is not None:
+                    segment['start'] = first_word_start
+                if last_word_end is not None:
+                    segment['end'] = last_word_end
+        
+        return result
+    
+    def _annotate_disfluency_overlaps(
+        self, 
+        result: Dict[str, Any],
+        diarization_result: Any
+    ) -> Dict[str, Any]:
+        """
+        Tag disfluency markers with overlapping speaker hints (pyannote 4 only).
+        
+        Adds speaker hints to markers like [*] -> [S01*] or [S01+S02**] when
+        multiple speakers are detected at that timestamp.
+        """
+        # Import here to avoid circular dependencies
+        from diarize.utils import WordProcessor
+        
+        segments = result.get('segments', [])
+        
+        # Check if we have overlapping timeline data
+        if diarization_result is None:
+            return result
+        
+        # Check if this is pyannote 4 with overlapping timeline
+        has_overlap_timeline = hasattr(diarization_result, 'crop')
+        
+        if not has_overlap_timeline:
+            return result
+        
+        # Annotate disfluency markers with overlap hints
+        overlap_stats = WordProcessor.annotate_disfluency_overlap_markers(
+            segments,
+            diarization_result
+        )
+        
+        annotated = overlap_stats.get('annotated', 0)
+        cleared = overlap_stats.get('cleared', 0)
+        
+        if annotated or cleared:
+            summary_parts = []
+            if annotated:
+                summary_parts.append(f"{annotated} tagged with overlap hints")
+            if cleared:
+                summary_parts.append(f"{cleared} cleared")
+            print(f"   🏷️  Disfluency markers: " + ", ".join(summary_parts))
+        
+        return result
+    
+    def _split_crosstalk_segments(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Split segments where leading/trailing markers indicate speaker changes.
+        
+        When a segment has markers like [S01*] at the start or end with a different
+        speaker than the main segment, split them into separate segments.
+        """
+        # Import here to avoid circular dependencies
+        from diarize.utils import BackfillMerger
+        
+        segments = result.get('segments', [])
+        
+        # Split segments with leading/trailing cross-talk
+        split_segments = BackfillMerger.split_leading_and_trailing_crosstalk(segments)
+        
+        if len(split_segments) != len(segments):
+            diff = len(split_segments) - len(segments)
+            print(f"   ✂️  Split {diff} segments with cross-talk markers")
+        
+        result['segments'] = split_segments
         return result
