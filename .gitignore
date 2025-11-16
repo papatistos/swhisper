@@ -4,6 +4,7 @@
 # Python bytecode
 __pycache__/
 *.py[cod]
+test_*.py
 
 # macOS
 .DS_Store
