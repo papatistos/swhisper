@@ -315,8 +315,16 @@ class DiarizationFirstPipeline:
             return {'text': '', 'segments': [], 'language': self.whisper_settings.language}
         
         if len(chunk_results) == 1:
-            # Single chunk - just return it (already has correct timestamps)
-            return chunk_results[0][0]
+            # Single chunk - apply post-processing
+            result = chunk_results[0][0]
+            
+            print("   📝 Adding silence markers...")
+            result = self._add_silence_markers(result)
+            
+            print("   🔧 Scaling disfluency markers...")
+            result = self._scale_disfluency_markers(result)
+            
+            return result
         
         # Multiple chunks - merge them
         all_segments = []
@@ -350,6 +358,13 @@ class DiarizationFirstPipeline:
             'language': self.whisper_settings.language,
             'speaker_segments': speaker_segments  # Include original diarization
         }
+        
+        # Apply post-processing to match original pipeline output
+        print("   📝 Adding silence markers...")
+        merged = self._add_silence_markers(merged)
+        
+        print("   🔧 Scaling disfluency markers...")
+        merged = self._scale_disfluency_markers(merged)
         
         return merged
     
