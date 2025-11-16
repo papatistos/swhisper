@@ -387,3 +387,137 @@ class DiarizationFirstPipeline:
                 del model
                 self.resource_manager.current_whisper_model = None
             self.resource_manager.clear_device_memory()
+    
+    def _add_silence_markers(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Add silence markers between words where gaps exceed minimum duration.
+        
+        This creates silence markers like (0.5), (1.2) between words to match
+        the output format of the original pipeline.
+        """
+        segments = result.get('segments', [])
+        if not segments:
+            return result
+        
+        min_silence = self.config.min_silence_duration
+        enhanced_segments = []
+        
+        for seg_idx, segment in enumerate(segments):
+            words = segment.get('words', [])
+            if not words:
+                enhanced_segments.append(segment)
+                continue
+            
+            # Process words and add silence markers
+            enhanced_words = []
+            
+            for i, word in enumerate(words):
+                enhanced_words.append(word)
+                
+                # Check for gap to next word within segment
+                if i + 1 < len(words):
+                    next_word = words[i + 1]
+                    current_end = word.get('end', word.get('start', 0))
+                    next_start = next_word.get('start', next_word.get('end', current_end))
+                    gap_duration = next_start - current_end
+                    
+                    if gap_duration >= min_silence:
+                        rounded_gap = round(gap_duration, 1)
+                        silence_text = f"({rounded_gap:.1f})".replace("(0.", "(.")
+                        
+                        silence_word = {
+                            'start': current_end,
+                            'end': next_start,
+                            'word': silence_text,
+                            'text': silence_text,
+                            'speaker': 'SILENCE',
+                            'confidence': 1.0,
+                            'is_silence_marker': True
+                        }
+                        enhanced_words.append(silence_word)
+            
+            # Update segment with enhanced words
+            new_segment = segment.copy()
+            new_segment['words'] = enhanced_words
+            enhanced_segments.append(new_segment)
+            
+            # Check for cross-segment gap
+            if seg_idx + 1 < len(segments):
+                next_segment = segments[seg_idx + 1]
+                next_words = next_segment.get('words', [])
+                
+                if enhanced_words and next_words:
+                    last_word = enhanced_words[-1]
+                    first_next_word = next_words[0]
+                    
+                    current_end = last_word.get('end', last_word.get('start', 0))
+                    next_start = first_next_word.get('start', first_next_word.get('end', current_end))
+                    gap_duration = next_start - current_end
+                    
+                    if gap_duration >= min_silence:
+                        rounded_gap = round(gap_duration, 1)
+                        silence_text = f"({rounded_gap:.1f})".replace("(0.", "(.")
+                        
+                        # Create standalone silence segment
+                        silence_segment = {
+                            'start': current_end,
+                            'end': next_start,
+                            'text': silence_text,
+                            'speaker': 'SILENCE',
+                            'is_silence_marker': True,
+                            'words': [{
+                                'start': current_end,
+                                'end': next_start,
+                                'word': silence_text,
+                                'text': silence_text,
+                                'speaker': 'SILENCE',
+                                'confidence': 1.0,
+                                'is_silence_marker': True
+                            }]
+                        }
+                        enhanced_segments.append(silence_segment)
+        
+        result['segments'] = enhanced_segments
+        return result
+    
+    def _scale_disfluency_markers(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Adjust disfluency markers to reflect duration via repeated asterisks.
+        
+        Converts [*] markers based on duration:
+        - 0.1s = [*]
+        - 0.2s = [**]
+        - 0.3s = [***]
+        etc.
+        """
+        segments = result.get('segments', [])
+        
+        for segment in segments:
+            words = segment.get('words', [])
+            if not words:
+                continue
+            
+            for word in words:
+                marker_text = word.get('word', word.get('text', ''))
+                cleaned = marker_text.strip() if isinstance(marker_text, str) else ''
+                
+                if not cleaned or not DISFLUENCY_MARKER_PATTERN.match(cleaned):
+                    continue
+                
+                start = word.get('start')
+                end = word.get('end')
+                if start is None or end is None:
+                    continue
+                
+                duration = max(0.0, end - start)
+                if duration <= 0:
+                    asterisk_count = 1
+                else:
+                    asterisk_count = max(1, min(50, math.ceil(duration / 0.1)))
+                
+                new_marker = f"[{'*' * asterisk_count}]"
+                word['word'] = new_marker
+                if 'text' in word:
+                    word['text'] = new_marker
+        
+        return result
