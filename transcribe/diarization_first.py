@@ -229,10 +229,21 @@ class DiarizationFirstPipeline:
             Whisper transcription result with speaker information
         """
         # Convert speaker segments to VAD format (chunk-relative timestamps)
-        vad_segments = convert_segments_to_vad_format(speaker_segments, chunk_start)
+        # Merge small gaps to avoid missing words in brief pauses
+        merge_gap_threshold = self.config.vad_gap_merge_threshold
+        vad_segments = convert_segments_to_vad_format(
+            speaker_segments, 
+            chunk_start,
+            merge_gap_threshold=merge_gap_threshold
+        )
         
-        # Debug: print first few VAD segments
-        print(f"   📊 VAD segments sample (first 3): {vad_segments[:3] if len(vad_segments) > 0 else 'none'}")
+        # Calculate coverage statistics
+        total_chunk_duration = chunk_end - chunk_start
+        vad_coverage = sum(end - start for start, end in vad_segments)
+        coverage_pct = (vad_coverage / total_chunk_duration * 100) if total_chunk_duration > 0 else 0
+        
+        print(f"   📊 VAD: {len(vad_segments)} segments covering {vad_coverage:.1f}s / {total_chunk_duration:.1f}s ({coverage_pct:.1f}%)")
+        print(f"   📊 Gap merge threshold: {merge_gap_threshold}s (merging speaker segments with small gaps)")
         
         # Load audio chunk
         audio_data, sample_rate = self.audio_processor.load_audio_chunk(
