@@ -85,6 +85,7 @@ class TranscriptionConfig:
     speaker_aware_chunking: bool = _get_env_bool("SWHISPER_SPEAKER_CHUNKING", True)  # Cut chunks at speaker boundaries
     max_chunk_duration: int = _get_env_int("SWHISPER_MAX_CHUNK_DURATION", 200)  # Maximum chunk duration before forcing split
     min_chunk_duration: float = _get_env_float("SWHISPER_MIN_CHUNK_DURATION", 30.0)  # Minimum chunk duration to avoid tiny chunks
+    vad_gap_merge_threshold: float = _get_env_float("SWHISPER_VAD_GAP_MERGE_THRESHOLD", 0.5)  # Merge speaker segments with gaps shorter than this (seconds)
 
     # Environment checks
     check_revision: bool = _get_env_bool("SWHISPER_CHECK_REVISION", False)
