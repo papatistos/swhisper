@@ -223,13 +223,15 @@ def create_speaker_aware_chunks(
 
 def convert_segments_to_vad_format(
     segments: List[Dict[str, Any]], 
-    chunk_start: float
+    chunk_start: float,
+    merge_gap_threshold: float = 0.3
 ) -> List[Tuple[float, float]]:
     """
     Convert speaker segments to VAD format for whisper-timestamped.
     
     Adjusts timestamps to be relative to the chunk start time, as whisper
-    expects timestamps relative to the audio chunk it receives.
+    expects timestamps relative to the audio chunk it receives. Also merges
+    segments with small gaps to avoid missing words in brief pauses.
     
     Note: whisper-timestamped expects a list of (start, end) tuples,
     NOT a list of dicts with 'start' and 'end' keys.
@@ -237,9 +239,14 @@ def convert_segments_to_vad_format(
     Args:
         segments: List of speaker segments with absolute timestamps
         chunk_start: Start time of the audio chunk in the original file
+        merge_gap_threshold: Maximum gap duration (in seconds) to merge across.
+                           Gaps smaller than this will be included in VAD.
+                           Default 0.3s to capture brief pauses and avoid
+                           missing words that fall between pyannote segments.
         
     Returns:
-        List of (start, end) tuples with chunk-relative timestamps
+        List of (start, end) tuples with chunk-relative timestamps, with
+        small gaps merged
         
     Example:
         # Input: segments for chunk starting at 60.0s
@@ -247,10 +254,14 @@ def convert_segments_to_vad_format(
         chunk_start = 60.0
         
         # Output: timestamps relative to chunk start as tuples
-        [(0.0, 15.5), (15.5, 30.2), ...]
+        [(0.0, 15.5), (15.5, 30.2), ...]  # 0.3s+ gaps preserved
+        [(0.0, 30.2)]  # <0.3s gaps merged
     """
-    vad_segments = []
+    if not segments:
+        return []
     
+    # First, convert all to chunk-relative time
+    relative_segments = []
     for segment in segments:
         # Convert to chunk-relative time and ensure float type
         relative_start = float(segment['start']) - float(chunk_start)
@@ -260,10 +271,30 @@ def convert_segments_to_vad_format(
         relative_start = max(0.0, relative_start)
         relative_end = max(relative_start, relative_end)
         
-        # Return as tuple (start, end) not dict
-        vad_segments.append((relative_start, relative_end))
+        relative_segments.append((relative_start, relative_end))
     
-    return vad_segments
+    # Sort by start time
+    relative_segments.sort(key=lambda x: x[0])
+    
+    # Merge segments with small gaps
+    merged = []
+    current_start, current_end = relative_segments[0]
+    
+    for next_start, next_end in relative_segments[1:]:
+        gap = next_start - current_end
+        
+        if gap <= merge_gap_threshold:
+            # Gap is small enough - extend current segment to include the gap
+            current_end = max(current_end, next_end)
+        else:
+            # Gap is too large - finalize current segment and start new one
+            merged.append((current_start, current_end))
+            current_start, current_end = next_start, next_end
+    
+    # Don't forget the last segment
+    merged.append((current_start, current_end))
+    
+    return merged
 
 
 def get_speaker_for_timestamp(
