@@ -162,7 +162,7 @@ class DiarizationConfig:
     # Output preamble for transcript files
     output_preamble: str = os.getenv("SWHISPER_OUTPUT_PREAMBLE", """This transcript was generated using swhisper (https://github.com/papatistos/swhisper). 
                                      
-Note 1: If the transcript contains markers like [*], [**], [***] they indicate sounds that could not be transcribed. The number of asterisks roughly reflects the sound's duration in tenths of a second. This can be turned off in the swisper settings. If there is a number before the asterisks, e.g. [S02**], this indicates overlapping speech by another speaker (in this case: speaker 02). Not all (possibly not even the majority of) overlapping speech is detected.
+Note 1: If the transcript contains markers like [*], [**], [***], they indicate sounds that could not be transcribed. The number of asterisks roughly reflects the sound's duration in tenths of a second. This can be turned off in the swhisper settings. If there is a number before the asterisks, e.g. [S02**], this indicates overlapping speech by another speaker (in this case: speaker 02). Not all (possibly not even the majority of) overlapping speech is detected.
 
 Note 2: You may also find parentheses with a number inside, e.g. (.3). These indicate silences and the number indicates the duration of the silence in seconds. Currently, not all silences are reliably detected, but those that are may be useful, especially when they indicate longer pauses. This can also be turned off in the swhisper settings. Long silences are surrounded by blank lines (even when there is no speaker change). This can be adjusted or turned off in the swhisper settings.
 
