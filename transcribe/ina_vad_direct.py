@@ -80,7 +80,7 @@ class InaSpeechVADDirect:
         stop_sec: Optional[float] = None
     ) -> List[Tuple[float, float]]:
         """
-        Get speech segments from audio file.
+        Get speech segments from audio file (for VAD parameter).
         
         Args:
             audio_path: Path to audio file (any format supported by ffmpeg)
@@ -88,31 +88,21 @@ class InaSpeechVADDirect:
             stop_sec: Optional stop time in seconds
             
         Returns:
-            List of (start, end) tuples in seconds, suitable for whisper VAD parameter
+            List of (start, stop) tuples in seconds, suitable for whisper VAD parameter
+            Note: 'stop' is the END time of the segment
         """
-        # Run segmentation
-        segments = self.segmenter(audio_path)
+        # Get all segments
+        all_segments = self.get_all_segments(audio_path, start_sec, stop_sec)
         
         # Filter to speech segments only
         # Labels: 'speech', 'music', 'noise', 'male', 'female', 'noEnergy'
         speech_labels = {'speech', 'male', 'female'}
         
         speech_segments = [
-            (start, end)
-            for label, start, end in segments
+            (start, stop)
+            for label, start, stop in all_segments
             if label in speech_labels
         ]
-        
-        # Apply time range filter if specified
-        if start_sec is not None or stop_sec is not None:
-            start_sec = start_sec or 0.0
-            stop_sec = stop_sec or float('inf')
-            
-            speech_segments = [
-                (max(start, start_sec), min(end, stop_sec))
-                for start, end in speech_segments
-                if end > start_sec and start < stop_sec
-            ]
         
         return speech_segments
 
