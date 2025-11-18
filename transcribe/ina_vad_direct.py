@@ -38,6 +38,41 @@ class InaSpeechVADDirect:
             detect_gender=detect_gender
         )
     
+    def get_all_segments(
+        self,
+        audio_path: str,
+        start_sec: Optional[float] = None,
+        stop_sec: Optional[float] = None
+    ) -> List[Tuple[str, float, float]]:
+        """
+        Get ALL segments from audio file (speech, music, noise, etc.).
+        
+        Args:
+            audio_path: Path to audio file (any format supported by ffmpeg)
+            start_sec: Optional start time in seconds
+            stop_sec: Optional stop time in seconds
+            
+        Returns:
+            List of (label, start, stop) tuples
+            Labels: 'male', 'female', 'speech', 'music', 'noise', 'noEnergy'
+            Note: 'stop' is the END time of the segment
+        """
+        # Run segmentation - returns list of (label, start, stop) tuples
+        segments = list(self.segmenter(audio_path))
+        
+        # Apply time range filter if specified
+        if start_sec is not None or stop_sec is not None:
+            start_sec = start_sec or 0.0
+            stop_sec = stop_sec or float('inf')
+            
+            segments = [
+                (label, max(start, start_sec), min(stop, stop_sec))
+                for label, start, stop in segments
+                if stop > start_sec and start < stop_sec
+            ]
+        
+        return segments
+    
     def get_speech_segments(
         self,
         audio_path: str,
