@@ -149,6 +149,12 @@ class DiarizationConfig:
     backfill_cache_dir: Optional[str] = os.getenv("SWHISPER_BACKFILL_CACHE_DIR") if os.getenv("SWHISPER_BACKFILL_CACHE_DIR") else None
     backfill_min_duration: float = _get_env_float("SWHISPER_BACKFILL_MIN_DURATION", 0.1)
     backfill_ignore_words: List[str] = None  # Words to replace with disfluency markers (e.g., hallucinations like "Balans")
+    
+    # SenseVoice integration for backfill (emotion & event detection)
+    backfill_enable_sensevoice: bool = _get_env_bool("SWHISPER_BACKFILL_ENABLE_SENSEVOICE", False)
+    backfill_sensevoice_model: str = os.getenv("SWHISPER_BACKFILL_SENSEVOICE_MODEL", "iic/SenseVoiceSmall")
+    backfill_sensevoice_device: Optional[str] = os.getenv("SWHISPER_BACKFILL_SENSEVOICE_DEVICE") if os.getenv("SWHISPER_BACKFILL_SENSEVOICE_DEVICE") else None
+    backfill_sensevoice_language: str = os.getenv("SWHISPER_BACKFILL_SENSEVOICE_LANGUAGE", "auto")  # "auto", "zh", "en", "yue", "ja", "ko"
 
     # Diarization caching (cache raw pyannote results)
     diarization_cache_enabled: bool = _get_env_bool("SWHISPER_DIARIZATION_CACHE_ENABLED", True)
