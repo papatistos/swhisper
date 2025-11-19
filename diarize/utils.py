@@ -1204,6 +1204,10 @@ class BackfillTranscriber:
         snippet_prefix: Optional[str] = None,
         cache: Optional['BackfillCache'] = None,
         ignore_words: Optional[List[str]] = None,
+        enable_sensevoice: bool = False,
+        sensevoice_model: str = "iic/SenseVoiceSmall",
+        sensevoice_device: Optional[str] = None,
+        sensevoice_language: str = "auto",
     ) -> None:
         self.audio_path = audio_path
         self.model_name = model_name
@@ -1221,16 +1225,84 @@ class BackfillTranscriber:
         self.cache = cache
         # Store ignore words in lowercase for case-insensitive matching
         self.ignore_words = set(ignore_words or [])
+        
+        # SenseVoice configuration
+        self.enable_sensevoice = enable_sensevoice
+        self.sensevoice_model = sensevoice_model
+        self.sensevoice_device = sensevoice_device or self.device
+        self.sensevoice_language = sensevoice_language
+        self._sensevoice_provider = None
 
     def _ensure_model_loaded(self) -> None:
         if self._model is None:
             self._model = whisper.load_model(self.model_name, device=self.device)
+    
+    def _ensure_sensevoice_loaded(self) -> None:
+        """Lazy load SenseVoice provider."""
+        if not self.enable_sensevoice:
+            return
+        
+        if self._sensevoice_provider is None:
+            try:
+                from .sensevoice_provider import SenseVoiceProvider
+                self._sensevoice_provider = SenseVoiceProvider(
+                    model_name=self.sensevoice_model,
+                    device=self.sensevoice_device,
+                    use_vad=False,  # No VAD needed for short backfill snippets
+                )
+            except Exception as exc:
+                print(f"      Warning: Failed to initialize SenseVoice: {exc}")
+                print(f"      Continuing with Whisper-only transcription")
+                self.enable_sensevoice = False
+    
+    def _transcribe_with_sensevoice(
+        self,
+        audio: np.ndarray,
+        turn: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Transcribe audio snippet with SenseVoice.
+        
+        Args:
+            audio: Audio data (16kHz, mono, float32)
+            turn: Turn information containing speaker, start, end
+            
+        Returns:
+            Dictionary with SenseVoice results or None on failure
+        """
+        if not self.enable_sensevoice:
+            return None
+        
+        self._ensure_sensevoice_loaded()
+        
+        if self._sensevoice_provider is None:
+            return None
+        
+        try:
+            result = self._sensevoice_provider.transcribe(
+                audio=audio,
+                language=self.sensevoice_language,
+                use_itn=False,
+            )
+            
+            # Add metadata
+            result['speaker'] = turn.get('speaker', 'UNKNOWN')
+            result['start'] = turn.get('start', 0.0)
+            result['end'] = turn.get('end', 0.0)
+            
+            return result
+            
+        except Exception as exc:
+            print(f"      Warning: SenseVoice transcription failed: {exc}")
+            return None
 
     def close(self) -> None:
         if self._model is not None:
             del self._model
             self._model = None
-            DeviceManager.clear_device_memory()
+        if self._sensevoice_provider is not None:
+            self._sensevoice_provider.close()
+            self._sensevoice_provider = None
+        DeviceManager.clear_device_memory()
 
     def _should_filter_word(self, word_text: str) -> bool:
         """Check if a word should be filtered (replaced with disfluency marker).
@@ -1682,6 +1754,36 @@ class BackfillTranscriber:
         # Rescale any disfluency markers based on the clipped durations.
         temp_result = {'segments': [segment_data]}
         TranscriptionWorker._scale_disfluency_markers(temp_result)
+        
+        # Add SenseVoice transcription if enabled
+        if self.enable_sensevoice:
+            sensevoice_result = self._transcribe_with_sensevoice(chunk_audio, turn)
+            if sensevoice_result:
+                # Add SenseVoice fields at segment level
+                segment_data['sensevoice_text'] = sensevoice_result.get('text', '')
+                segment_data['sensevoice_raw_text'] = sensevoice_result.get('raw_text', '')
+                segment_data['sensevoice_emotion'] = sensevoice_result.get('emotion')
+                segment_data['sensevoice_event'] = sensevoice_result.get('event')
+                segment_data['sensevoice_language'] = sensevoice_result.get('language')
+                
+                # Also add SenseVoice fields to each word so they survive merging
+                for word in collected_words:
+                    word['sensevoice_text'] = sensevoice_result.get('text', '')
+                    word['sensevoice_raw_text'] = sensevoice_result.get('raw_text', '')
+                    word['sensevoice_emotion'] = sensevoice_result.get('emotion')
+                    word['sensevoice_event'] = sensevoice_result.get('event')
+                    word['sensevoice_language'] = sensevoice_result.get('language')
+                
+                # Log comparison for debugging
+                whisper_text = segment_data.get('text', '').strip()
+                sensevoice_text = sensevoice_result.get('text', '').strip()
+                if whisper_text != sensevoice_text:
+                    print(f"      [Comparison] Whisper: '{whisper_text}'")
+                    print(f"      [Comparison] SenseVoice: '{sensevoice_text}'")
+                    if sensevoice_result.get('emotion'):
+                        print(f"      [Emotion] {sensevoice_result['emotion']}")
+                    if sensevoice_result.get('event'):
+                        print(f"      [Event] {sensevoice_result['event']}")
 
         return temp_result['segments'][0], len(collected_words)
 
