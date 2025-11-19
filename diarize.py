@@ -432,7 +432,10 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                         audio_path=audiofile_path,
                         model=backfill_model,
                         device=backfill_device,
-                        overlap=backfill_overlap
+                        overlap=backfill_overlap,
+                        sensevoice_enabled=config.backfill_enable_sensevoice,
+                        sensevoice_model=config.backfill_sensevoice_model,
+                        sensevoice_language=config.backfill_sensevoice_language,
                     )
 
                 backfill_transcriber = BackfillTranscriber(
@@ -444,7 +447,11 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     snippet_output_dir=snippet_dir,
                     snippet_prefix=snippet_prefix,
                     cache=cache,
-                    ignore_words=config.backfill_ignore_words
+                    ignore_words=config.backfill_ignore_words,
+                    enable_sensevoice=config.backfill_enable_sensevoice,
+                    sensevoice_model=config.backfill_sensevoice_model,
+                    sensevoice_device=config.backfill_sensevoice_device,
+                    sensevoice_language=config.backfill_sensevoice_language,
                 )
 
                 try:
