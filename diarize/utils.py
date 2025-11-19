@@ -1187,6 +1187,17 @@ class BackfillMerger:
         if has_backfill:
             new_segment['contains_backfill'] = True
         
+        # Aggregate SenseVoice data from words (if present)
+        # Take SenseVoice fields from first real word that has them
+        for word in real_words:
+            if 'sensevoice_text' in word:
+                new_segment['sensevoice_text'] = word.get('sensevoice_text')
+                new_segment['sensevoice_raw_text'] = word.get('sensevoice_raw_text')
+                new_segment['sensevoice_emotion'] = word.get('sensevoice_emotion')
+                new_segment['sensevoice_event'] = word.get('sensevoice_event')
+                new_segment['sensevoice_language'] = word.get('sensevoice_language')
+                break
+        
         return new_segment
 
 

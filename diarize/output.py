@@ -1062,7 +1062,13 @@ class JSONFormatter(TranscriptFormatter):
         Save the enriched transcript with all metadata to JSON.
         
         Args:
-            segments: List of segment dictionaries with words and metadata
+            segments: List of segment dictionaries with words and metadata.
+                     Segments may include optional SenseVoice fields:
+                     - sensevoice_text: Transcription from SenseVoice
+                     - sensevoice_raw_text: Raw text with emotion/event tags
+                     - sensevoice_emotion: Detected emotion (e.g., "<|HAPPY|>")
+                     - sensevoice_event: Detected event (e.g., "<|Speech|>")
+                     - sensevoice_language: Detected language tag
             output_path: Path to save the JSON file
             metadata: Optional metadata about the transcription/diarization process
         """
