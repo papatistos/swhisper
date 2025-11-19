@@ -2153,13 +2153,26 @@ class BackfillCache:
 
     INDEX_FILENAME = "cache_index.json"
 
-    def __init__(self, cache_dir: str, audio_path: str, model: str, device: str, overlap: float) -> None:
+    def __init__(
+        self, 
+        cache_dir: str, 
+        audio_path: str, 
+        model: str, 
+        device: str, 
+        overlap: float,
+        sensevoice_enabled: bool = False,
+        sensevoice_model: str = "",
+        sensevoice_language: str = "auto"
+    ) -> None:
         self.cache_dir = Path(cache_dir).expanduser()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.audio_path = Path(audio_path)
         self.model = model
         self.device = device
         self.overlap = overlap
+        self.sensevoice_enabled = sensevoice_enabled
+        self.sensevoice_model = sensevoice_model
+        self.sensevoice_language = sensevoice_language
         self.index_path = self.cache_dir / self.INDEX_FILENAME
         self._index = self._load_index()
 
@@ -2194,11 +2207,16 @@ class BackfillCache:
             }
 
     def _config_signature(self) -> Dict[str, Any]:
-        return {
+        signature = {
             'model': self.model,
             'device': self.device,
             'overlap': float(self.overlap)
         }
+        # Include SenseVoice config if enabled to invalidate cache when settings change
+        if self.sensevoice_enabled:
+            signature['sensevoice_model'] = self.sensevoice_model
+            signature['sensevoice_language'] = self.sensevoice_language
+        return signature
 
     def _cache_file_path(self, transcript_key: str) -> Path:
         safe_key = re.sub(r"[^A-Za-z0-9_.-]+", "_", transcript_key)
