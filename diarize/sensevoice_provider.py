@@ -25,7 +25,8 @@ class SenseVoiceProvider:
             use_vad: Whether to use VAD (Voice Activity Detection) - typically False for short backfill snippets
         """
         self.model_name = model_name
-        self.device = device or "cpu"
+        # Default to mps on macOS when no device provided; fall back to cpu otherwise
+        self.device = device or "mps"
         self.use_vad = use_vad
         self._model = None
         self._model_kwargs = {}
@@ -45,6 +46,9 @@ class SenseVoiceProvider:
                 "model": self.model_name,
                 "trust_remote_code": True,
                 "device": self.device,
+                # Prevent funasr/ModelScope from checking for updates every load
+                # (funasr AutoModel supports disable_update=True as of funasr>=1.2.x)
+                "disable_update": True,
             }
             
             # Add VAD if requested (typically not needed for short backfill snippets)
@@ -52,10 +56,24 @@ class SenseVoiceProvider:
                 model_kwargs["vad_model"] = "fsmn-vad"
                 model_kwargs["vad_kwargs"] = {"max_single_segment_time": 30000}
             
-            self._model = AutoModel(**model_kwargs)
+            # Try to initialize AutoModel with disable_update if supported.
+            try:
+                self._model = AutoModel(**model_kwargs)
+                used_disable_update = True
+            except TypeError:
+                # Older/newer versions of AutoModel may not accept disable_update; retry without it
+                if 'disable_update' in model_kwargs:
+                    model_kwargs.pop('disable_update')
+                self._model = AutoModel(**model_kwargs)
+                used_disable_update = False
+
+            # store any kwargs exposed by the underlying model
             self._model_kwargs = self._model.kwargs if hasattr(self._model, 'kwargs') else {}
-            
-            print(f"      SenseVoice model loaded successfully")
+
+            if used_disable_update:
+                print(f"      SenseVoice model loaded successfully (disable_update=True)")
+            else:
+                print(f"      SenseVoice model loaded successfully")
             
         except ImportError as exc:
             raise RuntimeError(
