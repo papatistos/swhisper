@@ -8,6 +8,7 @@ import math
 import torch
 import signal
 import atexit
+import multiprocessing as mp
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from contextlib import contextmanager
@@ -18,6 +19,356 @@ from scipy.signal import resample
 import json
 import whisper_timestamped as whisper
 from transcribe.transcription import TranscriptionWorker
+
+
+# =============================================================================
+# SUBPROCESS WORKER FOR BACKFILL (must be at module level for pickling)
+# =============================================================================
+
+def _backfill_subprocess_worker(
+    input_queue: mp.Queue,
+    output_queue: mp.Queue,
+) -> None:
+    """
+    Subprocess worker that processes backfill turns with Whisper + SenseVoice.
+    
+    This function runs in a separate process to ensure complete memory cleanup
+    when processing is done. All models are loaded fresh and released when the
+    subprocess exits.
+    
+    Args:
+        input_queue: Queue containing (config_dict, turns_list) tuple
+        output_queue: Queue to put results or exceptions
+    """
+    try:
+        # Import everything needed in the subprocess
+        import whisper_timestamped as whisper
+        import soundfile as sf
+        import numpy as np
+        import torch
+        import gc
+        import math
+        import re
+        from typing import Dict, List, Any, Tuple, Optional
+        from scipy.signal import resample
+        from pathlib import Path
+        
+        # Get input data from queue
+        config_dict, turns, cached_segments, transcript_key = input_queue.get(timeout=30)
+        
+        audio_path = config_dict['audio_path']
+        model_name = config_dict['model_name']
+        device = config_dict['device']
+        settings = config_dict['settings']
+        overlap_duration = config_dict['overlap_duration']
+        sample_rate = config_dict['sample_rate']
+        ignore_words = set(config_dict.get('ignore_words', []))
+        enable_sensevoice = config_dict.get('enable_sensevoice', False)
+        sensevoice_model = config_dict.get('sensevoice_model', 'iic/SenseVoiceSmall')
+        sensevoice_device = config_dict.get('sensevoice_device', device)
+        sensevoice_language = config_dict.get('sensevoice_language', 'auto')
+        snippet_output_dir = config_dict.get('snippet_output_dir')
+        snippet_prefix = config_dict.get('snippet_prefix', 'backfill')
+        
+        print(f"  [Subprocess] Starting backfill for {len(turns)} turns...")
+        print(f"  [Subprocess] Loading Whisper model {model_name} on {device}...")
+        
+        # Load Whisper model
+        whisper_model = whisper.load_model(model_name, device=device)
+        
+        # Load SenseVoice if enabled
+        sensevoice_provider = None
+        if enable_sensevoice:
+            try:
+                from diarize.sensevoice_provider import SenseVoiceProvider
+                sensevoice_provider = SenseVoiceProvider(
+                    model_name=sensevoice_model,
+                    device=sensevoice_device,
+                    use_vad=False,
+                )
+                print(f"  [Subprocess] SenseVoice loaded on {sensevoice_device}")
+            except Exception as exc:
+                print(f"  [Subprocess] Warning: Failed to load SenseVoice: {exc}")
+                enable_sensevoice = False
+        
+        # Helper functions (inline to avoid pickling issues)
+        def load_audio_chunk(start: float, end: float) -> Tuple[Optional[np.ndarray], int]:
+            margin = overlap_duration
+            padded_start = max(0.0, start - margin)
+            padded_end = max(padded_start + 0.05, end + margin)
+            start_sample = int(round(padded_start * sample_rate))
+            end_sample = int(round(padded_end * sample_rate))
+            if end_sample <= start_sample:
+                end_sample = start_sample + int(sample_rate * 0.1)
+            
+            with sf.SoundFile(audio_path) as audio_file:
+                orig_sr = audio_file.samplerate
+                orig_start = int(round(start_sample * orig_sr / sample_rate))
+                orig_end = int(round(end_sample * orig_sr / sample_rate))
+                if orig_end <= orig_start:
+                    return None, start_sample
+                audio_file.seek(orig_start)
+                chunk_audio = audio_file.read(orig_end - orig_start, dtype='float32')
+            
+            if chunk_audio is None or len(chunk_audio) == 0:
+                return None, start_sample
+            if len(chunk_audio.shape) > 1:
+                chunk_audio = np.mean(chunk_audio, axis=1)
+            if orig_sr != sample_rate:
+                target_length = int(len(chunk_audio) * sample_rate / orig_sr)
+                if target_length <= 0:
+                    return None, start_sample
+                chunk_audio = resample(chunk_audio, target_length)
+            return chunk_audio.astype(np.float32), start_sample
+        
+        def should_filter_word(word_text: str) -> bool:
+            if not ignore_words:
+                return False
+            import fnmatch
+            cleaned = word_text.strip().lower().strip('.,!?"\'-')
+            if cleaned in ignore_words:
+                return True
+            for pattern in ignore_words:
+                if '*' in pattern and fnmatch.fnmatch(cleaned, pattern):
+                    return True
+            return False
+        
+        def segment_contains_only_ignore_words(segment_text: str) -> bool:
+            if not ignore_words or not segment_text:
+                return False
+            words = re.findall(r'\b\w+[:]?\b', segment_text)
+            if not words:
+                return False
+            for word in words:
+                if not should_filter_word(word):
+                    return False
+            return True
+        
+        def build_placeholder_segment(turn: Dict[str, Any], speaker_label: str) -> Dict[str, Any]:
+            start = float(turn.get('start', 0.0))
+            end = float(turn.get('end', start))
+            duration = max(0.0, end - start)
+            if duration <= 0.0:
+                duration = 0.1
+            asterisk_count = max(1, min(50, int(duration * 10 + 0.5)))
+            marker_token = f"[ {'*' * asterisk_count} ]"
+            placeholder_word = {
+                'start': start, 'end': end, 'word': marker_token,
+                'speaker': speaker_label, 'confidence': 0.0,
+                'is_backfill': True, 'is_placeholder': True
+            }
+            return {
+                'start': start, 'end': end, 'text': marker_token,
+                'speaker': speaker_label, 'speaker_confidence': 0.0,
+                'words': [placeholder_word], 'is_backfill': True, 'is_placeholder': True
+            }
+        
+        def transcribe_single_turn(turn: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], int]:
+            start = float(turn.get('start', 0.0))
+            end = float(turn.get('end', start))
+            if end <= start:
+                return None, 0
+            
+            speaker_label = turn.get('speaker', 'UNKNOWN')
+            chunk_audio, start_sample = load_audio_chunk(start, end)
+            if chunk_audio is None or len(chunk_audio) == 0:
+                return None, 0
+            
+            result = whisper.transcribe(whisper_model, chunk_audio, **settings)
+            time_offset = start_sample / sample_rate
+            
+            segments = result.get('segments', [])
+            for segment in segments:
+                if 'start' in segment:
+                    segment['start'] += time_offset
+                if 'end' in segment:
+                    segment['end'] += time_offset
+                for word in segment.get('words', []):
+                    if 'start' in word:
+                        word['start'] += time_offset
+                    if 'end' in word:
+                        word['end'] += time_offset
+            
+            TranscriptionWorker._scale_disfluency_markers(result)
+            
+            collected_words: List[Dict[str, Any]] = []
+            for segment in segments:
+                for word in segment.get('words', []):
+                    word_start = word.get('start')
+                    word_end = word.get('end')
+                    if word_start is None or word_end is None:
+                        continue
+                    if word_end <= start or word_start >= end:
+                        continue
+                    word_text = word.get('word', word.get('text', '')).strip()
+                    if not word_text:
+                        continue
+                    clipped_word = dict(word)
+                    clipped_word['start'] = max(start, float(word_start))
+                    clipped_word['end'] = min(end, float(word_end))
+                    clipped_word['speaker'] = speaker_label
+                    clipped_word['is_backfill'] = True
+                    collected_words.append(clipped_word)
+            
+            if not collected_words:
+                return build_placeholder_segment(turn, speaker_label), 0
+            
+            collected_words.sort(key=lambda item: item.get('start', 0.0))
+            text_tokens = []
+            for word in collected_words:
+                token = word.get('word')
+                if not isinstance(token, str):
+                    token = word.get('text', '')
+                token = token.strip() if isinstance(token, str) else ''
+                if token:
+                    text_tokens.append(token)
+            
+            segment_data = {
+                'start': collected_words[0]['start'],
+                'end': collected_words[-1]['end'],
+                'text': ' '.join(text_tokens),
+                'speaker': speaker_label,
+                'speaker_confidence': 1.0,
+                'words': collected_words,
+                'is_backfill': True
+            }
+            
+            temp_result = {'segments': [segment_data]}
+            TranscriptionWorker._scale_disfluency_markers(temp_result)
+            
+            # Add SenseVoice if enabled
+            if enable_sensevoice and sensevoice_provider:
+                try:
+                    sv_result = sensevoice_provider.transcribe(
+                        audio=chunk_audio,
+                        language=sensevoice_language,
+                        use_itn=False,
+                    )
+                    if sv_result:
+                        segment_data['sensevoice_text'] = sv_result.get('text', '')
+                        segment_data['sensevoice_raw_text'] = sv_result.get('raw_text', '')
+                        segment_data['sensevoice_emotion'] = sv_result.get('emotion')
+                        segment_data['sensevoice_event'] = sv_result.get('event')
+                        segment_data['sensevoice_language'] = sv_result.get('language')
+                        for word in collected_words:
+                            word['sensevoice_text'] = sv_result.get('text', '')
+                            word['sensevoice_emotion'] = sv_result.get('emotion')
+                            word['sensevoice_event'] = sv_result.get('event')
+                except Exception as exc:
+                    print(f"  [Subprocess] SenseVoice error: {exc}")
+            
+            return temp_result['segments'][0], len(collected_words)
+        
+        # Process all turns
+        recovered_segments: List[Dict[str, Any]] = []
+        recovered_turns: List[Dict[str, Any]] = []
+        failed_turns: List[Dict[str, Any]] = []
+        total_words = 0
+        placeholder_segments = 0
+        cache_hits = 0
+        newly_transcribed = {}
+        
+        for turn in turns:
+            speaker = turn.get('speaker', 'UNKNOWN')
+            start = float(turn.get('start', 0.0))
+            end = float(turn.get('end', start))
+            duration = max(0.0, end - start)
+            turn_key = f"{speaker}_{start:.3f}_{end:.3f}"
+            
+            # Check cache first
+            if turn_key in cached_segments:
+                segment = cached_segments[turn_key]
+                word_count = len(segment.get('words', []))
+                cache_hits += 1
+                print(f"----> Using cached result for {speaker}: {start:.2f}s - {end:.2f}s")
+            else:
+                print(f"----> Transcribing {speaker}: {start:.2f}s - {end:.2f}s (duration {duration:.2f}s)")
+                try:
+                    segment, word_count = transcribe_single_turn(turn)
+                    if segment:
+                        newly_transcribed[turn_key] = segment
+                except Exception as exc:
+                    print(f"   -> Backfill error for {speaker} {start:.2f}-{end:.2f}s: {exc}")
+                    segment, word_count = None, 0
+            
+            # Apply filtering for hallucinated segments
+            if segment and ignore_words:
+                segment_text = segment.get('text', '').strip()
+                if segment_contains_only_ignore_words(segment_text):
+                    words = segment.get('words', [])
+                    if words:
+                        first_word = words[0]
+                        last_word = words[-1]
+                        seg_start = first_word.get('start', segment.get('start', 0.0))
+                        seg_end = last_word.get('end', segment.get('end', seg_start))
+                        seg_duration = max(0.0, seg_end - seg_start)
+                        asterisk_count = max(1, min(50, int(seg_duration * 10 + 0.5)))
+                        marker_token = f"[ {'*' * asterisk_count} ]"
+                        marker = {
+                            'word': marker_token, 'text': marker_token,
+                            'start': seg_start, 'end': seg_end,
+                            'is_filtered_hallucination': True,
+                            'original_text': segment_text, 'speaker': segment.get('speaker')
+                        }
+                        segment['words'] = [marker]
+                        segment['text'] = marker_token
+                        word_count = 1
+                        print(f"      🚫 Filtered hallucinated segment: {segment_text}")
+            
+            is_placeholder = bool(segment and segment.get('is_placeholder'))
+            
+            if segment and (word_count or is_placeholder):
+                recovered_segments.append(segment)
+                enriched_turn = dict(turn)
+                enriched_turn['word_count'] = word_count
+                if is_placeholder:
+                    enriched_turn['is_placeholder'] = True
+                    placeholder_segments += 1
+                recovered_turns.append(enriched_turn)
+                total_words += word_count
+            else:
+                failed_turns.append(turn)
+        
+        if cache_hits > 0:
+            print(f"  [Subprocess] Cache hits: {cache_hits}/{len(turns)} turns")
+        
+        # Build result
+        result = {
+            'segments': recovered_segments,
+            'recovered_turns': recovered_turns,
+            'failed_turns': failed_turns,
+            'word_count': total_words,
+            'placeholders': placeholder_segments,
+            'newly_transcribed': newly_transcribed,
+            'cached_segments': cached_segments,
+        }
+        
+        # Cleanup before returning
+        print(f"  [Subprocess] Cleaning up models...")
+        del whisper_model
+        if sensevoice_provider:
+            sensevoice_provider.close()
+            del sensevoice_provider
+        gc.collect()
+        
+        # Clear PyTorch caches
+        if hasattr(torch, "mps") and torch.backends.mps.is_built():
+            torch.mps.empty_cache()
+            torch.mps.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        
+        gc.collect()
+        print(f"  [Subprocess] Done, processed {len(recovered_segments)} segments")
+        
+        output_queue.put(('success', result))
+        
+    except Exception as e:
+        import traceback
+        error_msg = f"Subprocess error: {str(e)}\n{traceback.format_exc()}"
+        print(f"  [Subprocess] ❌ Error: {str(e)}")
+        output_queue.put(('error', error_msg))
 
 
 class DeviceManager:
