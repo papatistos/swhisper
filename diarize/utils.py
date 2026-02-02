@@ -1666,6 +1666,138 @@ class BackfillTranscriber:
             self._sensevoice_provider = None
         DeviceManager.clear_device_memory()
 
+    def transcribe_turns_subprocess(
+        self,
+        turns: List[Dict[str, Any]],
+        transcript_key: Optional[str] = None,
+        timeout: float = 600.0
+    ) -> Dict[str, Any]:
+        """
+        Transcribe turns using a subprocess for memory isolation.
+        
+        This method spawns a separate process to load Whisper + SenseVoice models,
+        process all turns, and then exit. When the subprocess terminates, the OS
+        reclaims all memory, solving MPS memory fragmentation issues on macOS.
+        
+        Args:
+            turns: List of turn dictionaries with speaker, start, end
+            transcript_key: Optional key for caching (e.g., filename)
+            timeout: Maximum time to wait for subprocess (default 10 minutes)
+            
+        Returns:
+            Dictionary with segments, recovered_turns, failed_turns, word_count, placeholders
+        """
+        if not turns:
+            return {
+                'segments': [],
+                'recovered_turns': [],
+                'failed_turns': [],
+                'word_count': 0,
+                'placeholders': 0
+            }
+        
+        # Load cached segments in main process (cache I/O stays here)
+        cached_segments = {}
+        if self.cache and transcript_key:
+            cached_segments = self.cache.load(transcript_key)
+            if cached_segments:
+                print(f"  -> Loaded {len(cached_segments)} cached backfill segments")
+        
+        # Prepare config dict for subprocess (must be serializable)
+        config_dict = {
+            'audio_path': str(self.audio_path),
+            'model_name': self.model_name,
+            'device': self.device,
+            'settings': dict(self.settings),
+            'overlap_duration': self.overlap_duration,
+            'sample_rate': self.sample_rate,
+            'ignore_words': list(self.ignore_words) if self.ignore_words else [],
+            'enable_sensevoice': self.enable_sensevoice,
+            'sensevoice_model': self.sensevoice_model,
+            'sensevoice_device': self.sensevoice_device,
+            'sensevoice_language': self.sensevoice_language,
+            'snippet_output_dir': str(self.snippet_output_dir) if self.snippet_output_dir else None,
+            'snippet_prefix': self.snippet_prefix,
+        }
+        
+        # Use spawn context (required for MPS on macOS)
+        ctx = mp.get_context('spawn')
+        input_queue = ctx.Queue()
+        output_queue = ctx.Queue()
+        
+        # Put input data
+        input_queue.put((config_dict, turns, cached_segments, transcript_key))
+        
+        print(f"  -> Starting subprocess for backfill transcription ({len(turns)} turns)...")
+        
+        # Start subprocess
+        process = ctx.Process(
+            target=_backfill_subprocess_worker,
+            args=(input_queue, output_queue)
+        )
+        process.start()
+        
+        try:
+            # Wait for result with timeout
+            status, result = output_queue.get(timeout=timeout)
+            
+            if status == 'error':
+                print(f"  -> Subprocess failed: {result}")
+                return {
+                    'segments': [],
+                    'recovered_turns': [],
+                    'failed_turns': turns,
+                    'word_count': 0,
+                    'placeholders': 0
+                }
+            
+            # Save newly transcribed segments to cache (in main process)
+            newly_transcribed = result.pop('newly_transcribed', {})
+            if self.cache and transcript_key and newly_transcribed:
+                # Merge with existing cache
+                merged_cache = {**cached_segments, **newly_transcribed}
+                self.cache.save(transcript_key, merged_cache)
+                print(f"  -> Saved {len(newly_transcribed)} new segments to cache")
+            
+            # Remove internal fields not needed by caller
+            result.pop('cached_segments', None)
+            
+            return result
+            
+        except Exception as e:
+            print(f"  -> Subprocess error or timeout: {e}")
+            if process.is_alive():
+                print(f"  -> Terminating subprocess...")
+                process.terminate()
+                process.join(timeout=5)
+                if process.is_alive():
+                    process.kill()
+                    process.join(timeout=2)
+            
+            return {
+                'segments': [],
+                'recovered_turns': [],
+                'failed_turns': turns,
+                'word_count': 0,
+                'placeholders': 0
+            }
+        
+        finally:
+            # Ensure process is cleaned up
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
+            
+            # Properly close queues to avoid semaphore leak warnings
+            try:
+                # Cancel pending operations and close queue threads
+                input_queue.cancel_join_thread()
+                output_queue.cancel_join_thread()
+                input_queue.close()
+                output_queue.close()
+            except Exception:
+                pass
+
     def _should_filter_word(self, word_text: str) -> bool:
         """Check if a word should be filtered (replaced with disfluency marker).
         
