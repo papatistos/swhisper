@@ -23,6 +23,8 @@ Depending on your audio-files and settings, you may still have to do some manual
 
 - there is a basic stats analysis tool in `diarize/` that can help compare diarization results across different parameter settings. See `diarize/STATS_ANALYSIS_README.md` for details.
 
+- **Optional SenseVoice integration** for emotion recognition and audio event detection on backfilled segments (laughter, crying, applause, etc.). Enable with `SWHISPER_BACKFILL_ENABLE_SENSEVOICE=true` in `.swhisper.env`. See [SENSEVOICE_INTEGRATION.md](SENSEVOICE_INTEGRATION.md) for details.
+
 - Each transcript includes basic speaker statistics in a table like the one below. Note, however, that these stats depend on the quality of both the transcription and diarization. They are almost worthless if the wrong number of speakers has been detected.
 
 ````
