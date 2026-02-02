@@ -1,6 +1,9 @@
 # Local environment overrides
 .swhisper.env
 
+# Local context/notes
+CONTEXT.md
+
 # Python bytecode
 __pycache__/
 *.py[cod]
