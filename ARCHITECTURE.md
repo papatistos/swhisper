@@ -59,7 +59,7 @@ flowchart LR
 - Unsafe to change casually: Chunk boundaries must remain monotonic (with overlap) and align to planned silences; Backfill must not reorder global JSON segments; VAD TSV should mirror merged speech_activity spans.
 - Module boundaries: `TranscriptionPipeline` orchestrates chunk execution/merge; speech preview + boundary finding live in `SpeechAnalyzer`/`ChunkBoundaryFinder`; diarization/alignment/formatting live in `diarize/`.
 
-### Mermaid: Standard Flow
+### Standard Flow
 ```mermaid
 flowchart TD
     A["Audio files in audio_dir"] --> B["WorkspaceManager<br/>stage audio + temp dirs"]
@@ -129,7 +129,7 @@ flowchart TD
 - Unsafe to change casually: Do not drop overlapping diarization when annotating disfluency overlap; speaker segment TSV stays flat with absolute timestamps; merging must preserve chunk order.
 - Module boundaries: `transcribe/diarization_first.py` owns diarization-first orchestration/merge; speaker segment extraction/chunk creation stay in `transcribe/speaker_chunking.py`; final formatting uses `diarize/output.py`, but alignment logic remains in the transcribe-side pipeline.
 
-### Mermaid: Diarization-First Flow
+### Diarization-First Flow
 ```mermaid
 flowchart TD
     A["Audio files in audio_dir"] --> B["WorkspaceManager + staging"]
