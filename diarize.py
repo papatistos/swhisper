@@ -175,6 +175,8 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
     
     with logger_manager.safe_logger(log_file_path) as logger:
         try:
+            print() # Add blank line as visual separator before per-file log header
+            print()
             print("-" * 80)
             print(f"🎯 DIARIZATION LOG FOR: {audio_basename}")
             print(f"Timestamp: {log_timestamp}")
