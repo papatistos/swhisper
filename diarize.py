@@ -457,7 +457,13 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                 )
 
                 try:
-                    backfill_outcome = backfill_transcriber.transcribe_turns(unmatched_turns, transcript_key=base_filename)
+                    # Use subprocess isolation to ensure memory is fully released after each file
+                    # This solves MPS memory fragmentation issues on macOS
+                    backfill_outcome = backfill_transcriber.transcribe_turns_subprocess(
+                        unmatched_turns, 
+                        transcript_key=base_filename,
+                        timeout=600.0  # 10 minute timeout per file
+                    )
                 except Exception as backfill_error:  # pragma: no cover - defensive logging
                     print(f"  -> Backfill transcription failed: {backfill_error}")
                     backfill_outcome = {
@@ -466,6 +472,9 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                         'word_count': 0
                     }
                 finally:
+                    # Note: with subprocess isolation, close() is mostly a no-op since
+                    # models were never loaded in the main process. But call it anyway
+                    # for safety in case of fallback to non-subprocess method.
                     backfill_transcriber.close()
 
                 recovered_segments = backfill_outcome.get('segments', [])
