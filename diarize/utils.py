@@ -422,6 +422,7 @@ class LoggerManager:
     def __init__(self):
         self.current_logger: Optional[Logger] = None
         self.original_stdout = None
+        self._cleanup_done = False
         self._setup_signal_handlers()
         self._setup_cleanup()
     
@@ -444,6 +445,11 @@ class LoggerManager:
     
     def cleanup_resources(self) -> None:
         """Clean up all resources before exit."""
+        # Prevent duplicate cleanup
+        if self._cleanup_done:
+            return
+        self._cleanup_done = True
+        
         print("🧹 Cleaning up resources...")
         
         # Restore stdout
