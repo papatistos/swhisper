@@ -42,7 +42,7 @@ Total       506 (100.0%)  2707 (100.0%)        5.3  737.0 (100.0%)  220 wpm  306
 
 - I am seeing what looks like a relatively consisten time-shift of about 0.1s in the word-level timestamps provided by `whisper-timestamped` (relative to the actual audio). I'm not sure why this is happening, but I introduced an option to manually adjust such a shift via `SWHISPER_TIMESTAMP_ADJUSTMENT` in `.swhisper.env` (set to a negative value to move timestamps earlier). This adjustment is applied before diarization, so the diarized transcript will reflect the adjusted timestamps. Note that this is a manual workaround and may not be necessary for all use cases, but it is set to `-0.1` by default.
 
-```
+
 ### Transcript formatting options
 
 - The duration of silences between words can be included in the transcript (using CA notation, e.g. (.3) for a .3 second silence). I have not yet investigate the accuracy of these durations. They are based on the word-level provided by `whisper-timestamped` and I have a feeling that they might be underestimated...
