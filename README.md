@@ -94,6 +94,17 @@ SWHISPER_NUM_SPEAKERS=3     # shorthand: sets min AND max speakers for this file
 
 For bulk editing there is a CSV workflow: `python sidecar_tools.py template` generates a spreadsheet-friendly table (one row per audio file), and `python sidecar_tools.py apply <csv>` turns it into sidecar files. Editing a sidecar automatically triggers reprocessing of the affected file (stage-aware: diarization-only changes don't re-run transcription). See [SIDECAR_CONFIG.md](SIDECAR_CONFIG.md) for the list of allowed settings, precedence rules, and edge cases.
 
+### Web UI
+
+A local browser UI covers per-file settings and run control:
+
+```bash
+pip install fastapi uvicorn   # one-time
+python webui.py               # then open http://127.0.0.1:8722
+```
+
+It shows your audio files with per-file status (transcribed / diarized / per-file settings / will-reprocess), edits the `.swhisper` sidecar files through a grouped form (empty fields = global settings, shown as placeholders), and starts/stops `transcribe4.py`, `transcribe5.py`, or `diarize4.py` runs with live log output. The server binds to localhost only. `--audio-dir` overrides `SWHISPER_AUDIO_DIR` for the session.
+
 ### Quick start
 
 1. Copy the example configuration file:

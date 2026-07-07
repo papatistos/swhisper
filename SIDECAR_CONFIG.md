@@ -1,5 +1,7 @@
 # Per-file configuration (sidecar files)
 
+> There is also a browser-based editor for these settings: `python webui.py` (requires `pip install fastapi uvicorn`), then open http://127.0.0.1:8722. It lists your audio files with their processing status, edits sidecars through a form, and starts/stops pipeline runs with live log output.
+
 Most settings in `.swhisper.env` apply to every audio file in a run. Sidecar files let you override selected settings **for a single audio file** — most commonly the number of speakers.
 
 ## Quick start
