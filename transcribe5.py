@@ -52,6 +52,7 @@ from transcribe.diarization_first import DiarizationFirstPipeline
 # Import diarization config for pyannote 4
 from diarize4 import run as diarize4_run
 from diarize import DiarizationConfig
+from sidecar import sidecar_overrides
 
 
 class TranscriptionAppV5(_transcribe4_module.TranscriptionAppV4):
@@ -94,9 +95,35 @@ class TranscriptionAppV5(_transcribe4_module.TranscriptionAppV4):
     ):
         """
         Process a single audio file using diarization-first approach.
-        
-        This overrides the parent method to use the new pipeline.
+
+        This overrides the parent method to use the new pipeline. A per-file
+        sidecar (``<basename>.swhisper`` next to the audio file) can override
+        whitelisted settings for this file only; since this pipeline runs
+        diarization AND transcription per file, all three config objects are
+        eligible for overrides here.
         """
+        with sidecar_overrides(
+            audio_dir,
+            os.path.splitext(wav_file)[0],
+            transcription_config=self.config,
+            whisper_settings=self.whisper_settings,
+            diarization_config=self.diarization_config,
+        ):
+            self._process_single_file_v5(
+                wav_file, audio_dir, output_dir, file_index, total_files,
+                original_label=original_label,
+            )
+
+    def _process_single_file_v5(
+        self,
+        wav_file: str,
+        audio_dir: str,
+        output_dir: str,
+        file_index: int,
+        total_files: int,
+        original_label: Optional[str] = None
+    ):
+        """Diarization-first processing body (see _process_single_file)."""
         audiofile_path = os.path.join(audio_dir, wav_file)
         base_name = os.path.splitext(wav_file)[0]
         output_path = os.path.join(output_dir, f"{base_name}.json")

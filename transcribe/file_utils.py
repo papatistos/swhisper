@@ -12,6 +12,7 @@ from typing import List, Tuple, Optional
 ENABLE_EARLY_FORMAT_SUMMARY = False
 
 from .config import TranscriptionConfig
+from sidecar import sidecar_requests_reprocess, STAGE_TRANSCRIBE
 
 
 class AudioConverter:
@@ -146,7 +147,17 @@ class FileManager:
             for audio_file in audio_files:
                 base_name = os.path.splitext(audio_file)[0]
                 if base_name in existing_json_basenames:
-                    print(f"  ⏩ {audio_file} (already processed, found in source)")
+                    # A per-file sidecar can still request reprocessing
+                    # (force flag, or sidecar modified after the JSON output).
+                    json_path = os.path.join(source_output_dir, f"{base_name}.json")
+                    reprocess, reason = sidecar_requests_reprocess(
+                        audio_dir, base_name, json_path, STAGE_TRANSCRIBE
+                    )
+                    if reprocess:
+                        print(f"  🔁 {audio_file} (reprocessing: {reason})")
+                        unprocessed_files.append(audio_file)
+                    else:
+                        print(f"  ⏩ {audio_file} (already processed, found in source)")
                 else:
                     unprocessed_files.append(audio_file)
         else:

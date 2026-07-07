@@ -34,6 +34,7 @@ from transcribe import (
     FileManager, TranscriptionPipeline, WorkspaceManager, CheckpointManager,
     fix_zero_duration_words
 )
+from sidecar import sidecar_overrides, find_sidecar
 
 
 class TranscriptionApp:
@@ -132,6 +133,27 @@ class TranscriptionApp:
     def _process_single_file(self, wav_file: str, audio_dir: str, output_dir: str,
                               file_index: int, total_files: int,
                               original_label: Optional[str] = None):
+        """Process a single audio file, honoring an optional per-file sidecar.
+
+        A sidecar file (``<basename>.swhisper`` next to the audio file) can
+        override whitelisted settings for this file only. Overrides are
+        applied in place to the shared config objects and restored afterwards.
+        """
+        base_name = os.path.splitext(wav_file)[0]
+        with sidecar_overrides(
+            audio_dir,
+            base_name,
+            transcription_config=self.config,
+            whisper_settings=self.whisper_settings,
+        ):
+            self._process_single_file_inner(
+                wav_file, audio_dir, output_dir, file_index, total_files,
+                original_label=original_label,
+            )
+
+    def _process_single_file_inner(self, wav_file: str, audio_dir: str, output_dir: str,
+                                   file_index: int, total_files: int,
+                                   original_label: Optional[str] = None):
         """Process a single audio file."""
         audiofile_path = os.path.join(audio_dir, wav_file)
         base_name = os.path.splitext(wav_file)[0]
@@ -192,6 +214,10 @@ class TranscriptionApp:
             boundaries = checkpoint_data['boundaries']
 
             print(f"📋 Resuming from chunk {start_chunk+1}/{len(boundaries)-1}...")
+
+            if find_sidecar(audio_dir, base_name):
+                print("📎 [sidecar] Note: resuming from a checkpoint; chunks transcribed "
+                      "before any sidecar changes keep their original settings.")
 
             # Use unified processing path with resume parameters
             result = self.transcription_pipeline.process_audio_file(
