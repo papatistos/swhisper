@@ -79,7 +79,14 @@ def ensure_pyannote_v4() -> None:
 
 def run(config: Optional[DiarizationConfig] = None, *, show_header: bool = True) -> None:
     """Execute diarization using the community pipeline."""
+    try:
+        config_obj = config or DiarizationConfig()
+    except Exception as exc:  # pragma: no cover - config validation guard
+        print(f"❌ Unable to initialize diarization config: {exc}")
+        return
+
     if show_header:
+        print(f"📂 Audio directory: {config_obj.audio_dir}")
         print("\n" + "=" * 60)
         print("🎯 Launching diarization pipeline (pyannote.audio 4)...")
 
@@ -87,12 +94,6 @@ def run(config: Optional[DiarizationConfig] = None, *, show_header: bool = True)
         ensure_pyannote_v4()
     except RuntimeError as version_error:
         print(f"❌ {version_error}")
-        return
-
-    try:
-        config_obj = config or DiarizationConfig()
-    except Exception as exc:  # pragma: no cover - config validation guard
-        print(f"❌ Unable to initialize diarization config: {exc}")
         return
 
     precision_pipeline_id = getattr(config_obj, "precision_pipeline_model", PRECISION_PIPELINE_ID)

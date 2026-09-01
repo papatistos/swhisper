@@ -59,6 +59,7 @@ class TranscriptionApp:
     
     def run(self):
         """Run the main transcription process."""
+        print(f"📂 Audio directory: {self.config.audio_dir}")
         print("🚀 Starting Audio Transcription Pipeline")
         print("=" * 60)
 

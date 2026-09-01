@@ -720,7 +720,9 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
 def main(config: DiarizationConfig = None):
     """Main processing function."""
     config = config or DEFAULT_DIARIZATION_CONFIG
-    
+
+    print(f"📂 Audio directory: {config.audio_dir}")
+
     # Create the final output directory if it doesn't exist
     os.makedirs(config.final_output_dir, exist_ok=True)
     
