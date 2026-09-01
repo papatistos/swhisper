@@ -64,7 +64,7 @@ Total       506 (100.0%)  2707 (100.0%)        5.3  737.0 (100.0%)  220 wpm  306
 - [x] fix caching of empty turns (the current code that should persist those transcriptions doesn't seem to work)
 - [ ] add (more) speaker stats
 - [x] add speaker stats to the preamble
-- [ ] process files via csv input list (with custom settings per file)
+- [x] per-file settings via sidecar files and/or csv table (see [SIDECAR_CONFIG.md](SIDECAR_CONFIG.md))
 - [ ] improve documentation (let me know what is particularly unclear)
 - [ ] add command line options?
 
@@ -82,6 +82,28 @@ All configuration is managed through a single `.swhisper.env` file that contains
 - **Advanced options** (parameter testing, precision-2 service)
 
 Each setting in the file shows its default value, so you only need to uncomment and modify the settings you want to change.
+
+### Per-file settings (sidecar files)
+
+Selected settings — most importantly the number of speakers — can be overridden **per audio file** by placing a sidecar file next to the audio file, named after its basename with a `.swhisper` extension (e.g. `interview1.swhisper` for `interview1.wav`). Sidecars use the same `KEY=value` syntax and variable names as `.swhisper.env`:
+
+```bash
+# interview1.swhisper
+SWHISPER_NUM_SPEAKERS=3     # shorthand: sets min AND max speakers for this file
+```
+
+For bulk editing there is a CSV workflow: `python sidecar_tools.py template` generates a spreadsheet-friendly table (one row per audio file), and `python sidecar_tools.py apply <csv>` turns it into sidecar files. Editing a sidecar automatically triggers reprocessing of the affected file (stage-aware: diarization-only changes don't re-run transcription). See [SIDECAR_CONFIG.md](SIDECAR_CONFIG.md) for the list of allowed settings, precedence rules, and edge cases.
+
+### Web UI
+
+A local browser UI covers per-file settings and run control:
+
+```bash
+pip install fastapi uvicorn   # one-time
+python webui.py               # then open http://127.0.0.1:8722
+```
+
+It shows your audio files with per-file status (transcribed / diarized / per-file settings / will-reprocess), edits the `.swhisper` sidecar files through a grouped form (empty fields = global settings, shown as placeholders), and starts/stops `transcribe4.py`, `transcribe5.py`, or `diarize4.py` runs with live log output. The server binds to localhost only. `--audio-dir` overrides `SWHISPER_AUDIO_DIR` for the session.
 
 ### Quick start
 

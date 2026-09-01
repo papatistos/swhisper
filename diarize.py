@@ -56,6 +56,7 @@ from diarize import (
 )
 from diarize.utils import logger_manager, BackfillTranscriber, BackfillCache, WordProcessor
 from transcribe import TranscriptionConfig, WhisperSettings
+from sidecar import apply_sidecar_to_diarization_config, sidecar_requests_reprocess, STAGE_DIARIZE
 
 
 # Ensure progress messages appear immediately even when stdout is buffered
@@ -151,17 +152,29 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
     audio_basename = f"{os.path.splitext(json_file)[0]}.wav"
     audiofile_path = os.path.join(config.final_audio_dir, audio_basename)
     base_filename = os.path.splitext(audio_basename)[0]
-    
+
+    # Apply per-file sidecar overrides (returns a per-file clone; the shared
+    # config object is left untouched for the remaining files).
+    config, sidecar_path = apply_sidecar_to_diarization_config(
+        config, config.final_audio_dir, base_filename
+    )
+
     # Check for completion marker file (.ok)
     completion_marker = os.path.join(config.final_output_dir, f"{base_filename}.ok")
-    
+
     if os.path.exists(completion_marker) and not config.force_reprocess:
-        print("-" * 80)
-        starttime = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        print(f'{starttime} - Skipping file {processed_files} of {total_files}: {audio_basename}')
-        print(f"  -> Already processed (marker file exists: {base_filename}.ok)")
-        print(f"  -> Set FORCE_REPROCESS = True to reprocess all existing files (or delete .ok files for individual files).")
-        return True
+        sidecar_reprocess, sidecar_reason = sidecar_requests_reprocess(
+            config.final_audio_dir, base_filename, completion_marker, STAGE_DIARIZE
+        )
+        if sidecar_reprocess:
+            print(f"📎 [sidecar] Reprocessing {audio_basename}: {sidecar_reason}")
+        else:
+            print("-" * 80)
+            starttime = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            print(f'{starttime} - Skipping file {processed_files} of {total_files}: {audio_basename}')
+            print(f"  -> Already processed (marker file exists: {base_filename}.ok)")
+            print(f"  -> Set FORCE_REPROCESS = True to reprocess all existing files (or delete .ok files for individual files).")
+            return True
 
     # Create per-file logger using context manager
     log_timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
