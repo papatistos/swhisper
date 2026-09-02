@@ -83,42 +83,43 @@ class TranscriptionApp:
 
             if not audio_queue:
                 print("✅ No new audio files to process.")
-                return
-            
-            # Process each audio file
-            total_files = len(audio_queue)
-            for index, original_file in enumerate(audio_queue, start=1):
-                print(f"\n📦 Audio file {index}/{total_files}: {original_file}")
-                
-                # Ensure cloud file is hydrated before processing
-                source_path = os.path.join(source_audio_dir, original_file)
-                if not self.workspace_manager._ensure_local_file(source_path):
-                    print(f"❌ Skipping {original_file} (file not accessible)")
-                    continue
-                
-                # Convert directly in source directory
-                wav_filename = self.file_manager.prepare_staged_audio_file(source_audio_dir, original_file)
+            else:
+                # Process each audio file
+                total_files = len(audio_queue)
+                for index, original_file in enumerate(audio_queue, start=1):
+                    print(f"\n📦 Audio file {index}/{total_files}: {original_file}")
 
-                if not wav_filename:
-                    print(f"❌ Skipping {original_file} (conversion failed)")
-                    continue
+                    # Ensure cloud file is hydrated before processing
+                    source_path = os.path.join(source_audio_dir, original_file)
+                    if not self.workspace_manager._ensure_local_file(source_path):
+                        print(f"❌ Skipping {original_file} (file not accessible)")
+                        continue
 
-                self._process_single_file(
-                    wav_filename,
-                    source_audio_dir,
-                    output_dir,
-                    index,
-                    total_files,
-                    original_label=original_file
-                )
-            
-            print("\n" + "=" * 60)
-            print("✅ All transcriptions completed successfully!")
+                    # Convert directly in source directory
+                    wav_filename = self.file_manager.prepare_staged_audio_file(source_audio_dir, original_file)
+
+                    if not wav_filename:
+                        print(f"❌ Skipping {original_file} (conversion failed)")
+                        continue
+
+                    self._process_single_file(
+                        wav_filename,
+                        source_audio_dir,
+                        output_dir,
+                        index,
+                        total_files,
+                        original_label=original_file
+                    )
+
+                print("\n" + "=" * 60)
+                print("✅ All transcriptions completed successfully!")
 
             # Automatically clean up temp workspace
             self.workspace_manager.cleanup_temp_workspace()
 
-            # Run diarization pipeline now that transcripts exist
+            # Run diarization pipeline unconditionally, so previously
+            # transcribed-but-not-yet-diarized files still get caught up
+            # even when this run had no new files to transcribe.
             self._run_diarization_pipeline()
             
         except KeyboardInterrupt:
