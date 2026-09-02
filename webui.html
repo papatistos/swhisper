@@ -67,6 +67,24 @@
   #editorBar .msg.err { color: var(--err); }
   #editorBar .msg.ok { color: var(--ok); }
 
+  /* tabs & transcript view */
+  #tabBar { display: flex; gap: 2px; padding: 6px 16px 0; background: var(--panel);
+            border-bottom: 1px solid var(--border); }
+  #tabBar .tab { border: none; border-bottom: 2px solid transparent; border-radius: 0;
+                 background: transparent; color: var(--muted); padding: 4px 12px 6px; }
+  #tabBar .tab:hover { color: var(--text); }
+  #tabBar .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  #transcriptView { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  #transcriptBar { display: flex; gap: 10px; align-items: center; padding: 8px 20px;
+                   border-bottom: 1px solid var(--border); background: var(--panel); }
+  #transcriptBar select { max-width: 24rem; }
+  #transcriptBar .msg { color: var(--muted); font-size: 0.8rem; flex: 1; }
+  #transcriptText { flex: 1; overflow-y: auto; padding: 14px 20px;
+                    white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
+  #transcriptText .placeholder { color: var(--muted); margin-top: 40px; text-align: center; }
+  .badge.tbadge { cursor: pointer; }
+  .badge.tbadge:hover { border-color: var(--accent); color: var(--accent); }
+
   /* run panel */
   #runPanel { border-top: 1px solid var(--border); background: var(--panel);
               display: flex; flex-direction: column; height: 16rem; min-height: 42px; }
@@ -119,9 +137,21 @@
 <main>
   <div id="files"></div>
   <div id="right">
+    <div id="tabBar">
+      <button class="tab active" id="tabSettings">Settings</button>
+      <button class="tab" id="tabTranscript">Transcript</button>
+    </div>
     <div id="editor"><div class="placeholder">Select an audio file to edit its per-file settings.<br>
       Empty fields use the global configuration (shown as placeholder values).<br>
       Hover a setting name for an explanation.</div></div>
+    <div id="transcriptView" style="display:none">
+      <div id="transcriptBar">
+        <select id="versionSel" title="Transcript version — one per pipeline run" disabled></select>
+        <button id="transcriptReload" title="Reload (newest version)">↻</button>
+        <span class="msg" id="transcriptMsg"></span>
+      </div>
+      <div id="transcriptText"><div class="placeholder">Select an audio file to view its transcript.</div></div>
+    </div>
     <div id="editorBar" style="display:none">
       <button class="primary" id="saveBtn">Save</button>
       <button class="danger" id="deleteBtn">Delete sidecar</button>
@@ -154,6 +184,7 @@
 const $ = id => document.getElementById(id);
 let META = null;
 let currentBase = null;
+let currentTab = "settings";
 let logOffset = 0;
 let wasRunning = false;
 
@@ -207,7 +238,10 @@ async function changeDir() {
     $("dirInput").value = data.audio_dir;
     currentBase = null;
     $("editor").innerHTML = '<div class="placeholder">Select an audio file.</div>';
-    $("editorBar").style.display = "none";
+    $("transcriptText").innerHTML = '<div class="placeholder">Select an audio file to view its transcript.</div>';
+    $("versionSel").innerHTML = "";
+    $("versionSel").disabled = true;
+    showTab("settings");
     await loadMeta();
     await loadFiles();
   } catch (e) { alert(e.message); }
@@ -231,8 +265,14 @@ async function loadFiles() {
     if (f.sidecar) badges.push('<span class="badge on-info">per-file settings</span>');
     if (f.comment) badges.push('<span class="badge on-info">💬 comment</span>');
     if (f.will_reprocess) badges.push('<span class="badge on-warn">will reprocess</span>');
+    if (f.has_transcript) badges.push('<span class="badge on-ok tbadge" title="Open transcript">transcript ready</span>');
     div.innerHTML = `<div class="name">${f.base}</div><div class="badges">${badges.join("")}</div>`;
     div.onclick = () => selectFile(f.base);
+    const tb = div.querySelector(".tbadge");
+    if (tb) tb.onclick = ev => {
+      ev.stopPropagation();
+      selectFile(f.base).then(() => showTab("transcript"));
+    };
     box.appendChild(div);
   }
 }
@@ -271,6 +311,7 @@ function inputFor(key, spec, value) {
 
 async function selectFile(base) {
   currentBase = base;
+  showTab("settings");
   document.querySelectorAll("#files .file").forEach(d =>
     d.classList.toggle("sel", d.dataset.base === base));
   const { data } = await api(`/api/sidecar/${encodeURIComponent(base)}`);
@@ -322,6 +363,54 @@ function setMsg(text, cls) {
   const m = $("editorMsg");
   m.textContent = text;
   m.className = "msg " + (cls || "");
+}
+
+/* ---------- transcript view ---------- */
+
+function showTab(tab) {
+  currentTab = tab;
+  const isSettings = tab === "settings";
+  $("tabSettings").classList.toggle("active", isSettings);
+  $("tabTranscript").classList.toggle("active", !isSettings);
+  $("editor").style.display = isSettings ? "" : "none";
+  $("transcriptView").style.display = isSettings ? "none" : "";
+  $("editorBar").style.display = (isSettings && currentBase) ? "" : "none";
+  if (!isSettings && currentBase) loadTranscript(currentBase);
+}
+
+function fmtTimestamp(ts) {
+  return `${ts.slice(0, 4)}-${ts.slice(4, 6)}-${ts.slice(6, 8)} ${ts.slice(9, 11)}:${ts.slice(11, 13)}:${ts.slice(13, 15)}`;
+}
+
+async function loadTranscript(base, version) {
+  const sel = $("versionSel");
+  const text = $("transcriptText");
+  const msg = $("transcriptMsg");
+  let url = `/api/transcript/${encodeURIComponent(base)}`;
+  if (version) url += `?version=${encodeURIComponent(version)}`;
+  msg.textContent = "Loading…";
+  msg.className = "msg";
+  try {
+    const { data } = await api(url);
+    if (base !== currentBase) return;  // user switched files while loading
+    sel.innerHTML = "";
+    for (const v of data.versions) {
+      const o = document.createElement("option");
+      o.value = v.id;
+      o.textContent = v.timestamp ? fmtTimestamp(v.timestamp) : v.filename;
+      if (v.id === data.selected) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.disabled = false;
+    text.textContent = data.content;
+    msg.textContent = `${base} — ${data.versions.length} version(s)`;
+  } catch (e) {
+    if (base !== currentBase) return;
+    sel.innerHTML = "";
+    sel.disabled = true;
+    text.innerHTML = '<div class="placeholder">No transcript yet — run a pipeline first.</div>';
+    msg.textContent = /no transcript/i.test(e.message) ? "" : e.message;
+  }
 }
 
 async function saveSidecar() {
@@ -422,7 +511,10 @@ async function pollRun() {
     } else if (st.pipeline) {
       $("runStatus").textContent = `last run: ${st.pipeline} · exit ${st.returncode ?? "?"}`;
     }
-    if (wasRunning && !st.running) loadFiles();  // refresh statuses when a run ends
+    if (wasRunning && !st.running) {
+      loadFiles();  // refresh statuses when a run ends
+      if (currentTab === "transcript" && currentBase) loadTranscript(currentBase);
+    }
     wasRunning = st.running;
   } catch (e) { /* server briefly unavailable; keep polling */ }
 }
@@ -431,6 +523,10 @@ async function pollRun() {
 
 $("saveBtn").onclick = saveSidecar;
 $("deleteBtn").onclick = deleteSidecar;
+$("tabSettings").onclick = () => showTab("settings");
+$("tabTranscript").onclick = () => showTab("transcript");
+$("versionSel").onchange = () => { if (currentBase) loadTranscript(currentBase, $("versionSel").value); };
+$("transcriptReload").onclick = () => { if (currentBase) loadTranscript(currentBase); };
 $("startBtn").onclick = startRun;
 $("stopBtn").onclick = stopRun;
 $("refreshBtn").onclick = loadFiles;
