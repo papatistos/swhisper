@@ -80,35 +80,57 @@
   #transcriptBar select { max-width: 24rem; }
   #transcriptBar .msg { color: var(--muted); font-size: 0.8rem; flex: 1; }
   #transcriptText { flex: 1; overflow-y: auto; padding: 14px 20px;
-                    white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
+                    white-space: pre-wrap; word-break: break-word; line-height: 1.6;
+                    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.85rem; }
   #transcriptText .placeholder { color: var(--muted); margin-top: 40px; text-align: center; }
-  .badge.tbadge { cursor: pointer; }
-  .badge.tbadge:hover { border-color: var(--accent); color: var(--accent); }
+  .badge.tbadge, .badge.lbadge, .badge.jbadge { cursor: pointer; }
+  .badge.tbadge:hover, .badge.lbadge:hover, .badge.jbadge:hover { border-color: var(--accent); color: var(--accent); }
 
-  /* run panel */
-  #runPanel { border-top: 1px solid var(--border); background: var(--panel);
-              display: flex; flex-direction: column; height: 16rem; min-height: 42px; }
-  #runBar { display: flex; gap: 10px; align-items: center; padding: 8px 16px; flex-wrap: wrap; }
-  #runBar .status { font-size: 0.8rem; color: var(--muted); flex: 1; min-width: 150px; }
+  /* run control bar (above tabs, always visible) */
+  #runControlBar { display: flex; gap: 10px; align-items: center; padding: 8px 16px;
+                   flex-wrap: wrap; background: var(--panel); border-bottom: 1px solid var(--border); }
+  #runControlBar .status { font-size: 0.8rem; color: var(--muted); }
   .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
          background: var(--muted); margin-right: 6px; flex-shrink: 0; }
   .dot.run { background: var(--ok); animation: pulse 1.2s infinite; }
   .dot.err { background: var(--err); }
   @keyframes pulse { 50% { opacity: .35; } }
+
+  /* logs tab — historical logs only */
+  #logsView { flex: 1; display: flex; flex-direction: column; min-height: 0;
+              background: var(--panel); }
+  #logsBar { display: flex; gap: 10px; align-items: center; padding: 8px 20px;
+             border-bottom: 1px solid var(--border); }
+  #logSel { max-width: 24rem; }
+  #logsBar .msg { font-size: 0.8rem; color: var(--muted); flex: 1; min-width: 120px; }
+  #logsText { flex: 1; overflow-y: auto; margin: 12px 20px; padding: 10px 12px;
+              background: #0d0f13; border: 1px solid var(--border); border-radius: 6px;
+              font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.78rem;
+              line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: #b9c2d0; }
+  #logsText .placeholder { color: var(--muted); text-align: center; margin-top: 40px;
+                           font-family: inherit; background: none; border: none; }
+
+  /* live console (bottom, foldable) */
+  #consolePanel { border-top: 1px solid var(--border); background: var(--panel);
+                  display: flex; flex-direction: column; flex-shrink: 0; height: 14rem; }
+  #consolePanel.collapsed { height: auto; }
+  #consolePanel.collapsed #log { display: none; }
+  #consoleBar { display: flex; gap: 10px; align-items: center; padding: 6px 16px; }
+  #consoleBar .msg { font-size: 0.8rem; color: var(--muted); flex: 1; }
   #log { flex: 1; overflow-y: auto; margin: 0 16px 10px; padding: 8px 10px;
          background: #0d0f13; border: 1px solid var(--border); border-radius: 6px;
          font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.75rem;
          line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: #b9c2d0; }
 
-  /* history overlay */
-  #historyPanel { position: fixed; inset: 8vh 10vw; background: var(--panel);
-                  border: 1px solid var(--border); border-radius: 10px; z-index: 50;
-                  display: none; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
-  #historyPanel.open { display: flex; }
-  #historyHead { display: flex; align-items: center; padding: 12px 18px;
-                 border-bottom: 1px solid var(--border); }
-  #historyHead h2 { font-size: 1rem; margin: 0; flex: 1; }
-  #historyBody { overflow-y: auto; padding: 10px 18px; }
+  /* overlays: history + raw JSON transcript */
+  .overlay { position: fixed; inset: 8vh 10vw; background: var(--panel);
+             border: 1px solid var(--border); border-radius: 10px; z-index: 50;
+             display: none; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+  .overlay.open { display: flex; }
+  .overlay-head { display: flex; align-items: center; padding: 12px 18px;
+                  border-bottom: 1px solid var(--border); }
+  .overlay-head h2 { font-size: 1rem; margin: 0; flex: 1; word-break: break-all; }
+  .overlay-body { overflow-y: auto; padding: 10px 18px; flex: 1; }
   .hentry { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; }
   .hentry summary { padding: 8px 12px; cursor: pointer; display: flex; gap: 12px;
                     align-items: baseline; flex-wrap: wrap; list-style: none; }
@@ -137,9 +159,17 @@
 <main>
   <div id="files"></div>
   <div id="right">
+    <div id="runControlBar">
+      <span class="dot" id="runDot"></span>
+      <select id="pipelineSel"></select>
+      <button class="primary" id="startBtn">Start run</button>
+      <button id="stopBtn" disabled>Stop</button>
+      <span class="status" id="runStatus">idle</span>
+    </div>
     <div id="tabBar">
       <button class="tab active" id="tabSettings">Settings</button>
       <button class="tab" id="tabTranscript">Transcript</button>
+      <button class="tab" id="tabLogs">Logs</button>
     </div>
     <div id="editor"><div class="placeholder">Select an audio file to edit its per-file settings.<br>
       Empty fields use the global configuration (shown as placeholder values).<br>
@@ -148,22 +178,27 @@
       <div id="transcriptBar">
         <select id="versionSel" title="Transcript version — one per pipeline run" disabled></select>
         <button id="transcriptReload" title="Reload (newest version)">↻</button>
+        <button id="statsToggle" style="display:none"></button>
         <span class="msg" id="transcriptMsg"></span>
       </div>
       <div id="transcriptText"><div class="placeholder">Select an audio file to view its transcript.</div></div>
+    </div>
+    <div id="logsView" style="display:none">
+      <div id="logsBar">
+        <select id="logSel" title="Historical log — per-file pipeline log or a saved UI run" disabled></select>
+        <span class="msg" id="logMsg"></span>
+      </div>
+      <div id="logsText"><div class="placeholder">Select an audio file, or start a run, to see its logs.</div></div>
     </div>
     <div id="editorBar" style="display:none">
       <button class="primary" id="saveBtn">Save</button>
       <button class="danger" id="deleteBtn">Delete sidecar</button>
       <span class="msg" id="editorMsg"></span>
     </div>
-    <div id="runPanel">
-      <div id="runBar">
-        <span class="dot" id="runDot"></span>
-        <select id="pipelineSel"></select>
-        <button class="primary" id="startBtn">Start run</button>
-        <button id="stopBtn" disabled>Stop</button>
-        <span class="status" id="runStatus">idle</span>
+    <div id="consolePanel">
+      <div id="consoleBar">
+        <button id="consoleToggle" title="Show/hide the live console">▾ Live console</button>
+        <span class="msg" id="consoleMsg"></span>
         <button id="clearLogBtn" title="Clear log view">Clear</button>
       </div>
       <div id="log"></div>
@@ -171,20 +206,23 @@
   </div>
 </main>
 
-<div id="historyPanel">
-  <div id="historyHead">
+<div id="historyPanel" class="overlay">
+  <div id="historyHead" class="overlay-head">
     <h2>Run history</h2>
     <button id="historyClose">✕ Close</button>
   </div>
-  <div id="historyBody"></div>
+  <div id="historyBody" class="overlay-body"></div>
 </div>
 
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
+const RAW_JSON_VERSION = "__raw_json__";
 let META = null;
+let FILES_BY_BASE = {};
 let currentBase = null;
 let currentTab = "settings";
+let currentLogId = null;
 let logOffset = 0;
 let wasRunning = false;
 
@@ -241,6 +279,12 @@ async function changeDir() {
     $("transcriptText").innerHTML = '<div class="placeholder">Select an audio file to view its transcript.</div>';
     $("versionSel").innerHTML = "";
     $("versionSel").disabled = true;
+    $("logSel").innerHTML = "";
+    $("logSel").disabled = true;
+    $("logsText").innerHTML = '<div class="placeholder">Select an audio file, or start a run, to see its logs.</div>';
+    currentLogId = null;
+    $("log").textContent = "";
+    logOffset = 0;
     showTab("settings");
     await loadMeta();
     await loadFiles();
@@ -251,6 +295,8 @@ async function loadFiles() {
   const { data } = await api("/api/files");
   const box = $("files");
   box.innerHTML = "";
+  FILES_BY_BASE = {};
+  for (const f of data.files) FILES_BY_BASE[f.base] = f;
   if (!data.files.length) {
     box.innerHTML = '<div class="file"><span class="name" style="color:var(--muted)">No audio files found</span></div>';
     return;
@@ -260,18 +306,31 @@ async function loadFiles() {
     div.className = "file" + (f.base === currentBase ? " sel" : "");
     div.dataset.base = f.base;
     const badges = [];
-    badges.push(f.transcribed ? '<span class="badge on-ok">transcribed</span>' : '<span class="badge">not transcribed</span>');
+    badges.push(f.transcribed
+      ? '<span class="badge on-ok jbadge" title="View raw JSON transcript">transcribed</span>'
+      : '<span class="badge">not transcribed</span>');
     badges.push(f.diarized ? '<span class="badge on-ok">diarized</span>' : '<span class="badge">not diarized</span>');
     if (f.sidecar) badges.push('<span class="badge on-info">per-file settings</span>');
     if (f.comment) badges.push('<span class="badge on-info">💬 comment</span>');
     if (f.will_reprocess) badges.push('<span class="badge on-warn">will reprocess</span>');
     if (f.has_transcript) badges.push('<span class="badge on-ok tbadge" title="Open transcript">transcript ready</span>');
+    if (f.has_logs) badges.push('<span class="badge on-ok lbadge" title="Open logs">logs</span>');
     div.innerHTML = `<div class="name">${f.base}</div><div class="badges">${badges.join("")}</div>`;
     div.onclick = () => selectFile(f.base);
     const tb = div.querySelector(".tbadge");
     if (tb) tb.onclick = ev => {
       ev.stopPropagation();
       selectFile(f.base).then(() => showTab("transcript"));
+    };
+    const lb = div.querySelector(".lbadge");
+    if (lb) lb.onclick = ev => {
+      ev.stopPropagation();
+      selectFile(f.base).then(() => showTab("logs"));
+    };
+    const jb = div.querySelector(".jbadge");
+    if (jb) jb.onclick = ev => {
+      ev.stopPropagation();
+      selectFile(f.base).then(() => { showTab("transcript"); loadTranscript(f.base, RAW_JSON_VERSION); });
     };
     box.appendChild(div);
   }
@@ -311,7 +370,7 @@ function inputFor(key, spec, value) {
 
 async function selectFile(base) {
   currentBase = base;
-  showTab("settings");
+  showTab(currentTab);  // reload whichever tab is active for the new file, don't jump to Settings
   document.querySelectorAll("#files .file").forEach(d =>
     d.classList.toggle("sel", d.dataset.base === base));
   const { data } = await api(`/api/sidecar/${encodeURIComponent(base)}`);
@@ -369,48 +428,149 @@ function setMsg(text, cls) {
 
 function showTab(tab) {
   currentTab = tab;
-  const isSettings = tab === "settings";
-  $("tabSettings").classList.toggle("active", isSettings);
-  $("tabTranscript").classList.toggle("active", !isSettings);
-  $("editor").style.display = isSettings ? "" : "none";
-  $("transcriptView").style.display = isSettings ? "none" : "";
-  $("editorBar").style.display = (isSettings && currentBase) ? "" : "none";
-  if (!isSettings && currentBase) loadTranscript(currentBase);
+  $("tabSettings").classList.toggle("active", tab === "settings");
+  $("tabTranscript").classList.toggle("active", tab === "transcript");
+  $("tabLogs").classList.toggle("active", tab === "logs");
+  $("editor").style.display = tab === "settings" ? "" : "none";
+  $("transcriptView").style.display = tab === "transcript" ? "" : "none";
+  $("logsView").style.display = tab === "logs" ? "" : "none";
+  $("editorBar").style.display = (tab === "settings" && currentBase) ? "" : "none";
+  if (tab === "transcript" && currentBase) loadTranscript(currentBase);
+  if (tab === "logs") loadLogList();
 }
 
 function fmtTimestamp(ts) {
   return `${ts.slice(0, 4)}-${ts.slice(4, 6)}-${ts.slice(6, 8)} ${ts.slice(9, 11)}:${ts.slice(11, 13)}:${ts.slice(13, 15)}`;
 }
 
+function fillVersionSel(txtVersions, hasRawJson, selectedId) {
+  const sel = $("versionSel");
+  sel.innerHTML = "";
+  for (const v of txtVersions) {
+    const o = document.createElement("option");
+    o.value = v.id;
+    o.textContent = v.timestamp ? fmtTimestamp(v.timestamp) : v.filename;
+    sel.appendChild(o);
+  }
+  if (hasRawJson) {
+    const o = document.createElement("option");
+    o.value = RAW_JSON_VERSION;
+    o.textContent = "Raw JSON transcript (pre-diarization)";
+    sel.appendChild(o);
+  }
+  sel.value = selectedId;
+  sel.disabled = false;
+}
+
+function updateStatsToggle(info) {
+  const btn = $("statsToggle");
+  if (!info) {
+    btn.style.display = "none";
+    return;
+  }
+  btn.style.display = "";
+  btn.dataset.hasStats = info.has_stats ? "1" : "";
+  btn.textContent = info.has_stats ? "− Remove stats" : "+ Add stats";
+  btn.title = info.has_stats
+    ? "Remove the preamble and stats header from this file"
+    : info.stats_available
+      ? "Add the preamble and per-speaker stats header to this file"
+      : "Add the preamble to this file (no saved per-speaker stats for this run)";
+}
+
 async function loadTranscript(base, version) {
   const sel = $("versionSel");
   const text = $("transcriptText");
   const msg = $("transcriptMsg");
-  let url = `/api/transcript/${encodeURIComponent(base)}`;
-  if (version) url += `?version=${encodeURIComponent(version)}`;
+  const hasRawJson = !!(FILES_BY_BASE[base] && FILES_BY_BASE[base].transcribed);
   msg.textContent = "Loading…";
   msg.className = "msg";
+
+  if (version === RAW_JSON_VERSION) {
+    updateStatsToggle(null);  // raw JSON isn't a txt file — nothing to toggle
+    try {
+      const { data } = await api(`/api/json-transcript/${encodeURIComponent(base)}`);
+      if (base !== currentBase) return;  // user switched files while loading
+      fillVersionSel([], hasRawJson, RAW_JSON_VERSION);
+      text.textContent = data.content;
+      msg.textContent = `${base} — raw JSON transcript (${data.path})`;
+    } catch (e) {
+      if (base !== currentBase) return;
+      text.innerHTML = '<div class="placeholder">Could not load the raw JSON transcript.</div>';
+      msg.textContent = e.message;
+    }
+    return;
+  }
+
+  let url = `/api/transcript/${encodeURIComponent(base)}`;
+  if (version) url += `?version=${encodeURIComponent(version)}`;
   try {
     const { data } = await api(url);
-    if (base !== currentBase) return;  // user switched files while loading
-    sel.innerHTML = "";
-    for (const v of data.versions) {
-      const o = document.createElement("option");
-      o.value = v.id;
-      o.textContent = v.timestamp ? fmtTimestamp(v.timestamp) : v.filename;
-      if (v.id === data.selected) o.selected = true;
-      sel.appendChild(o);
-    }
-    sel.disabled = false;
+    if (base !== currentBase) return;
+    fillVersionSel(data.versions, hasRawJson, data.selected);
     text.textContent = data.content;
     msg.textContent = `${base} — ${data.versions.length} version(s)`;
+    updateStatsToggle({ has_stats: data.has_stats, stats_available: data.stats_available });
   } catch (e) {
     if (base !== currentBase) return;
+    updateStatsToggle(null);
+    if (hasRawJson) { loadTranscript(base, RAW_JSON_VERSION); return; }
     sel.innerHTML = "";
     sel.disabled = true;
     text.innerHTML = '<div class="placeholder">No transcript yet — run a pipeline first.</div>';
     msg.textContent = /no transcript/i.test(e.message) ? "" : e.message;
   }
+}
+
+/* ---------- logs tab (historical logs only — live console lives in #consolePanel) ---------- */
+
+function fmtLogTimestamp(ts) {
+  let m = ts.match(/^(\d{4})(\d{2})(\d{2})[-_](\d{2})(\d{2})(\d{2})$/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}`;
+  m = ts.match(/^(\d{4}-\d{2}-\d{2}) (\d{2})(\d{2})(\d{2})$/);  // older log naming
+  if (m) return `${m[1]} ${m[2]}:${m[3]}:${m[4]}`;
+  return ts;
+}
+
+async function loadLogList() {
+  const sel = $("logSel");
+  let data = null, scope = "run";
+  if (currentBase) {
+    const res = await api(`/api/logs?base=${encodeURIComponent(currentBase)}`);
+    if (res.data.versions.length) { data = res.data; scope = "file"; }
+  }
+  if (!data) data = (await api("/api/logs")).data;
+  sel.dataset.scope = scope;
+  sel.innerHTML = "";
+  for (const v of data.versions) {
+    const o = document.createElement("option");
+    o.value = v.id;
+    o.textContent = v.timestamp ? fmtLogTimestamp(v.timestamp) + (v.pipeline ? ` · ${v.pipeline}` : "") : v.filename;
+    sel.appendChild(o);
+  }
+  const ids = data.versions.map(v => v.id);
+  if (!currentLogId || !ids.includes(currentLogId)) currentLogId = ids[0] || null;
+  sel.value = currentLogId || "";
+  sel.disabled = !ids.length;
+  await loadLogContent();
+}
+
+async function loadLogContent() {
+  const sel = $("logSel");
+  const text = $("logsText");
+  const msg = $("logMsg");
+  const id = currentLogId;
+  if (!id) {
+    text.innerHTML = `<div class="placeholder">${sel.dataset.scope === "file" ? "No logs found for this file yet." : "No saved run logs yet — start a run from the bar above."}</div>`;
+    msg.textContent = "";
+    return;
+  }
+  const url = sel.dataset.scope === "file"
+    ? `/api/logs?base=${encodeURIComponent(currentBase)}&file=${encodeURIComponent(id)}`
+    : `/api/logs?file=${encodeURIComponent(id)}`;
+  const { data } = await api(url);
+  text.textContent = data.content;
+  msg.textContent = data.selected;
 }
 
 async function saveSidecar() {
@@ -480,6 +640,7 @@ async function startRun() {
     });
     logOffset = 0;
     $("log").textContent = "";
+    setConsoleCollapsed(false);  // surface the console so the new run is visible
   } catch (e) { alert(e.message); }
 }
 
@@ -490,13 +651,13 @@ async function stopRun() {
 
 async function pollRun() {
   try {
-    const { data } = await api(`/api/run/log?offset=${logOffset}`);
-    if (data.lines.length) {
+    const { data } = await api(`/api/logs?file=live&offset=${logOffset}`);
+    if (data.next !== undefined) logOffset = data.next;
+    if (data.lines && data.lines.length) {
       const log = $("log");
       const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
       log.textContent += data.lines.join("\n") + "\n";
       if (atBottom) log.scrollTop = log.scrollHeight;
-      logOffset = data.next;
     }
     const st = (await api("/api/run/status")).data;
     $("startBtn").disabled = st.running;
@@ -505,18 +666,31 @@ async function pollRun() {
     $("dirBtn").disabled = st.running;
     const dot = $("runDot");
     dot.className = "dot" + (st.running ? " run" : (st.returncode ? " err" : ""));
-    if (st.running) {
-      const mins = ((Date.now() / 1000 - st.started_at) / 60).toFixed(1);
-      $("runStatus").textContent = `running ${st.pipeline} · ${mins} min`;
-    } else if (st.pipeline) {
-      $("runStatus").textContent = `last run: ${st.pipeline} · exit ${st.returncode ?? "?"}`;
-    }
+    const statusText = st.running
+      ? `running ${st.pipeline} · ${((Date.now() / 1000 - st.started_at) / 60).toFixed(1)} min`
+      : st.pipeline ? `last run: ${st.pipeline} · exit ${st.returncode ?? "?"}` : "idle";
+    $("runStatus").textContent = statusText;
+    $("consoleMsg").textContent = statusText;
     if (wasRunning && !st.running) {
       loadFiles();  // refresh statuses when a run ends
       if (currentTab === "transcript" && currentBase) loadTranscript(currentBase);
+      if (currentTab === "logs") loadLogList();  // persisted run log appears
     }
     wasRunning = st.running;
   } catch (e) { /* server briefly unavailable; keep polling */ }
+}
+
+/* ---------- console fold ---------- */
+
+function setConsoleCollapsed(collapsed) {
+  $("consolePanel").classList.toggle("collapsed", collapsed);
+  $("consoleToggle").textContent = (collapsed ? "▸" : "▾") + " Live console";
+  try { localStorage.setItem("swhisper_console_collapsed", collapsed ? "1" : "0"); } catch (e) {}
+}
+function initConsole() {
+  let collapsed = false;
+  try { collapsed = localStorage.getItem("swhisper_console_collapsed") === "1"; } catch (e) {}
+  setConsoleCollapsed(collapsed);
 }
 
 /* ---------- init ---------- */
@@ -525,12 +699,32 @@ $("saveBtn").onclick = saveSidecar;
 $("deleteBtn").onclick = deleteSidecar;
 $("tabSettings").onclick = () => showTab("settings");
 $("tabTranscript").onclick = () => showTab("transcript");
+$("tabLogs").onclick = () => showTab("logs");
+$("logSel").onchange = () => { currentLogId = $("logSel").value; loadLogContent(); };
 $("versionSel").onchange = () => { if (currentBase) loadTranscript(currentBase, $("versionSel").value); };
 $("transcriptReload").onclick = () => { if (currentBase) loadTranscript(currentBase); };
+$("statsToggle").onclick = async () => {
+  const base = currentBase;
+  const version = $("versionSel").value;
+  if (!base || !version || version === RAW_JSON_VERSION) return;
+  const action = $("statsToggle").dataset.hasStats ? "remove" : "add";
+  try {
+    const { data } = await api(`/api/transcript/${encodeURIComponent(base)}/stats`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version, action }),
+    });
+    if (base !== currentBase) return;
+    $("transcriptText").textContent = data.content;
+    $("transcriptMsg").textContent = `${base} — ${data.versions.length} version(s)`;
+    updateStatsToggle({ has_stats: data.has_stats, stats_available: data.stats_available });
+  } catch (e) { alert(e.message); }
+};
 $("startBtn").onclick = startRun;
 $("stopBtn").onclick = stopRun;
 $("refreshBtn").onclick = loadFiles;
 $("clearLogBtn").onclick = () => { $("log").textContent = ""; };
+$("consoleToggle").onclick = () => setConsoleCollapsed(!$("consolePanel").classList.contains("collapsed"));
 $("dirBtn").onclick = changeDir;
 $("dirInput").addEventListener("keydown", e => { if (e.key === "Enter") changeDir(); });
 $("historyBtn").onclick = showHistory;
@@ -541,6 +735,7 @@ $("fontPlus").onclick = () => nudgeFont(2);
 
 (async () => {
   initFontSize();
+  initConsole();
   await loadMeta();
   await loadFiles();
   setInterval(pollRun, 1000);

@@ -29,6 +29,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -48,6 +49,7 @@ from sidecar import (
     parse_sidecar_file,
     sidecar_requests_reprocess,
 )
+import transcript_stats
 
 try:
     from fastapi import FastAPI, HTTPException
@@ -76,6 +78,7 @@ AUDIO_EXTENSIONS = {'.wav', '.m4a', '.mp3', '.mov', '.mp4', '.flac', '.aac', '.o
 
 COMMENT_PREFIX = "#;"  # user comment lines inside sidecar files (ignored by parsers)
 HISTORY_FILENAME = "swhisper_run_history.jsonl"
+UI_RUN_LOG_DIR = "logs"  # persisted console output of runs started from this UI
 
 PIPELINES: Dict[str, Dict[str, str]] = {
     "transcribe4": {
@@ -216,6 +219,7 @@ class AppState:
         self.log_lines: List[str] = []
         self.stop_requested = False
         self.run_audio_dir: Optional[str] = None
+        self.run_log_path: Optional[str] = None
 
     # -- configuration ------------------------------------------------------
 
@@ -268,6 +272,8 @@ class AppState:
             self.stop_requested = False
             self.run_audio_dir = audio_dir
             self.log_lines = [f"▶ Started {PIPELINES[pipeline]['script']} (pid {self.process.pid}) — audio dir: {audio_dir}"]
+            ts = datetime.fromtimestamp(self.started_at).strftime("%Y%m%d-%H%M%S")
+            self.run_log_path = os.path.join(audio_dir, UI_RUN_LOG_DIR, f"ui-run-{ts}-{pipeline}-{uuid.uuid4().hex[:6]}.log")
             threading.Thread(target=self._pump, args=(self.process,), daemon=True).start()
 
     def _pump(self, proc: subprocess.Popen) -> None:
@@ -286,6 +292,11 @@ class AppState:
                     "✅ finished" if proc.returncode == 0 else f"❌ exited with code {proc.returncode}")
                 self.log_lines.append(f"— Run {status} —")
             try:
+                self._persist_run_log()
+            except Exception as exc:  # persistence must never break the UI
+                with self.lock:
+                    self.log_lines.append(f"⚠️ Could not save run log: {exc}")
+            try:
                 self._write_history_entry()
             except Exception as exc:  # history must never break the UI
                 with self.lock:
@@ -298,6 +309,17 @@ class AppState:
             self.stop_requested = True
             # SIGINT → pipelines run their KeyboardInterrupt cleanup paths
             os.killpg(os.getpgid(self.process.pid), signal.SIGINT)
+
+    def _persist_run_log(self) -> None:
+        """Write the finished run's console output to <audio>/logs/ so it stays
+        browsable in the Logs tab after the UI restarts."""
+        if not self.run_log_path or not self.run_audio_dir:
+            return
+        os.makedirs(os.path.dirname(self.run_log_path), exist_ok=True)
+        with self.lock:
+            lines = list(self.log_lines)
+        with open(self.run_log_path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
 
     # -- run history ----------------------------------------------------------
 
@@ -409,6 +431,12 @@ def _read_comment(path: str) -> str:
 
 
 _TRANSCRIPT_TS_RE = re.compile(r"^_(\d{8}-\d{6})$")
+# Older runs used other log timestamp formats, e.g. "_2025-06-11 145137" or "_20250610_194059"
+_LOG_TS_RES = [
+    re.compile(r"^_(\d{8}-\d{6})$"),
+    re.compile(r"^_(\d{4}-\d{2}-\d{2} \d{6})$"),
+    re.compile(r"^_(\d{8}_\d{6})$"),
+]
 
 
 def _transcript_dirs(dirs: Dict[str, str]) -> List[str]:
@@ -452,6 +480,54 @@ def _transcript_versions(dirs: Dict[str, str], base: str) -> List[Dict[str, Any]
             versions.append({
                 # id doubles as the ?version= parameter and is always an
                 # exact match against this list, so no path traversal.
+                "id": os.path.relpath(path, dirs["audio"]),
+                "filename": name,
+                "timestamp": ts,
+                "mtime": st.st_mtime,
+                "size": st.st_size,
+            })
+    versions.sort(key=lambda v: v["mtime"], reverse=True)
+    return versions
+
+
+def _log_dirs(dirs: Dict[str, str]) -> List[str]:
+    """Directories that may contain .log files for the current audio dir."""
+    return [
+        os.path.join(dirs["output"], "logs"),               # diarize pipeline
+        os.path.join(dirs["json"], "transcripts", "logs"),  # transcribe5 location
+    ]
+
+
+def _log_versions(dirs: Dict[str, str], base: str) -> List[Dict[str, Any]]:
+    """Per-file .log files for *base* (excluding _silence_gaps), newest first."""
+    versions: List[Dict[str, Any]] = []
+    for log_dir in _log_dirs(dirs):
+        try:
+            names = os.listdir(log_dir)
+        except OSError:
+            continue
+        for name in names:
+            if not name.endswith(".log") or "_silence_gaps" in name:
+                continue
+            stem = name[:-4]
+            if stem == base:
+                ts = None
+            elif stem.startswith(base + "_"):
+                suffix = stem[len(base):]
+                m = next((rx.match(suffix) for rx in _LOG_TS_RES if rx.match(suffix)), None)
+                if not m:
+                    continue
+                ts = m.group(1)
+            else:
+                continue
+            path = os.path.join(log_dir, name)
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            versions.append({
+                # id doubles as the ?file= parameter and is always an exact
+                # match against this list, so no path traversal.
                 "id": os.path.relpath(path, dirs["audio"]),
                 "filename": name,
                 "timestamp": ts,
@@ -554,6 +630,7 @@ def api_files() -> Dict[str, Any]:
             "comment": has_comment,
             "will_reprocess": redo_t or redo_d,
             "has_transcript": bool(_transcript_versions(dirs, base)),
+            "has_logs": bool(_log_versions(dirs, base)),
         })
     return {"files": files}
 
@@ -678,7 +755,149 @@ def api_transcript(basename: str, version: Optional[str] = None) -> Dict[str, An
         "versions": versions,
         "selected": selected["id"],
         "content": content,
+        "has_stats": transcript_stats.has_stats_header(content),
+        "stats_available": bool(transcript_stats.find_analysis_json(path)),
     }
+
+
+@app.post("/api/transcript/{basename}/stats")
+def api_transcript_stats(basename: str, body: Dict[str, str]) -> Dict[str, Any]:
+    """Add or remove the preamble+stats header on an existing TXT transcript,
+    in place, without re-running transcription or diarization."""
+    action = body.get("action")
+    if action not in ("add", "remove"):
+        raise HTTPException(400, "action must be 'add' or 'remove'")
+    dirs = state.dirs()
+    base = _safe_base(dirs["audio"], basename)
+    versions = _transcript_versions(dirs, base)
+    if not versions:
+        raise HTTPException(404, "No transcript found for this file")
+    version = body.get("version")
+    if version:
+        selected = next((v for v in versions if v["id"] == version), None)
+        if selected is None:
+            raise HTTPException(400, "Unknown transcript version")
+    else:
+        selected = versions[0]
+    path = os.path.join(dirs["audio"], selected["id"])
+    if action == "add":
+        transcript_stats.add_stats(path, dirs["audio"], base)
+    else:
+        transcript_stats.remove_stats(path)
+    try:
+        content = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise HTTPException(500, f"Could not read transcript: {exc}")
+    return {
+        "base": base,
+        "versions": versions,
+        "selected": selected["id"],
+        "content": content,
+        "has_stats": transcript_stats.has_stats_header(content),
+        "stats_available": bool(transcript_stats.find_analysis_json(path)),
+    }
+
+
+@app.get("/api/json-transcript/{basename}")
+def api_json_transcript(basename: str) -> Dict[str, Any]:
+    """Serve the raw whisper JSON transcript (pre-diarization) for a file."""
+    dirs = state.dirs()
+    base = _safe_base(dirs["audio"], basename)
+    path = os.path.join(dirs["json"], f"{base}.json")
+    if not os.path.exists(path):
+        raise HTTPException(404, "No JSON transcript yet — run transcription first.")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(500, f"Could not read JSON transcript: {exc}")
+    return {
+        "base": base,
+        "path": os.path.relpath(path, dirs["audio"]),
+        "content": json.dumps(data, indent=2, ensure_ascii=False),
+    }
+
+
+@app.get("/api/logs")
+def api_logs(base: Optional[str] = None, file: Optional[str] = None,
+             offset: int = 0) -> Dict[str, Any]:
+    """Logs for the Logs tab, plus the live console feed used by the bottom panel.
+
+    - With ``base``: per-file ``.log`` files written by the pipelines. If
+      ``file`` (a version id) is given, return that log's content; otherwise
+      return just the version list.
+    - Without ``base``: ``file="live"`` streams the running/last console
+      output (incremental via ``offset``), independent of the Logs tab.
+      Otherwise, lists (or serves) persisted logs of runs started from this UI.
+    """
+    dirs = state.dirs()
+    audio = dirs["audio"]
+    if base is not None:
+        base = _safe_base(audio, base)
+        versions = _log_versions(dirs, base)
+        if file is None:
+            return {"base": base, "versions": versions}
+        selected = next((v for v in versions if v["id"] == file), None)
+        if selected is None:
+            raise HTTPException(400, "Unknown log file")
+        try:
+            content = Path(os.path.join(audio, selected["id"])).read_text(
+                encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise HTTPException(500, f"Could not read log: {exc}")
+        return {"base": base, "versions": versions, "selected": selected["id"],
+                "content": content}
+
+    if file == "live":
+        with state.lock:
+            offset = max(0, min(offset, len(state.log_lines)))
+            return {
+                "scope": "run",
+                "selected": "live",
+                "lines": state.log_lines[offset:],
+                "next": len(state.log_lines),
+                "running": state.running(),
+                "pipeline": state.pipeline,
+                "returncode": state.returncode,
+                "started_at": state.started_at,
+                "finished_at": state.finished_at,
+            }
+
+    versions: List[Dict[str, Any]] = []
+    run_dir = os.path.join(audio, UI_RUN_LOG_DIR)
+    try:
+        names = os.listdir(run_dir)
+    except OSError:
+        names = []
+    for name in names:
+        if not (name.startswith("ui-run-") and name.endswith(".log")):
+            continue
+        path = os.path.join(run_dir, name)
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        m = re.match(r"^ui-run-(\d{8}-\d{6})-(.*)-[0-9a-f]{6}\.log$", name)
+        versions.append({
+            "id": f"{UI_RUN_LOG_DIR}/{name}",
+            "filename": name,
+            "timestamp": m.group(1) if m else None,
+            "pipeline": m.group(2) if m else None,
+            "mtime": st.st_mtime,
+            "size": st.st_size,
+        })
+    if file:
+        selected = next((v for v in versions if v["id"] == file), None)
+        if selected is None:
+            raise HTTPException(400, "Unknown run log")
+        try:
+            content = Path(os.path.join(audio, selected["id"])).read_text(
+                encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise HTTPException(500, f"Could not read log: {exc}")
+        return {"scope": "run", "versions": versions, "selected": selected["id"],
+                "content": content}
+    return {"scope": "run", "versions": versions}
 
 
 @app.post("/api/run")
@@ -703,18 +922,6 @@ def api_run_status() -> Dict[str, Any]:
             "finished_at": state.finished_at,
             "returncode": state.returncode,
             "log_length": len(state.log_lines),
-        }
-
-
-@app.get("/api/run/log")
-def api_run_log(offset: int = 0) -> Dict[str, Any]:
-    with state.lock:
-        offset = max(0, min(offset, len(state.log_lines)))
-        return {
-            "offset": offset,
-            "next": len(state.log_lines),
-            "lines": state.log_lines[offset:],
-            "running": state.running(),
         }
 
 
