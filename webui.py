@@ -888,11 +888,12 @@ def api_render(basename: str, body: Dict[str, Any]) -> Dict[str, Any]:
     """Re-render a transcript under the requested options, without saving."""
     dirs, base, selected, segments, options, metadata = _render(basename, body)
     config = _render_config(options.linebreak_threshold, options.preamble)
-    stats = metadata.get("speaker_stats") if options.stats else None
+    stats = metadata.get("speaker_stats")
     transcript_id = selected.get("timestamp")
 
     content = TXTFormatter().render(segments, config=config,
-                                    transcript_id=transcript_id, speaker_stats=stats)
+                                    transcript_id=transcript_id, speaker_stats=stats,
+                                    stats=options.stats)
 
     return {
         "base": base,
@@ -914,7 +915,7 @@ def api_render_save(basename: str, body: Dict[str, Any]) -> Dict[str, Any]:
 
     dirs, base, selected, segments, options, metadata = _render(basename, body)
     config = _render_config(options.linebreak_threshold, options.preamble)
-    stats = metadata.get("speaker_stats") if options.stats else None
+    stats = metadata.get("speaker_stats")
     transcript_id = selected.get("timestamp")
 
     stem = os.path.splitext(os.path.basename(selected["id"]))[0] + options.suffix()
@@ -927,7 +928,8 @@ def api_render_save(basename: str, body: Dict[str, Any]) -> Dict[str, Any]:
         path = os.path.join(target_dir, f"{stem}.{fmt}")
         formatter = TXTFormatter() if fmt == "txt" else RTFFormatter()
         formatter.format(segments, path, config=config,
-                         transcript_id=transcript_id, speaker_stats=stats)
+                         transcript_id=transcript_id, speaker_stats=stats,
+                         stats=options.stats)
         written.append(os.path.relpath(path, dirs["audio"]))
 
     return {"base": base, "written": written, "suffix": options.suffix()}

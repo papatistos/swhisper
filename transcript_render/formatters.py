@@ -63,6 +63,7 @@ class RTFFormatter(TranscriptFormatter):
         config=None,
         transcript_id: str = None,
         speaker_stats: Optional[Dict[str, Dict[str, Any]]] = None,
+        stats: bool = True,
         **kwargs
     ) -> str:
         """
@@ -102,7 +103,7 @@ class RTFFormatter(TranscriptFormatter):
             
             return result
         
-        summary_data = TXTFormatter._get_speaker_summary_table_data(segments, speaker_stats)
+        summary_data = TXTFormatter._get_speaker_summary_table_data(segments, speaker_stats) if stats else None
 
         def build_summary_table(table_data: Dict[str, Any]) -> List[str]:
             if not table_data:
@@ -663,7 +664,7 @@ class TXTFormatter(TranscriptFormatter):
 
         return lines
 
-    def render(self, segments: List[Dict], include_silence: bool = True, config=None, transcript_id: str = None, speaker_stats: Optional[Dict[str, Dict[str, Any]]] = None, **kwargs) -> str:
+    def render(self, segments: List[Dict], include_silence: bool = True, config=None, transcript_id: str = None, speaker_stats: Optional[Dict[str, Dict[str, Any]]] = None, stats: bool = True, **kwargs) -> str:
         """Build a plain text transcript with speaker paragraphs."""
         gap_threshold = getattr(config, 'silence_gap_linebreak_threshold', None) if config else None
 
@@ -744,7 +745,7 @@ class TXTFormatter(TranscriptFormatter):
 
         txt_content: List[str] = []
 
-        summary_lines = self._build_speaker_summary(segments, speaker_stats)
+        summary_lines = self._build_speaker_summary(segments, speaker_stats) if stats else []
 
         if config and hasattr(config, 'output_preamble') and config.output_preamble:
             if transcript_id and hasattr(config, 'get_preamble_with_transcript_id'):
