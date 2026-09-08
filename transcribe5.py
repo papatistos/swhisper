@@ -52,6 +52,7 @@ from transcribe.diarization_first import DiarizationFirstPipeline
 # Import diarization config for pyannote 4
 from diarize4 import run as diarize4_run
 from diarize import DiarizationConfig
+from transcript_render import RenderOptions, derive_segments
 from sidecar import sidecar_overrides
 
 
@@ -262,12 +263,25 @@ class TranscriptionAppV5(_transcribe4_module.TranscriptionAppV4):
         except Exception as e:
             print(f"   ⚠️  Detailed RTTM generation failed: {e}")
         
+        # The text formats get the view this run's settings ask for; the JSON
+        # keeps the full-fidelity segments so any view can be re-rendered later.
+        cfg = self.diarization_config
+        display_segments = derive_segments(
+            segments,
+            RenderOptions(
+                pauses=cfg.include_silence_markers,
+                pause_linebreak_threshold=cfg.silence_gap_linebreak_threshold or 0.0,
+                pause_linebreaks=bool(cfg.silence_gap_linebreak_threshold),
+            ),
+            pipeline_min_silence=cfg.min_silence_duration,
+        )
+
         # RTF format
         try:
             rtf_filename = f"{base_name}_{timestamp}.rtf"
             rtf_path = os.path.join(subdirs['rtf'], rtf_filename)
             RTFFormatter().format(
-                segments,
+                display_segments,
                 rtf_path,
                 config=self.diarization_config,
                 transcript_id=timestamp,
@@ -282,7 +296,7 @@ class TranscriptionAppV5(_transcribe4_module.TranscriptionAppV4):
             txt_filename = f"{base_name}_{timestamp}.txt"
             txt_path = os.path.join(subdirs['txt'], txt_filename)
             TXTFormatter().format(
-                segments,
+                display_segments,
                 txt_path,
                 config=self.diarization_config,
                 transcript_id=timestamp,
@@ -297,7 +311,7 @@ class TranscriptionAppV5(_transcribe4_module.TranscriptionAppV4):
             tsv_filename = f"{base_name}_{timestamp}.tsv"
             tsv_path = os.path.join(subdirs['tsv'], tsv_filename)
             TSVFormatter().format(
-                segments,
+                display_segments,
                 tsv_path,
                 include_silence=self.diarization_config.include_silence_markers,
                 include_word_details=False,

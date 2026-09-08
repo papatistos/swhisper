@@ -53,6 +53,61 @@ Total       506 (100.0%)  2707 (100.0%)        5.3  737.0 (100.0%)  220 wpm  306
 
 - By default, silence of 1 second or longer are surrounded by blank lines in the transcript (even when there is no speaker change) to improve readability. This threshold can be adjusted via `SWHISPER_SILENCE_LINEBREAK` (set to `0` to disable). This setting only concerns rtf and txt output files.
 
+### Changing the view without re-running anything
+
+The settings above decide what a run *writes*, but they do not decide what you
+can *read*. Everything needed to show or hide markers and pauses is kept in the
+diarized JSON, so any of those choices can be changed after the fact, in
+milliseconds, from the transcript viewer in the web UI:
+
+| Toggle | What it does |
+| --- | --- |
+| disfluency markers | show or hide `[*]` / `[S02**]` |
+| pause durations | show or hide `(1.3)` |
+| line break at *n* s | blank line around pauses of at least *n* seconds |
+| hide under *n* s | drop pauses shorter than *n* seconds |
+
+**Reset** returns to exactly what the pipeline produced, byte for byte.
+**Save as…** writes the current view to `txt` or `rtf` next to the transcript,
+with a suffix naming it (`..._nodisfl_nopause.txt`).
+
+Hiding disfluency markers is not the same as deleting them. A marker occupies
+real time, so removing it merges the pauses on either side:
+
+    with markers      Rastlös. (1.7) [***************] (.5) [*************] Jobbar
+    without markers   Rastlös. (4.9) Jobbar
+
+Deleting the markers and keeping the printed durations would claim 2.2 s of
+silence where the recording has 4.9 s. The pauses are therefore rebuilt from
+the word timings rather than edited in place.
+
+The same thing from the command line, for scripting or for people who want the
+files up front:
+
+```bash
+python render_transcript.py run_diarized.json --no-disfluencies -o clean.txt
+python render_transcript.py run_diarized.json --no-pauses --format rtf -o plain.rtf
+python render_transcript.py run_diarized.json --all -o variants/   # all 8 combinations
+```
+
+`--all` takes about 0.25 s and 1.1 MB per hour-long interview, so generating
+every combination up front is perfectly affordable — it is just rarely what you
+want, since the toggles are instant and sixteen near-identical files are hard
+to tell apart.
+
+Two settings stay run-time settings, because they change what data exists
+rather than how it is shown. `SWHISPER_DETECT_DISFLUENCIES` controls what
+Whisper emits, and `SWHISPER_PRESERVE_MARKERS=false` discards markers before
+diarization, which also shifts the pauses. Leave both at their defaults and the
+toggles cover the same ground without a re-run.
+
+To check that re-rendering still reproduces a run exactly:
+
+```bash
+python -m transcript_render.selftest /path/to/audio/transcripts
+```
+
+
 
 ### To-dos
 - [x] migrate to pyannote-audio 4.0 (and the `community-1` model)

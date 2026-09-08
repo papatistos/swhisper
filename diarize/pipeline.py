@@ -512,20 +512,24 @@ class SpeakerAligner:
                 print(f"   Removed {removal_stats['removed']} non-overlapping markers")
                 print(f"   Kept {removal_stats['kept_as_markers']} overlapping markers")
         
-        # Add silence markers if enabled
-        if self.config.include_silence_markers:
-            print("Adding silence markers...")
-            whisper_result['segments'] = SilenceMarkerProcessor.add_word_level_silence_markers(
-                whisper_result['segments'], 
-                self.config.min_silence_duration,
-                gap_log_path=gap_log_path
-            )
-            word_silences = sum(len([w for w in seg.get('words', []) if w.get('is_silence_marker', False)]) 
-                             for seg in whisper_result['segments'])
-            print(f"Added {word_silences} silence markers")
-            if gap_log_path and os.path.exists(gap_log_path):
-                relative_gap_path = os.path.relpath(gap_log_path, self.config.final_output_dir)
-                print(f"Silence gap durations logged to {relative_gap_path}")
+        # Always add silence markers, so the saved JSON carries the pause
+        # timings whether or not this run wants to print them. Hiding them is
+        # a rendering decision (RenderOptions.pauses), and one that cannot be
+        # undone later if the markers were never computed.
+        print("Adding silence markers...")
+        whisper_result['segments'] = SilenceMarkerProcessor.add_word_level_silence_markers(
+            whisper_result['segments'],
+            self.config.min_silence_duration,
+            gap_log_path=gap_log_path
+        )
+        word_silences = sum(len([w for w in seg.get('words', []) if w.get('is_silence_marker', False)])
+                         for seg in whisper_result['segments'])
+        print(f"Added {word_silences} silence markers")
+        if not self.config.include_silence_markers:
+            print("   (hidden in the text outputs; SWHISPER_INCLUDE_SILENCE is off)")
+        if gap_log_path and os.path.exists(gap_log_path):
+            relative_gap_path = os.path.relpath(gap_log_path, self.config.final_output_dir)
+            print(f"Silence gap durations logged to {relative_gap_path}")
         
         unmatched_turns = SpeakerAssigner.find_segments_without_word_coverage(
             whisper_result['segments'],

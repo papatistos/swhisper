@@ -112,6 +112,13 @@ def _load_final_speaker_stats(stats_json_path: str) -> Optional[Dict[str, Dict[s
             data = json.load(fh)
     except (OSError, json.JSONDecodeError):
         return None
+    # StatsExporter.save_analysis_stats (diarize/output.py) is the only
+    # current producer of _analysis.json; it writes per-speaker word/duration/
+    # segment counts under statistics.speaker_level, not a top-level
+    # final_speaker_stats key.
+    statistics = data.get("statistics")
+    if isinstance(statistics, dict) and isinstance(statistics.get("speaker_level"), dict):
+        return statistics["speaker_level"]
     if "final_speaker_stats" in data:
         return data["final_speaker_stats"]
     if isinstance(data.get("summary"), dict) and "final_speaker_stats" in data["summary"]:

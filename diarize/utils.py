@@ -20,6 +20,29 @@ import json
 import whisper_timestamped as whisper
 from transcribe.transcription import TranscriptionWorker
 
+from transcript_render.markers import (
+    STATIC_MARKERS,
+    DISFLUENCY_MARKER_PATTERN,
+    SPACED_MARKER_PATTERN,
+    MARKER_INLINE_HINT_PATTERN,
+    MARKER_PREFIX_HINT_PATTERN,
+    strip_marker_hint,
+    split_marker_hint_and_body,
+    inject_hint_into_marker,
+    format_speaker_hint,
+    is_marker_token,
+    is_disfluency_marker,
+    is_silence_token,
+    is_silence_token as _is_silence_token,
+    parse_silence_duration,
+    _normalize_speaker_label,
+    get_word_text as _get_word_text_impl,
+    set_word_text as _set_word_text_impl,
+)
+from transcript_render.paragraphs import (
+    create_paragraph_text_from_words as _create_paragraph_text_from_words_impl,
+)
+
 
 # =============================================================================
 # SUBPROCESS WORKER FOR BACKFILL (must be at module level for pickling)
@@ -486,17 +509,12 @@ class WordProcessor:
     @staticmethod
     def _get_word_text(word: Dict[str, Any]) -> str:
         """Fetch the primary textual representation for a word token."""
-        value = word.get('word')
-        if isinstance(value, str) and value:
-            return value
-        value = word.get('text')
-        return value if isinstance(value, str) else ""
+        return _get_word_text_impl(word)
 
     @staticmethod
     def _set_word_text(word: Dict[str, Any], new_text: str) -> None:
         """Synchronize word/text fields after updating marker contents."""
-        word['word'] = new_text
-        word['text'] = new_text
+        _set_word_text_impl(word, new_text)
 
     @staticmethod
     def align_segment_boundaries_to_words(segments: List[Dict]) -> List[Dict]:
@@ -533,94 +551,12 @@ class WordProcessor:
         gap_threshold: Optional[float] = None
     ) -> str:
         """Reconstruct segment text from words while optionally adding blank lines around long silences."""
-        words = segment.get('words', [])
-        if not words:
-            return segment.get('text', '').strip()
-
-        # Behaviour when no threshold is provided
-        if not gap_threshold or gap_threshold <= 0:
-            word_texts = []
-            for word in words:
-                word_text = word.get('word', word.get('text', ''))
-                if word_text:  # Preserve markers and silence tokens
-                    word_texts.append(word_text)
-            return ' '.join(word_texts).strip()
-
-        lines: List[str] = []
-        current_tokens: List[str] = []
-
-        def flush_current_tokens() -> None:
-            if current_tokens:
-                lines.append(' '.join(current_tokens).strip())
-                current_tokens.clear()
-
-        for word in words:
-            word_text = word.get('word', word.get('text', ''))
-            if not word_text:
-                continue
-
-            add_line_breaks = False
-            if word.get('is_silence_marker', False):
-                duration = WordProcessor._parse_silence_duration(word_text)
-                if duration is not None and duration >= gap_threshold:
-                    add_line_breaks = True
-
-            if add_line_breaks:
-                flush_current_tokens()
-                # Always add blank line before long silence markers
-                # (even at start of segment, for visual separation)
-                if not lines:
-                    # First item is a long silence - add leading blank
-                    lines.append('')
-                elif lines[-1] != '':
-                    # Add blank line after non-blank line
-                    lines.append('')
-                lines.append(word_text.strip())
-                lines.append('')
-            else:
-                current_tokens.append(word_text.strip())
-
-        flush_current_tokens()
-
-        if not lines:
-            return ' '.join(current_tokens).strip()
-
-        while lines and lines[0] == '':
-            lines.pop(0)
-        while lines and lines[-1] == '':
-            lines.pop()
-
-        cleaned_lines: List[str] = []
-        previous_blank = False
-        for line in lines:
-            if line == '':
-                if previous_blank:
-                    continue
-                previous_blank = True
-            else:
-                previous_blank = False
-            cleaned_lines.append(line)
-
-        return '\n'.join(cleaned_lines)
+        return _create_paragraph_text_from_words_impl(segment, gap_threshold)
 
     @staticmethod
     def _parse_silence_duration(token: str) -> Optional[float]:
         """Extract numeric silence duration from a token like '(1.3)'."""
-        if not token:
-            return None
-
-        stripped = token.strip()
-        if stripped.startswith('(') and stripped.endswith(')'):
-            stripped = stripped[1:-1]
-
-        stripped = stripped.replace(',', '.')
-        if not stripped:
-            return None
-
-        try:
-            return float(stripped)
-        except ValueError:
-            return None
+        return parse_silence_duration(token)
     
     @staticmethod
     def should_smooth_word(current_word: Dict, prev_word: Dict, next_word: Dict) -> bool:
@@ -658,7 +594,13 @@ class WordProcessor:
 
             if removed_any:
                 segment['words'] = filtered_words
-                segment['text'] = WordProcessor.create_paragraph_text_from_words(segment)
+                # create_paragraph_text_from_words falls back to segment['text']
+                # when there are no words left, which at this point is still the
+                # pre-removal text — it would print the very markers just removed.
+                segment['text'] = (
+                    WordProcessor.create_paragraph_text_from_words(segment)
+                    if filtered_words else ''
+                )
 
         return segments
 
@@ -891,8 +833,13 @@ class WordProcessor:
                     if last_word_end is not None:
                         segment['end'] = last_word_end
                 
-                # Rebuild segment text
-                segment['text'] = WordProcessor.create_paragraph_text_from_words(segment)
+                # Rebuild segment text. create_paragraph_text_from_words falls
+                # back to segment['text'] when there are no words left, which at
+                # this point is still the pre-removal text.
+                segment['text'] = (
+                    WordProcessor.create_paragraph_text_from_words(segment)
+                    if filtered_words else ''
+                )
 
         return stats
 
@@ -2497,152 +2444,6 @@ class SilenceMarkerProcessor:
             log_file.write("\n".join(entries))
             log_file.write("\n")
             log_file.write("\n")
-
-
-# Global logger manager instance
-STATIC_MARKERS = {"[DISCONTINUITY]", "[SILENCE]", "[OVERLAP]"}
-DISFLUENCY_MARKER_PATTERN = re.compile(r"^\[\*+\]$")
-SPACED_MARKER_PATTERN = re.compile(r"^\[\s\*{1,50}\s\]$")
-MARKER_INLINE_HINT_PATTERN = re.compile(r"^\[(\s*)(S\d{2}(?:[+/]S\d{2})*)(\*+)(\s*)\]$")
-MARKER_PREFIX_HINT_PATTERN = re.compile(r"^(S\d{2}(?:[+/]S\d{2})*)\s+")
-
-
-def strip_marker_hint(token: str) -> str:
-    """Remove leading speaker hint prefixes from a marker token."""
-    if not isinstance(token, str):
-        return ""
-    cleaned = token.strip()
-    inline = MARKER_INLINE_HINT_PATTERN.match(cleaned)
-    if inline:
-        leading_spaces = inline.group(1)
-        stars = inline.group(3)
-        trailing_spaces = inline.group(4)
-        return f"[{leading_spaces}{stars}{trailing_spaces}]"
-    return MARKER_PREFIX_HINT_PATTERN.sub("", cleaned)
-
-
-def split_marker_hint_and_body(token: str) -> Tuple[str, str]:
-    """Return the hint prefix (if present) and the base marker body."""
-    if not isinstance(token, str):
-        return "", ""
-    cleaned = token.strip()
-    inline = MARKER_INLINE_HINT_PATTERN.match(cleaned)
-    if inline:
-        leading_spaces = inline.group(1)
-        hint = inline.group(2)
-        stars = inline.group(3)
-        trailing_spaces = inline.group(4)
-        base_marker = f"[{leading_spaces}{stars}{trailing_spaces}]"
-        return hint, base_marker
-    match = MARKER_PREFIX_HINT_PATTERN.match(cleaned)
-    if match:
-        hint = match.group(1)
-        remainder = cleaned[match.end():].lstrip()
-        return hint, remainder
-    return "", cleaned
-
-
-def inject_hint_into_marker(marker_body: str, hint: str) -> str:
-    """Place the speaker hint immediately inside the marker brackets."""
-    if not marker_body or not hint:
-        return marker_body
-
-    cleaned = marker_body.strip()
-
-    inline = MARKER_INLINE_HINT_PATTERN.match(cleaned)
-    if inline:
-        leading_spaces = inline.group(1)
-        stars = inline.group(3)
-        trailing_spaces = inline.group(4)
-        return f"[{leading_spaces}{hint}{stars}{trailing_spaces}]"
-
-    if cleaned.startswith('[') and cleaned.endswith(']'):
-        inner = cleaned[1:-1]
-        if inner:
-            first_star = inner.find('*')
-            if first_star != -1:
-                return f"[{inner[:first_star]}{hint}{inner[first_star:]}]"
-            if set(inner.replace(' ', '')) <= {'*'}:
-                return f"[{hint}{inner}]"
-
-    return f"{hint} {marker_body}".strip()
-
-
-def format_speaker_hint(label: Optional[str]) -> str:
-    """Convert diarization speaker labels into the compact Sxx hint form."""
-    if not label or not isinstance(label, str):
-        return ""
-
-    if label.upper() in {"SILENCE", "UNKNOWN"}:
-        return ""
-
-    match = re.search(r"(\d+)", label)
-    if match:
-        try:
-            index = int(match.group(1))
-            return f"S{index + 1:02d}"
-        except ValueError:
-            pass
-
-    alnum = re.sub(r"[^A-Za-z0-9]", "", label).upper()
-    if not alnum:
-        return ""
-    if len(alnum) <= 3:
-        return alnum
-    return alnum[:3]
-
-
-def _normalize_speaker_label(label: Optional[str]) -> str:
-    """Normalize speaker labels for comparisons, ignoring formatting differences."""
-    if not label or not isinstance(label, str):
-        return ""
-
-    cleaned = label.strip().upper()
-    match = re.search(r"(\d+)", cleaned)
-    if match:
-        digits = match.group(1).lstrip('0')
-        return digits or "0"
-
-    alnum = re.sub(r"[^A-Z0-9]", "", cleaned)
-    return alnum
-
-
-def is_marker_token(token: str) -> bool:
-    """Return True for preserved markers, including variable-length asterisk forms."""
-    if not token:
-        return False
-    cleaned = strip_marker_hint(token)
-    return (
-        cleaned in STATIC_MARKERS
-        or bool(DISFLUENCY_MARKER_PATTERN.match(cleaned))
-        or bool(SPACED_MARKER_PATTERN.match(cleaned))
-    )
-
-
-def _is_silence_token(word: Dict[str, Any]) -> bool:
-    """Identify silence placeholders regardless of explicit flags."""
-    if not isinstance(word, dict):
-        return False
-
-    if word.get('is_silence_marker', False):
-        return True
-
-    if word.get('speaker') == 'SILENCE':
-        return True
-
-    token = word.get('word', word.get('text', ''))
-    if not isinstance(token, str):
-        return False
-
-    cleaned = token.strip()
-    if not cleaned:
-        return False
-
-    if cleaned.startswith('(') and cleaned.endswith(')'):
-        if WordProcessor._parse_silence_duration(cleaned) is not None:
-            return True
-
-    return False
 
 
 logger_manager = LoggerManager()

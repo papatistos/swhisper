@@ -31,6 +31,7 @@ import threading
 import time
 import uuid
 import webbrowser
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -48,6 +49,15 @@ from sidecar import (
     find_sidecar,
     parse_sidecar_file,
     sidecar_requests_reprocess,
+)
+import transcript_stats
+
+from transcript_render import (
+    RenderOptions,
+    RTFFormatter,
+    TXTFormatter,
+    derive_segments,
+    DEFAULT_MIN_SILENCE,
 )
 
 try:
@@ -753,6 +763,194 @@ def api_transcript(basename: str, version: Optional[str] = None) -> Dict[str, An
         "versions": versions,
         "selected": selected["id"],
         "content": content,
+        "has_stats": transcript_stats.has_stats_header(content),
+        "stats_available": bool(transcript_stats.find_analysis_json(path)),
+        # Only transcripts with a diarized JSON beside them can be re-rendered.
+        "can_render": _diarized_json_for(dirs, selected["id"]) is not None,
+    }
+
+
+@app.post("/api/transcript/{basename}/stats")
+def api_transcript_stats(basename: str, body: Dict[str, str]) -> Dict[str, Any]:
+    """Add or remove the preamble+stats header on an existing TXT transcript,
+    in place, without re-running transcription or diarization."""
+    action = body.get("action")
+    if action not in ("add", "remove"):
+        raise HTTPException(400, "action must be 'add' or 'remove'")
+    dirs = state.dirs()
+    base = _safe_base(dirs["audio"], basename)
+    versions = _transcript_versions(dirs, base)
+    if not versions:
+        raise HTTPException(404, "No transcript found for this file")
+    version = body.get("version")
+    if version:
+        selected = next((v for v in versions if v["id"] == version), None)
+        if selected is None:
+            raise HTTPException(400, "Unknown transcript version")
+    else:
+        selected = versions[0]
+    path = os.path.join(dirs["audio"], selected["id"])
+    if action == "add":
+        transcript_stats.add_stats(path, dirs["audio"], base)
+    else:
+        transcript_stats.remove_stats(path)
+    try:
+        content = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise HTTPException(500, f"Could not read transcript: {exc}")
+    return {
+        "base": base,
+        "versions": versions,
+        "selected": selected["id"],
+        "content": content,
+        "has_stats": transcript_stats.has_stats_header(content),
+        "stats_available": bool(transcript_stats.find_analysis_json(path)),
+        # Only transcripts with a diarized JSON beside them can be re-rendered.
+        "can_render": _diarized_json_for(dirs, selected["id"]) is not None,
+    }
+
+
+# --- on-demand re-rendering -------------------------------------------------
+#
+# Which markers and pauses a transcript shows is a presentation choice, not a
+# property of the run: every one of them is recoverable from the diarized
+# JSON. So the viewer offers them as toggles and re-renders in milliseconds,
+# instead of the pipeline writing one file per combination.
+
+def _render_config(threshold: Optional[float], preamble: bool):
+    """The handful of attributes the formatters read off a diarization config."""
+    defaults = _dconfig.DiarizationConfig()
+
+    class _Config:
+        silence_gap_linebreak_threshold = threshold
+        output_preamble = defaults.output_preamble if preamble else ""
+        get_preamble_with_transcript_id = defaults.get_preamble_with_transcript_id
+
+    return _Config()
+
+
+def _diarized_json_for(dirs: Dict[str, str], version_id: str) -> Optional[str]:
+    """The diarized JSON a TXT transcript version was rendered from.
+
+    Both pipelines write ``<root>/txt/<stem>.txt`` beside
+    ``<root>/json/<stem>_diarized.json``.
+    """
+    txt_path = os.path.join(dirs["audio"], version_id)
+    stem = os.path.splitext(os.path.basename(txt_path))[0]
+    root = os.path.dirname(os.path.dirname(txt_path))
+    candidate = os.path.join(root, "json", f"{stem}_diarized.json")
+    return candidate if os.path.isfile(candidate) else None
+
+
+def _selected_version(dirs: Dict[str, str], base: str, version: Optional[str]) -> Dict[str, Any]:
+    versions = _transcript_versions(dirs, base)
+    if not versions:
+        raise HTTPException(404, "No transcript found for this file")
+    if not version:
+        return versions[0]
+    selected = next((v for v in versions if v["id"] == version), None)
+    if selected is None:
+        raise HTTPException(400, "Unknown transcript version")
+    return selected
+
+
+def _render(basename: str, body: Dict[str, Any]):
+    """Shared by preview and save: locate the JSON, derive, format."""
+    dirs = state.dirs()
+    base = _safe_base(dirs["audio"], basename)
+    selected = _selected_version(dirs, base, body.get("version"))
+    json_path = _diarized_json_for(dirs, selected["id"])
+    if json_path is None:
+        raise HTTPException(
+            404,
+            "This transcript has no diarized JSON beside it, so it cannot be "
+            "re-rendered. Re-run diarization to produce one.")
+    try:
+        with open(json_path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(500, f"Could not read diarized JSON: {exc}")
+
+    options = RenderOptions.from_dict(body.get("options"))
+    metadata = data.get("metadata") or {}
+    floor = metadata.get("min_silence_duration")
+    if not isinstance(floor, (int, float)):
+        floor = DEFAULT_MIN_SILENCE
+
+    segments = derive_segments(data.get("segments") or [], options,
+                               pipeline_min_silence=float(floor))
+    return dirs, base, selected, segments, options, metadata
+
+
+@app.post("/api/render/{basename}")
+def api_render(basename: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """Re-render a transcript under the requested options, without saving."""
+    dirs, base, selected, segments, options, metadata = _render(basename, body)
+    config = _render_config(options.linebreak_threshold, options.preamble)
+    stats = metadata.get("speaker_stats")
+    transcript_id = selected.get("timestamp")
+
+    content = TXTFormatter().render(segments, config=config,
+                                    transcript_id=transcript_id, speaker_stats=stats,
+                                    stats=options.stats)
+
+    return {
+        "base": base,
+        "selected": selected["id"],
+        "versions": _transcript_versions(dirs, base),
+        "content": content,
+        "options": asdict(options),
+        "suffix": options.suffix(),
+    }
+
+
+@app.post("/api/render/{basename}/save")
+def api_render_save(basename: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """Write the current view to disk, next to the transcript it came from."""
+    formats = body.get("formats") or ["txt"]
+    unknown = [f for f in formats if f not in ("txt", "rtf")]
+    if unknown:
+        raise HTTPException(400, f"Unknown format(s): {', '.join(unknown)}")
+
+    dirs, base, selected, segments, options, metadata = _render(basename, body)
+    config = _render_config(options.linebreak_threshold, options.preamble)
+    stats = metadata.get("speaker_stats")
+    transcript_id = selected.get("timestamp")
+
+    stem = os.path.splitext(os.path.basename(selected["id"]))[0] + options.suffix()
+    root = os.path.dirname(os.path.dirname(os.path.join(dirs["audio"], selected["id"])))
+
+    written: List[str] = []
+    for fmt in formats:
+        target_dir = os.path.join(root, fmt)
+        os.makedirs(target_dir, exist_ok=True)
+        path = os.path.join(target_dir, f"{stem}.{fmt}")
+        formatter = TXTFormatter() if fmt == "txt" else RTFFormatter()
+        formatter.format(segments, path, config=config,
+                         transcript_id=transcript_id, speaker_stats=stats,
+                         stats=options.stats)
+        written.append(os.path.relpath(path, dirs["audio"]))
+
+    return {"base": base, "written": written, "suffix": options.suffix()}
+
+
+@app.get("/api/json-transcript/{basename}")
+def api_json_transcript(basename: str) -> Dict[str, Any]:
+    """Serve the raw whisper JSON transcript (pre-diarization) for a file."""
+    dirs = state.dirs()
+    base = _safe_base(dirs["audio"], basename)
+    path = os.path.join(dirs["json"], f"{base}.json")
+    if not os.path.exists(path):
+        raise HTTPException(404, "No JSON transcript yet — run transcription first.")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(500, f"Could not read JSON transcript: {exc}")
+    return {
+        "base": base,
+        "path": os.path.relpath(path, dirs["audio"]),
+        "content": json.dumps(data, indent=2, ensure_ascii=False),
     }
 
 

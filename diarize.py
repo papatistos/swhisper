@@ -55,6 +55,7 @@ from diarize import (
     VTTFormatter, RTTMFormatter, RTFFormatter, TXTFormatter, TSVFormatter, PyannoteSegmentFormatter, JSONFormatter
 )
 from diarize.utils import logger_manager, BackfillTranscriber, BackfillCache, WordProcessor
+from transcript_render import RenderOptions, derive_segments
 from transcribe import TranscriptionConfig, WhisperSettings
 from sidecar import apply_sidecar_to_diarization_config, sidecar_requests_reprocess, STAGE_DIARIZE
 
@@ -582,7 +583,10 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     "smoothing_enabled": config.smoothing_enabled,
                     "min_speaker_words": config.min_speaker_words,
                     "preserve_markers": config.preserve_markers,
-                    "markers_preserved": config.preserved_markers
+                    "markers_preserved": config.preserved_markers,
+                    "min_silence_duration": config.min_silence_duration,
+                    "include_silence_markers": config.include_silence_markers,
+                    "silence_gap_linebreak_threshold": config.silence_gap_linebreak_threshold
                 },
                 "backfill": {
                     "enabled": getattr(config, 'backfill_missing_turns', False),
@@ -601,12 +605,25 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Step 4: Generating output files...")
             sys.stdout.flush()  # Force immediate output
             output_files = {}
-            
+
+            # `segments` stays full fidelity and is what the JSON records, so
+            # any view can be re-rendered from it later. The text formats get
+            # the view this run's settings ask for.
+            display_options = RenderOptions(
+                pauses=config.include_silence_markers,
+                pause_linebreak_threshold=config.silence_gap_linebreak_threshold or 0.0,
+                pause_linebreaks=bool(config.silence_gap_linebreak_threshold),
+            )
+            display_segments = derive_segments(
+                segments, display_options,
+                pipeline_min_silence=config.min_silence_duration,
+            )
+
             # VTT format
             print(f'Saving transcript for "{audio_basename}" in VTT format...')
             vtt_filename = f"{base_filename}_{log_timestamp}.vtt"
             vtt_output_path = os.path.join(subdirs['vtt'], vtt_filename)
-            VTTFormatter().format(segments, vtt_output_path)
+            VTTFormatter().format(display_segments, vtt_output_path)
             print(f"VTT file saved to vtt/{vtt_filename}")
             output_files['vtt'] = vtt_filename
             
@@ -631,7 +648,7 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             rtf_filename = f"{base_filename}_{log_timestamp}.rtf" 
             rtf_output_path = os.path.join(subdirs['rtf'], rtf_filename)
             RTFFormatter().format(
-                segments,
+                display_segments,
                 rtf_output_path,
                 config=config,
                 transcript_id=log_timestamp,
@@ -645,7 +662,7 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             txt_filename = f"{base_filename}_{log_timestamp}.txt"
             txt_output_path = os.path.join(subdirs['txt'], txt_filename)
             TXTFormatter().format(
-                segments,
+                display_segments,
                 txt_output_path,
                 config=config,
                 transcript_id=log_timestamp,
@@ -659,7 +676,7 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             tsv_filename = f"{base_filename}_{log_timestamp}.tsv"
             tsv_output_path = os.path.join(subdirs['tsv'], tsv_filename)
             TSVFormatter().format(
-                segments,
+                display_segments,
                 tsv_output_path,
                 include_silence=config.include_silence_markers,
                 include_word_details=False,
@@ -684,7 +701,9 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                 'diarization_model': config.pipeline_model,
                 'word_stats': word_stats,
                 'segment_stats': segment_stats,
-                'speaker_stats': speaker_stats
+                'speaker_stats': speaker_stats,
+                'min_silence_duration': config.min_silence_duration,
+                'preserve_markers': config.preserve_markers
             }
             JSONFormatter().format(segments, json_output_path, metadata=json_metadata)
             print(f"Enriched JSON saved to json/{json_filename}")
