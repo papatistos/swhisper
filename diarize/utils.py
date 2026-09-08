@@ -594,7 +594,13 @@ class WordProcessor:
 
             if removed_any:
                 segment['words'] = filtered_words
-                segment['text'] = WordProcessor.create_paragraph_text_from_words(segment)
+                # create_paragraph_text_from_words falls back to segment['text']
+                # when there are no words left, which at this point is still the
+                # pre-removal text — it would print the very markers just removed.
+                segment['text'] = (
+                    WordProcessor.create_paragraph_text_from_words(segment)
+                    if filtered_words else ''
+                )
 
         return segments
 
@@ -827,8 +833,13 @@ class WordProcessor:
                     if last_word_end is not None:
                         segment['end'] = last_word_end
                 
-                # Rebuild segment text
-                segment['text'] = WordProcessor.create_paragraph_text_from_words(segment)
+                # Rebuild segment text. create_paragraph_text_from_words falls
+                # back to segment['text'] when there are no words left, which at
+                # this point is still the pre-removal text.
+                segment['text'] = (
+                    WordProcessor.create_paragraph_text_from_words(segment)
+                    if filtered_words else ''
+                )
 
         return stats
 
