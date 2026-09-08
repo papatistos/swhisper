@@ -9,7 +9,12 @@ re-exports them so existing call sites keep working.
 import re
 from typing import Any, Dict, List, Optional
 
-from .markers import is_silence_token as _is_silence_token, parse_silence_duration
+from .markers import (
+    get_word_text,
+    is_disfluency_marker,
+    is_silence_token as _is_silence_token,
+    parse_silence_duration,
+)
 from .paragraphs import create_paragraph_text_from_words
 
 # Warning text about speaker statistics used in both TXT and RTF outputs.
@@ -428,7 +433,11 @@ class TXTFormatter(TranscriptFormatter):
                     entry['pauses'] += duration
                     continue
 
-                entry['words'] += 1
+                # A marker stands for a sound that could not be transcribed —
+                # real speaking time, but not a word, regardless of whether
+                # markers are currently shown in the rendered text.
+                if not is_disfluency_marker(get_word_text(word)):
+                    entry['words'] += 1
                 entry['speech'] += duration
 
         if speaker_stats:

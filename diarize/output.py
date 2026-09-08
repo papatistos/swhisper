@@ -15,6 +15,7 @@ from transcript_render.formatters import (
     RTFFormatter,
     SPEAKER_STATS_WARNING,
 )
+from transcript_render.markers import get_word_text, is_disfluency_marker
 
 
 def format_vtt_timestamp(seconds: float) -> str:
@@ -198,7 +199,11 @@ class TSVFormatter(TranscriptFormatter):
                     text = text.replace('\t', ' ')
 
                 words = segment.get('words', []) or []
-                word_count = sum(1 for w in words if not w.get('is_silence_marker', False))
+                word_count = sum(
+                    1 for w in words
+                    if not w.get('is_silence_marker', False)
+                    and not is_disfluency_marker(get_word_text(w))
+                )
 
                 base_row = {
                     'segment_index': index,
