@@ -74,6 +74,11 @@
                  background: transparent; color: var(--muted); padding: 4px 12px 6px; }
   #tabBar .tab:hover { color: var(--text); }
   #tabBar .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+
+  /* run control bar (above tabs, always visible) */
+  #runControlBar { display: flex; gap: 10px; align-items: center; padding: 8px 16px;
+                   flex-wrap: wrap; background: var(--panel); border-bottom: 1px solid var(--border); }
+  #runControlBar .status { font-size: 0.8rem; color: var(--muted); }
   #transcriptView { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   #transcriptBar { display: flex; gap: 10px; align-items: center; padding: 8px 20px;
                    border-bottom: 1px solid var(--border); background: var(--panel); }
@@ -148,6 +153,13 @@
 <main>
   <div id="files"></div>
   <div id="right">
+    <div id="runControlBar">
+      <span class="dot" id="runDot"></span>
+      <select id="pipelineSel"></select>
+      <button class="primary" id="startBtn">Start run</button>
+      <button id="stopBtn" disabled>Stop</button>
+      <span class="status" id="runStatus">idle</span>
+    </div>
     <div id="tabBar">
       <button class="tab active" id="tabSettings">Settings</button>
       <button class="tab" id="tabTranscript">Transcript</button>
@@ -183,11 +195,6 @@
     </div>
     <div id="logsView" style="display:none">
       <div id="runBar">
-        <span class="dot" id="runDot"></span>
-        <select id="pipelineSel"></select>
-        <button class="primary" id="startBtn">Start run</button>
-        <button id="stopBtn" disabled>Stop</button>
-        <span class="status" id="runStatus">idle</span>
         <select id="logSel" title="Log to view — live console, saved run, or per-file pipeline log" disabled></select>
         <button id="clearLogBtn" title="Clear log view">Clear</button>
         <span class="msg" id="logMsg"></span>
