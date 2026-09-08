@@ -848,22 +848,10 @@ def api_logs(base: Optional[str] = None, file: Optional[str] = None,
         return {"base": base, "versions": versions, "selected": selected["id"],
                 "content": content}
 
-    if file == "live":
-        with state.lock:
-            offset = max(0, min(offset, len(state.log_lines)))
-            return {
-                "scope": "run",
-                "selected": "live",
-                "lines": state.log_lines[offset:],
-                "next": len(state.log_lines),
-                "running": state.running(),
-                "pipeline": state.pipeline,
-                "returncode": state.returncode,
-                "started_at": state.started_at,
-                "finished_at": state.finished_at,
-            }
-
-    versions: List[Dict[str, Any]] = []
+    versions: List[Dict[str, Any]] = [{
+        "id": "live", "filename": "Live console", "timestamp": None,
+        "mtime": time.time(), "size": 0,
+    }]
     run_dir = os.path.join(audio, UI_RUN_LOG_DIR)
     try:
         names = os.listdir(run_dir)
@@ -886,6 +874,21 @@ def api_logs(base: Optional[str] = None, file: Optional[str] = None,
             "mtime": st.st_mtime,
             "size": st.st_size,
         })
+    if file == "live":
+        with state.lock:
+            offset = max(0, min(offset, len(state.log_lines)))
+            return {
+                "scope": "run",
+                "versions": versions,
+                "selected": "live",
+                "lines": state.log_lines[offset:],
+                "next": len(state.log_lines),
+                "running": state.running(),
+                "pipeline": state.pipeline,
+                "returncode": state.returncode,
+                "started_at": state.started_at,
+                "finished_at": state.finished_at,
+            }
     if file:
         selected = next((v for v in versions if v["id"] == file), None)
         if selected is None:

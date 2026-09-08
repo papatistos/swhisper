@@ -614,7 +614,8 @@ async function startRun() {
     });
     logOffset = 0;
     $("log").textContent = "";
-    setConsoleCollapsed(false);  // surface the console so the new run is visible
+    currentLogSel = "live";
+    if (currentTab === "logs") loadLogList();
   } catch (e) { alert(e.message); }
 }
 
@@ -627,7 +628,7 @@ async function pollRun() {
   try {
     const { data } = await api(`/api/logs?file=live&offset=${logOffset}`);
     if (data.next !== undefined) logOffset = data.next;
-    if (data.lines && data.lines.length) {
+    if (data.lines && data.lines.length && currentTab === "logs" && currentLogSel === "live") {
       const log = $("log");
       const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
       log.textContent += data.lines.join("\n") + "\n";
@@ -640,11 +641,12 @@ async function pollRun() {
     $("dirBtn").disabled = st.running;
     const dot = $("runDot");
     dot.className = "dot" + (st.running ? " run" : (st.returncode ? " err" : ""));
-    const statusText = st.running
-      ? `running ${st.pipeline} · ${((Date.now() / 1000 - st.started_at) / 60).toFixed(1)} min`
-      : st.pipeline ? `last run: ${st.pipeline} · exit ${st.returncode ?? "?"}` : "idle";
-    $("runStatus").textContent = statusText;
-    $("consoleMsg").textContent = statusText;
+    if (st.running) {
+      const mins = ((Date.now() / 1000 - st.started_at) / 60).toFixed(1);
+      $("runStatus").textContent = `running ${st.pipeline} · ${mins} min`;
+    } else if (st.pipeline) {
+      $("runStatus").textContent = `last run: ${st.pipeline} · exit ${st.returncode ?? "?"}`;
+    }
     if (wasRunning && !st.running) {
       loadFiles();  // refresh statuses when a run ends
       if (currentTab === "transcript" && currentBase) loadTranscript(currentBase);
@@ -654,19 +656,6 @@ async function pollRun() {
   } catch (e) { /* server briefly unavailable; keep polling */ }
 }
 
-/* ---------- console fold ---------- */
-
-function setConsoleCollapsed(collapsed) {
-  $("consolePanel").classList.toggle("collapsed", collapsed);
-  $("consoleToggle").textContent = (collapsed ? "▸" : "▾") + " Live console";
-  try { localStorage.setItem("swhisper_console_collapsed", collapsed ? "1" : "0"); } catch (e) {}
-}
-function initConsole() {
-  let collapsed = false;
-  try { collapsed = localStorage.getItem("swhisper_console_collapsed") === "1"; } catch (e) {}
-  setConsoleCollapsed(collapsed);
-}
-
 /* ---------- init ---------- */
 
 $("saveBtn").onclick = saveSidecar;
@@ -674,31 +663,13 @@ $("deleteBtn").onclick = deleteSidecar;
 $("tabSettings").onclick = () => showTab("settings");
 $("tabTranscript").onclick = () => showTab("transcript");
 $("tabLogs").onclick = () => showTab("logs");
-$("logSel").onchange = () => { currentLogId = $("logSel").value; loadLogContent(); };
+$("logSel").onchange = () => { currentLogSel = $("logSel").value; loadLogContent(); };
 $("versionSel").onchange = () => { if (currentBase) loadTranscript(currentBase, $("versionSel").value); };
 $("transcriptReload").onclick = () => { if (currentBase) loadTranscript(currentBase); };
-$("statsToggle").onclick = async () => {
-  const base = currentBase;
-  const version = $("versionSel").value;
-  if (!base || !version || version === RAW_JSON_VERSION) return;
-  const action = $("statsToggle").dataset.hasStats ? "remove" : "add";
-  try {
-    const { data } = await api(`/api/transcript/${encodeURIComponent(base)}/stats`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ version, action }),
-    });
-    if (base !== currentBase) return;
-    $("transcriptText").textContent = data.content;
-    $("transcriptMsg").textContent = `${base} — ${data.versions.length} version(s)`;
-    updateStatsToggle({ has_stats: data.has_stats, stats_available: data.stats_available });
-  } catch (e) { alert(e.message); }
-};
 $("startBtn").onclick = startRun;
 $("stopBtn").onclick = stopRun;
 $("refreshBtn").onclick = loadFiles;
 $("clearLogBtn").onclick = () => { $("log").textContent = ""; };
-$("consoleToggle").onclick = () => setConsoleCollapsed(!$("consolePanel").classList.contains("collapsed"));
 $("dirBtn").onclick = changeDir;
 $("dirInput").addEventListener("keydown", e => { if (e.key === "Enter") changeDir(); });
 $("historyBtn").onclick = showHistory;
@@ -709,7 +680,6 @@ $("fontPlus").onclick = () => nudgeFont(2);
 
 (async () => {
   initFontSize();
-  initConsole();
   await loadMeta();
   await loadFiles();
   setInterval(pollRun, 1000);
