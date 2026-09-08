@@ -128,7 +128,7 @@ class TranscriptionApp:
         except Exception as e:
             print(f"\n❌ Error during transcription: {e}")
             resource_manager.cleanup_resources()
-            raise
+            sys.exit(1)
         finally:
             self._cleanup()
 
