@@ -27,6 +27,10 @@ class TranscriptFormatter:
     def __init__(self):
         pass
 
+    def render(self, segments: List[Dict], **kwargs) -> str:
+        """Build the formatted transcript and return it."""
+        raise NotImplementedError
+
     def format(self, segments: List[Dict], output_path: str, **kwargs) -> None:
         """Format segments and save to output path."""
         raise NotImplementedError
@@ -53,17 +57,16 @@ def _silence_segment_duration(segment: Dict[str, Any]) -> Optional[float]:
 class RTFFormatter(TranscriptFormatter):
     """Formats transcripts in RTF format with speaker colors."""
     
-    def format(
+    def render(
         self,
         segments: List[Dict],
-        output_path: str,
         config=None,
         transcript_id: str = None,
         speaker_stats: Optional[Dict[str, Dict[str, Any]]] = None,
         **kwargs
-    ) -> None:
+    ) -> str:
         """
-        Create an RTF transcript with speaker paragraphs.
+        Build an RTF transcript with speaker paragraphs.
         Silences are embedded within the text as word-level markers.
         """
         # RTF header with proper Unicode support
@@ -332,9 +335,12 @@ class RTFFormatter(TranscriptFormatter):
         # RTF footer
         rtf_content.append("}")
         
-        # Write RTF file with proper encoding
+        return '\n'.join(rtf_content)
+
+    def format(self, segments: List[Dict], output_path: str, **kwargs) -> None:
+        """Render and write to *output_path*."""
         with open(output_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(rtf_content))
+            f.write(self.render(segments, **kwargs))
 
 
 class TXTFormatter(TranscriptFormatter):
@@ -657,8 +663,8 @@ class TXTFormatter(TranscriptFormatter):
 
         return lines
 
-    def format(self, segments: List[Dict], output_path: str, include_silence: bool = True, config=None, transcript_id: str = None, speaker_stats: Optional[Dict[str, Dict[str, Any]]] = None, **kwargs) -> None:
-        """Create a plain text transcript with speaker paragraphs."""
+    def render(self, segments: List[Dict], include_silence: bool = True, config=None, transcript_id: str = None, speaker_stats: Optional[Dict[str, Dict[str, Any]]] = None, **kwargs) -> str:
+        """Build a plain text transcript with speaker paragraphs."""
         gap_threshold = getattr(config, 'silence_gap_linebreak_threshold', None) if config else None
 
         paragraphs: List[Dict[str, Any]] = []
@@ -772,7 +778,11 @@ class TXTFormatter(TranscriptFormatter):
             txt_content.append(text)
             txt_content.append("")
 
+        return '\n'.join(txt_content)
+
+    def format(self, segments: List[Dict], output_path: str, **kwargs) -> None:
+        """Render and write to *output_path*."""
         with open(output_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(txt_content))
+            f.write(self.render(segments, **kwargs))
 
 
