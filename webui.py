@@ -766,6 +766,8 @@ def api_transcript(basename: str, version: Optional[str] = None) -> Dict[str, An
         "content": content,
         "has_stats": transcript_stats.has_stats_header(content),
         "stats_available": bool(transcript_stats.find_analysis_json(path)),
+        # Only transcripts with a diarized JSON beside them can be re-rendered.
+        "can_render": _diarized_json_for(dirs, selected["id"]) is not None,
     }
 
 
@@ -804,6 +806,8 @@ def api_transcript_stats(basename: str, body: Dict[str, str]) -> Dict[str, Any]:
         "content": content,
         "has_stats": transcript_stats.has_stats_header(content),
         "stats_available": bool(transcript_stats.find_analysis_json(path)),
+        # Only transcripts with a diarized JSON beside them can be re-rendered.
+        "can_render": _diarized_json_for(dirs, selected["id"]) is not None,
     }
 
 

@@ -141,6 +141,11 @@ def _strip(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             continue
         new_segment = copy.copy(segment)
         new_segment['words'] = words
+        if not words:
+            # The formatters fall back to segment['text'] when a segment has no
+            # words, and that text still spells out the markers just removed.
+            # Nothing is left to say, so say nothing.
+            new_segment['text'] = ''
         base.append(new_segment)
     return base
 

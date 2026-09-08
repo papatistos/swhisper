@@ -79,6 +79,15 @@
                    border-bottom: 1px solid var(--border); background: var(--panel); }
   #transcriptBar select { max-width: 24rem; }
   #transcriptBar .msg { color: var(--muted); font-size: 0.8rem; flex: 1; }
+  #renderBar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+               padding: 6px 20px; border-bottom: 1px solid var(--border);
+               background: var(--panel); font-size: 0.8rem; color: var(--muted); }
+  #renderBar label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+  #renderBar .rlabel { font-weight: 600; }
+  #renderBar .rspacer { flex: 1; }
+  #renderBar input[type=number] { width: 4rem; }
+  #renderBar.busy { opacity: 0.6; }
+  #renderBar.dirty .rlabel { color: var(--accent); }
   #transcriptText { flex: 1; overflow-y: auto; padding: 14px 20px;
                     white-space: pre-wrap; word-break: break-word; line-height: 1.6;
                     font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.85rem; }
@@ -180,6 +189,22 @@
         <button id="transcriptReload" title="Reload (newest version)">↻</button>
         <button id="statsToggle" style="display:none"></button>
         <span class="msg" id="transcriptMsg"></span>
+      </div>
+      <div id="renderBar" style="display:none">
+        <span class="rlabel">Show</span>
+        <label title="Markers like [*] or [S02**] for sounds that could not be transcribed. Hiding them folds each marker's span into the pauses around it, so the durations stay true to the recording.">
+          <input type="checkbox" id="optDisfluencies" checked> disfluency markers</label>
+        <label title="Pause durations in seconds, e.g. (1.3) or (.4).">
+          <input type="checkbox" id="optPauses" checked> pause durations</label>
+        <label title="Put a blank line around pauses at or above the threshold, even without a speaker change. Works whether or not the durations themselves are shown.">
+          <input type="checkbox" id="optBreaks" checked> line break at</label>
+        <input type="number" id="optThreshold" value="1.0" min="0" max="60" step="0.1"
+               title="Pause length in seconds that triggers a blank line."> s
+        <label title="Hide pauses shorter than this. 0 shows every pause the run recorded.">
+          hide under <input type="number" id="optMinPause" value="0" min="0" max="60" step="0.1"> s</label>
+        <span class="rspacer"></span>
+        <button id="renderReset" title="Back to the view the pipeline produced">Reset</button>
+        <button id="renderSave" title="Write this view to disk beside the transcript">Save as…</button>
       </div>
       <div id="transcriptText"><div class="placeholder">Select an audio file to view its transcript.</div></div>
     </div>
@@ -478,6 +503,106 @@ function updateStatsToggle(info) {
       : "Add the preamble to this file (no saved per-speaker stats for this run)";
 }
 
+/* ---------- render options ----------
+   Which markers and pauses a transcript shows is recoverable from the diarized
+   JSON, so these are toggles over a stored run rather than settings for a new
+   one. Everything here re-renders server-side in tens of milliseconds. */
+
+const RENDER_DEFAULTS = {
+  disfluencies: true, pauses: true, pause_linebreaks: true,
+  pause_linebreak_threshold: 1.0, min_pause: 0,
+};
+let renderSeq = 0;          // drops responses that arrive out of order
+let renderTimer = null;
+
+function debounceRender() {
+  clearTimeout(renderTimer);
+  renderTimer = setTimeout(applyRenderOptions, 250);
+}
+let renderAvailable = false;
+
+function renderOptions() {
+  return {
+    disfluencies: $("optDisfluencies").checked,
+    pauses: $("optPauses").checked,
+    pause_linebreaks: $("optBreaks").checked,
+    pause_linebreak_threshold: parseFloat($("optThreshold").value) || 0,
+    min_pause: parseFloat($("optMinPause").value) || 0,
+  };
+}
+
+function renderIsDefault(o) {
+  return Object.keys(RENDER_DEFAULTS).every(k => o[k] === RENDER_DEFAULTS[k]);
+}
+
+function setRenderOptions(o) {
+  $("optDisfluencies").checked = o.disfluencies;
+  $("optPauses").checked = o.pauses;
+  $("optBreaks").checked = o.pause_linebreaks;
+  $("optThreshold").value = o.pause_linebreak_threshold;
+  $("optMinPause").value = o.min_pause;
+}
+
+function updateRenderBar(available) {
+  renderAvailable = available;
+  $("renderBar").style.display = available ? "" : "none";
+  if (!available) setRenderOptions(RENDER_DEFAULTS);
+}
+
+async function applyRenderOptions() {
+  if (!renderAvailable || !currentBase) return;
+  const base = currentBase;
+  const version = $("versionSel").value;
+  const options = renderOptions();
+  const bar = $("renderBar");
+  const seq = ++renderSeq;
+  bar.classList.toggle("dirty", !renderIsDefault(options));
+  bar.classList.add("busy");
+  try {
+    const { data } = await api(`/api/render/${encodeURIComponent(base)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version, options }),
+    });
+    if (seq !== renderSeq || base !== currentBase) return;   // superseded
+    $("transcriptText").textContent = data.content;
+    $("transcriptMsg").textContent = data.suffix
+      ? `${base} — re-rendered view (${data.suffix.slice(1).replace(/_/g, ", ")})`
+      : `${base} — as produced by the pipeline`;
+    $("transcriptMsg").className = "msg";
+  } catch (e) {
+    if (seq !== renderSeq) return;
+    $("transcriptMsg").textContent = e.message;
+    $("transcriptMsg").className = "msg err";
+  } finally {
+    if (seq === renderSeq) bar.classList.remove("busy");
+  }
+}
+
+async function saveRenderedView() {
+  if (!renderAvailable || !currentBase) return;
+  const formats = prompt(
+    "Save this view as (comma-separated: txt, rtf)", "txt, rtf");
+  if (formats === null) return;
+  const list = formats.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  if (!list.length) return;
+  const msg = $("transcriptMsg");
+  try {
+    const { data } = await api(`/api/render/${encodeURIComponent(currentBase)}/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        version: $("versionSel").value, options: renderOptions(), formats: list,
+      }),
+    });
+    msg.textContent = `Saved ${data.written.join("  and  ")}`;
+    msg.className = "msg ok";
+  } catch (e) {
+    msg.textContent = e.message;
+    msg.className = "msg err";
+  }
+}
+
 async function loadTranscript(base, version) {
   const sel = $("versionSel");
   const text = $("transcriptText");
@@ -488,6 +613,7 @@ async function loadTranscript(base, version) {
 
   if (version === RAW_JSON_VERSION) {
     updateStatsToggle(null);  // raw JSON isn't a txt file — nothing to toggle
+    updateRenderBar(false);
     try {
       const { data } = await api(`/api/json-transcript/${encodeURIComponent(base)}`);
       if (base !== currentBase) return;  // user switched files while loading
@@ -511,9 +637,12 @@ async function loadTranscript(base, version) {
     text.textContent = data.content;
     msg.textContent = `${base} — ${data.versions.length} version(s)`;
     updateStatsToggle({ has_stats: data.has_stats, stats_available: data.stats_available });
+    setRenderOptions(RENDER_DEFAULTS);
+    updateRenderBar(!!data.can_render);
   } catch (e) {
     if (base !== currentBase) return;
     updateStatsToggle(null);
+    updateRenderBar(false);
     if (hasRawJson) { loadTranscript(base, RAW_JSON_VERSION); return; }
     sel.innerHTML = "";
     sel.disabled = true;
@@ -703,6 +832,17 @@ $("tabLogs").onclick = () => showTab("logs");
 $("logSel").onchange = () => { currentLogId = $("logSel").value; loadLogContent(); };
 $("versionSel").onchange = () => { if (currentBase) loadTranscript(currentBase, $("versionSel").value); };
 $("transcriptReload").onclick = () => { if (currentBase) loadTranscript(currentBase); };
+for (const id of ["optDisfluencies", "optPauses", "optBreaks"]) {
+  $(id).onchange = applyRenderOptions;
+}
+for (const id of ["optThreshold", "optMinPause"]) {
+  $(id).oninput = debounceRender;
+}
+$("renderReset").onclick = () => {
+  setRenderOptions(RENDER_DEFAULTS);
+  applyRenderOptions();
+};
+$("renderSave").onclick = saveRenderedView;
 $("statsToggle").onclick = async () => {
   const base = currentBase;
   const version = $("versionSel").value;
