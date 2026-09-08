@@ -430,11 +430,10 @@ def _read_comment(path: str) -> str:
 
 
 _TRANSCRIPT_TS_RE = re.compile(r"^_(\d{8}-\d{6})$")
-# Older runs used other log timestamp formats, e.g. "_2025-06-11 145137" or "_20250610_194059"
+# Older runs used a different log timestamp format, e.g. "_2025-06-11 145137"
 _LOG_TS_RES = [
     re.compile(r"^_(\d{8}-\d{6})$"),
     re.compile(r"^_(\d{4}-\d{2}-\d{2} \d{6})$"),
-    re.compile(r"^_(\d{8}_\d{6})$"),
 ]
 
 

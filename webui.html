@@ -261,8 +261,6 @@ async function loadFiles() {
   const { data } = await api("/api/files");
   const box = $("files");
   box.innerHTML = "";
-  FILES_BY_BASE = {};
-  for (const f of data.files) FILES_BY_BASE[f.base] = f;
   if (!data.files.length) {
     box.innerHTML = '<div class="file"><span class="name" style="color:var(--muted)">No audio files found</span></div>';
     return;
@@ -329,7 +327,7 @@ function inputFor(key, spec, value) {
 
 async function selectFile(base) {
   currentBase = base;
-  showTab(currentTab);  // reload whichever tab is active for the new file, don't jump to Settings
+  showTab("settings");
   document.querySelectorAll("#files .file").forEach(d =>
     d.classList.toggle("sel", d.dataset.base === base));
   const { data } = await api(`/api/sidecar/${encodeURIComponent(base)}`);
