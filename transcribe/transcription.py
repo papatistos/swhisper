@@ -393,7 +393,7 @@ class ChunkProcessor:
         monitor_thread.start()
         
         # Wait for completion
-        process.join(timeout=600)
+        process.join(timeout=900)
         
         # Show peak memory usage
         if memory_snapshots:
@@ -404,7 +404,7 @@ class ChunkProcessor:
             print(f"    {prefix}⚠️ Subprocess timeout, terminating...")
             process.terminate()
             process.join()
-            raise Exception("Subprocess timed out after 10 minutes")
+            raise Exception("Subprocess timed out after 15 minutes")
         
         # Check if process completed successfully
         if process.exitcode != 0:
