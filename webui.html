@@ -371,7 +371,7 @@ function inputFor(key, spec, value) {
 
 async function selectFile(base) {
   currentBase = base;
-  showTab("settings");
+  showTab(currentTab);  // reload whichever tab is active for the new file, don't jump to Settings
   document.querySelectorAll("#files .file").forEach(d =>
     d.classList.toggle("sel", d.dataset.base === base));
   const { data } = await api(`/api/sidecar/${encodeURIComponent(base)}`);
