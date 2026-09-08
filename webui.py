@@ -928,6 +928,18 @@ def api_run_status() -> Dict[str, Any]:
         }
 
 
+@app.get("/api/run/log")
+def api_run_log(offset: int = 0) -> Dict[str, Any]:
+    with state.lock:
+        offset = max(0, min(offset, len(state.log_lines)))
+        return {
+            "offset": offset,
+            "next": len(state.log_lines),
+            "lines": state.log_lines[offset:],
+            "running": state.running(),
+        }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="swhisper web UI")
     parser.add_argument("--port", type=int, default=8722)
