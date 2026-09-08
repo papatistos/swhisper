@@ -34,9 +34,17 @@ class _Config:
 
 
 def _transcript_body(text: str) -> str:
-    """The speaker paragraphs, without the preamble and statistics header."""
+    """The speaker paragraphs, without the preamble and statistics header.
+
+    Collapses runs of 3+ newlines to a single blank line. Stored transcripts
+    from before the paragraph-flush fix in transcript_render/formatters.py can
+    carry an extra blank line wherever a paragraph happened to end on a long
+    pause; collapsing here compares the two runs on everything except that one
+    known, intended difference.
+    """
     match = _HEADING.search(text)
-    return text[match.start():] if match else text
+    body = text[match.start():] if match else text
+    return re.sub(r'\n{3,}', '\n\n', body)
 
 
 def _render(segments, options: RenderOptions, path: str) -> str:

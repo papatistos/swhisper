@@ -233,7 +233,7 @@ class RTFFormatter(TranscriptFormatter):
             if speaker != current_speaker:
                 # Save the previous paragraph if it exists
                 if current_paragraph and current_speaker:
-                    paragraph_text = smart_join(current_paragraph)
+                    paragraph_text = smart_join(current_paragraph).strip('\n')
                     paragraphs.append({
                         'speaker': current_speaker,
                         'text': paragraph_text,
@@ -251,7 +251,7 @@ class RTFFormatter(TranscriptFormatter):
         
         # Don't forget the last paragraph
         if current_paragraph and current_speaker:
-            paragraph_text = smart_join(current_paragraph)
+            paragraph_text = smart_join(current_paragraph).strip('\n')
             paragraphs.append({
                 'speaker': current_speaker,
                 'text': paragraph_text,
@@ -727,7 +727,7 @@ class TXTFormatter(TranscriptFormatter):
 
             if speaker != current_speaker:
                 if current_paragraph and current_speaker is not None:
-                    paragraph_text = smart_join(current_paragraph)
+                    paragraph_text = smart_join(current_paragraph).strip('\n')
                     paragraphs.append(
                         {
                             'speaker': current_speaker,
@@ -743,7 +743,7 @@ class TXTFormatter(TranscriptFormatter):
                 current_paragraph.append(text)
 
         if current_paragraph and current_speaker is not None:
-            paragraph_text = smart_join(current_paragraph)
+            paragraph_text = smart_join(current_paragraph).strip('\n')
             paragraphs.append(
                 {
                     'speaker': current_speaker,
