@@ -49,7 +49,6 @@ from sidecar import (
     parse_sidecar_file,
     sidecar_requests_reprocess,
 )
-import transcript_stats
 
 try:
     from fastapi import FastAPI, HTTPException
@@ -755,80 +754,19 @@ def api_transcript(basename: str, version: Optional[str] = None) -> Dict[str, An
         "versions": versions,
         "selected": selected["id"],
         "content": content,
-        "has_stats": transcript_stats.has_stats_header(content),
-        "stats_available": bool(transcript_stats.find_analysis_json(path)),
-    }
-
-
-@app.post("/api/transcript/{basename}/stats")
-def api_transcript_stats(basename: str, body: Dict[str, str]) -> Dict[str, Any]:
-    """Add or remove the preamble+stats header on an existing TXT transcript,
-    in place, without re-running transcription or diarization."""
-    action = body.get("action")
-    if action not in ("add", "remove"):
-        raise HTTPException(400, "action must be 'add' or 'remove'")
-    dirs = state.dirs()
-    base = _safe_base(dirs["audio"], basename)
-    versions = _transcript_versions(dirs, base)
-    if not versions:
-        raise HTTPException(404, "No transcript found for this file")
-    version = body.get("version")
-    if version:
-        selected = next((v for v in versions if v["id"] == version), None)
-        if selected is None:
-            raise HTTPException(400, "Unknown transcript version")
-    else:
-        selected = versions[0]
-    path = os.path.join(dirs["audio"], selected["id"])
-    if action == "add":
-        transcript_stats.add_stats(path, dirs["audio"], base)
-    else:
-        transcript_stats.remove_stats(path)
-    try:
-        content = Path(path).read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        raise HTTPException(500, f"Could not read transcript: {exc}")
-    return {
-        "base": base,
-        "versions": versions,
-        "selected": selected["id"],
-        "content": content,
-        "has_stats": transcript_stats.has_stats_header(content),
-        "stats_available": bool(transcript_stats.find_analysis_json(path)),
-    }
-
-
-@app.get("/api/json-transcript/{basename}")
-def api_json_transcript(basename: str) -> Dict[str, Any]:
-    """Serve the raw whisper JSON transcript (pre-diarization) for a file."""
-    dirs = state.dirs()
-    base = _safe_base(dirs["audio"], basename)
-    path = os.path.join(dirs["json"], f"{base}.json")
-    if not os.path.exists(path):
-        raise HTTPException(404, "No JSON transcript yet — run transcription first.")
-    try:
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise HTTPException(500, f"Could not read JSON transcript: {exc}")
-    return {
-        "base": base,
-        "path": os.path.relpath(path, dirs["audio"]),
-        "content": json.dumps(data, indent=2, ensure_ascii=False),
     }
 
 
 @app.get("/api/logs")
 def api_logs(base: Optional[str] = None, file: Optional[str] = None,
              offset: int = 0) -> Dict[str, Any]:
-    """Logs for the Logs tab, plus the live console feed used by the bottom panel.
+    """Logs for the Logs tab.
 
     - With ``base``: per-file ``.log`` files written by the pipelines. If
       ``file`` (a version id) is given, return that log's content; otherwise
       return just the version list.
-    - Without ``base``: ``file="live"`` streams the running/last console
-      output (incremental via ``offset``), independent of the Logs tab.
-      Otherwise, lists (or serves) persisted logs of runs started from this UI.
+    - Without ``base``: UI-run logs — the special ``live`` entry (incremental
+      console via ``offset``) plus persisted logs of runs started from this UI.
     """
     dirs = state.dirs()
     audio = dirs["audio"]

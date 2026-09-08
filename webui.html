@@ -272,9 +272,7 @@ async function loadFiles() {
     div.className = "file" + (f.base === currentBase ? " sel" : "");
     div.dataset.base = f.base;
     const badges = [];
-    badges.push(f.transcribed
-      ? '<span class="badge on-ok jbadge" title="View raw JSON transcript">transcribed</span>'
-      : '<span class="badge">not transcribed</span>');
+    badges.push(f.transcribed ? '<span class="badge on-ok">transcribed</span>' : '<span class="badge">not transcribed</span>');
     badges.push(f.diarized ? '<span class="badge on-ok">diarized</span>' : '<span class="badge">not diarized</span>');
     if (f.sidecar) badges.push('<span class="badge on-info">per-file settings</span>');
     if (f.comment) badges.push('<span class="badge on-info">💬 comment</span>');
@@ -292,11 +290,6 @@ async function loadFiles() {
     if (lb) lb.onclick = ev => {
       ev.stopPropagation();
       selectFile(f.base).then(() => showTab("logs"));
-    };
-    const jb = div.querySelector(".jbadge");
-    if (jb) jb.onclick = ev => {
-      ev.stopPropagation();
-      selectFile(f.base).then(() => { showTab("transcript"); loadTranscript(f.base, RAW_JSON_VERSION); });
     };
     box.appendChild(div);
   }
@@ -409,78 +402,30 @@ function fmtTimestamp(ts) {
   return `${ts.slice(0, 4)}-${ts.slice(4, 6)}-${ts.slice(6, 8)} ${ts.slice(9, 11)}:${ts.slice(11, 13)}:${ts.slice(13, 15)}`;
 }
 
-function fillVersionSel(txtVersions, hasRawJson, selectedId) {
-  const sel = $("versionSel");
-  sel.innerHTML = "";
-  for (const v of txtVersions) {
-    const o = document.createElement("option");
-    o.value = v.id;
-    o.textContent = v.timestamp ? fmtTimestamp(v.timestamp) : v.filename;
-    sel.appendChild(o);
-  }
-  if (hasRawJson) {
-    const o = document.createElement("option");
-    o.value = RAW_JSON_VERSION;
-    o.textContent = "Raw JSON transcript (pre-diarization)";
-    sel.appendChild(o);
-  }
-  sel.value = selectedId;
-  sel.disabled = false;
-}
-
-function updateStatsToggle(info) {
-  const btn = $("statsToggle");
-  if (!info) {
-    btn.style.display = "none";
-    return;
-  }
-  btn.style.display = "";
-  btn.dataset.hasStats = info.has_stats ? "1" : "";
-  btn.textContent = info.has_stats ? "− Remove stats" : "+ Add stats";
-  btn.title = info.has_stats
-    ? "Remove the preamble and stats header from this file"
-    : info.stats_available
-      ? "Add the preamble and per-speaker stats header to this file"
-      : "Add the preamble to this file (no saved per-speaker stats for this run)";
-}
-
 async function loadTranscript(base, version) {
   const sel = $("versionSel");
   const text = $("transcriptText");
   const msg = $("transcriptMsg");
-  const hasRawJson = !!(FILES_BY_BASE[base] && FILES_BY_BASE[base].transcribed);
-  msg.textContent = "Loading…";
-  msg.className = "msg";
-
-  if (version === RAW_JSON_VERSION) {
-    updateStatsToggle(null);  // raw JSON isn't a txt file — nothing to toggle
-    try {
-      const { data } = await api(`/api/json-transcript/${encodeURIComponent(base)}`);
-      if (base !== currentBase) return;  // user switched files while loading
-      fillVersionSel([], hasRawJson, RAW_JSON_VERSION);
-      text.textContent = data.content;
-      msg.textContent = `${base} — raw JSON transcript (${data.path})`;
-    } catch (e) {
-      if (base !== currentBase) return;
-      text.innerHTML = '<div class="placeholder">Could not load the raw JSON transcript.</div>';
-      msg.textContent = e.message;
-    }
-    return;
-  }
-
   let url = `/api/transcript/${encodeURIComponent(base)}`;
   if (version) url += `?version=${encodeURIComponent(version)}`;
+  msg.textContent = "Loading…";
+  msg.className = "msg";
   try {
     const { data } = await api(url);
-    if (base !== currentBase) return;
-    fillVersionSel(data.versions, hasRawJson, data.selected);
+    if (base !== currentBase) return;  // user switched files while loading
+    sel.innerHTML = "";
+    for (const v of data.versions) {
+      const o = document.createElement("option");
+      o.value = v.id;
+      o.textContent = v.timestamp ? fmtTimestamp(v.timestamp) : v.filename;
+      if (v.id === data.selected) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.disabled = false;
     text.textContent = data.content;
     msg.textContent = `${base} — ${data.versions.length} version(s)`;
-    updateStatsToggle({ has_stats: data.has_stats, stats_available: data.stats_available });
   } catch (e) {
     if (base !== currentBase) return;
-    updateStatsToggle(null);
-    if (hasRawJson) { loadTranscript(base, RAW_JSON_VERSION); return; }
     sel.innerHTML = "";
     sel.disabled = true;
     text.innerHTML = '<div class="placeholder">No transcript yet — run a pipeline first.</div>';
@@ -488,15 +433,7 @@ async function loadTranscript(base, version) {
   }
 }
 
-/* ---------- logs tab (historical logs only — live console lives in #consolePanel) ---------- */
-
-function fmtLogTimestamp(ts) {
-  let m = ts.match(/^(\d{4})(\d{2})(\d{2})[-_](\d{2})(\d{2})(\d{2})$/);
-  if (m) return `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}`;
-  m = ts.match(/^(\d{4}-\d{2}-\d{2}) (\d{2})(\d{2})(\d{2})$/);  // older log naming
-  if (m) return `${m[1]} ${m[2]}:${m[3]}:${m[4]}`;
-  return ts;
-}
+/* ---------- logs view ---------- */
 
 async function loadLogList() {
   const sel = $("logSel");
