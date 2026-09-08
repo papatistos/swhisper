@@ -24,6 +24,8 @@ from .markers import (
     set_word_text,
 )
 from .paragraphs import create_paragraph_text_from_words
+from .options import RenderOptions
+from .derive import derive_segments, DEFAULT_MIN_SILENCE
 from .formatters import (
     TranscriptFormatter,
     TXTFormatter,
@@ -48,6 +50,9 @@ __all__ = [
     'get_word_text',
     'set_word_text',
     'create_paragraph_text_from_words',
+    'RenderOptions',
+    'derive_segments',
+    'DEFAULT_MIN_SILENCE',
     'TranscriptFormatter',
     'TXTFormatter',
     'RTFFormatter',

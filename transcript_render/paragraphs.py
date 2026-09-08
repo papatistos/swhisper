@@ -37,14 +37,20 @@ def create_paragraph_text_from_words(
 
     for word in words:
         word_text = word.get('word', word.get('text', ''))
-        if not word_text:
-            continue
 
         add_line_breaks = False
         if word.get('is_silence_marker', False):
-            duration = parse_silence_duration(word_text)
+            # Prefer the duration the renderer recorded: a pause whose text is
+            # hidden must still be able to break the paragraph. Fall back to
+            # reading it out of the token for segments the pipeline wrote.
+            duration = word.get('silence_seconds')
+            if duration is None:
+                duration = parse_silence_duration(word_text)
             if duration is not None and duration >= gap_threshold:
                 add_line_breaks = True
+
+        if not word_text and not add_line_breaks:
+            continue
 
         if add_line_breaks:
             flush_current_tokens()
@@ -56,7 +62,8 @@ def create_paragraph_text_from_words(
             elif lines[-1] != '':
                 # Add blank line after non-blank line
                 lines.append('')
-            lines.append(word_text.strip())
+            if word_text:
+                lines.append(word_text.strip())
             lines.append('')
         else:
             current_tokens.append(word_text.strip())

@@ -32,6 +32,24 @@ class TranscriptFormatter:
         raise NotImplementedError
 
 
+def _silence_segment_duration(segment: Dict[str, Any]) -> Optional[float]:
+    """Length of a standalone pause segment, in seconds.
+
+    Prefers the value the renderer recorded so a pause whose text is hidden can
+    still break the paragraph; falls back to parsing the token for segments the
+    pipeline wrote.
+    """
+    duration = segment.get('silence_seconds')
+    if duration is not None:
+        return duration
+    for word in segment.get('words', []) or []:
+        if word.get('is_silence_marker', False):
+            if word.get('silence_seconds') is not None:
+                return word['silence_seconds']
+            return parse_silence_duration(word.get('word', ''))
+    return None
+
+
 class RTFFormatter(TranscriptFormatter):
     """Formats transcripts in RTF format with speaker colors."""
     
@@ -183,28 +201,24 @@ class RTFFormatter(TranscriptFormatter):
             speaker = segment.get('speaker', 'UNKNOWN')
 
             text = create_paragraph_text_from_words(segment, gap_threshold=gap_threshold)
-            
-            if not text:
+
+            if not text and not is_silence:
                 continue
 
             if is_silence:
                 # For silence segments, check if it's a long silence and format accordingly
                 if current_paragraph:
-                    # For silence segments, find the first silence marker word to get duration
-                    duration = None
-                    words = segment.get('words', [])
-                    for word in words:
-                        if word.get('is_silence_marker', False):
-                            duration = parse_silence_duration(word.get('word', ''))
-                            break
-                    
+                    duration = _silence_segment_duration(segment)
+
                     if duration is not None and gap_threshold and duration >= gap_threshold:
-                        # Long silence - add with blank lines (two newlines create empty lines)
-                        formatted_text = f"\n\n{text}\n\n"
+                        # Long silence - add with blank lines (two newlines create
+                        # empty lines). With the duration hidden, break anyway.
+                        formatted_text = f"\n\n{text}\n\n" if text else "\n\n"
                     else:
                         # Short silence - keep inline
                         formatted_text = text
-                    current_paragraph.append(formatted_text)
+                    if formatted_text:
+                        current_paragraph.append(formatted_text)
                 continue
             
             if speaker != current_speaker:
@@ -680,24 +694,19 @@ class TXTFormatter(TranscriptFormatter):
             speaker = segment.get('speaker', 'UNKNOWN')
 
             text = create_paragraph_text_from_words(segment, gap_threshold=gap_threshold)
-            if not text:
+            if not text and not is_silence:
                 continue
 
             if is_silence:
                 if current_paragraph:
-                    # For silence segments, find the first silence marker word to get duration
-                    duration = None
-                    words = segment.get('words', [])
-                    for word in words:
-                        if word.get('is_silence_marker', False):
-                            duration = parse_silence_duration(word.get('word', ''))
-                            break
-                    
+                    duration = _silence_segment_duration(segment)
+
                     if duration is not None and gap_threshold and duration >= gap_threshold:
-                        formatted_text = f"\n\n{text}\n\n"
+                        formatted_text = f"\n\n{text}\n\n" if text else "\n\n"
                     else:
                         formatted_text = text
-                    current_paragraph.append(formatted_text)
+                    if formatted_text:
+                        current_paragraph.append(formatted_text)
                 continue
 
             if speaker != current_speaker:
