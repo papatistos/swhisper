@@ -16,3 +16,5 @@ download_strict_model.py
 trascribe_w_strict_model.py
 diarize/enhanced_pipeline.py
 transcribe/minimal-diarizen-test.py
+AGENTS.md
+CLAUDE.md

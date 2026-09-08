@@ -440,11 +440,10 @@ def _read_comment(path: str) -> str:
 
 
 _TRANSCRIPT_TS_RE = re.compile(r"^_(\d{8}-\d{6})$")
-# Older runs used other log timestamp formats, e.g. "_2025-06-11 145137" or "_20250610_194059"
+# Older runs used a different log timestamp format, e.g. "_2025-06-11 145137"
 _LOG_TS_RES = [
     re.compile(r"^_(\d{8}-\d{6})$"),
     re.compile(r"^_(\d{4}-\d{2}-\d{2} \d{6})$"),
-    re.compile(r"^_(\d{8}_\d{6})$"),
 ]
 
 
@@ -958,14 +957,13 @@ def api_json_transcript(basename: str) -> Dict[str, Any]:
 @app.get("/api/logs")
 def api_logs(base: Optional[str] = None, file: Optional[str] = None,
              offset: int = 0) -> Dict[str, Any]:
-    """Logs for the Logs tab, plus the live console feed used by the bottom panel.
+    """Logs for the Logs tab.
 
     - With ``base``: per-file ``.log`` files written by the pipelines. If
       ``file`` (a version id) is given, return that log's content; otherwise
       return just the version list.
-    - Without ``base``: ``file="live"`` streams the running/last console
-      output (incremental via ``offset``), independent of the Logs tab.
-      Otherwise, lists (or serves) persisted logs of runs started from this UI.
+    - Without ``base``: UI-run logs — the special ``live`` entry (incremental
+      console via ``offset``) plus persisted logs of runs started from this UI.
     """
     dirs = state.dirs()
     audio = dirs["audio"]
@@ -985,22 +983,10 @@ def api_logs(base: Optional[str] = None, file: Optional[str] = None,
         return {"base": base, "versions": versions, "selected": selected["id"],
                 "content": content}
 
-    if file == "live":
-        with state.lock:
-            offset = max(0, min(offset, len(state.log_lines)))
-            return {
-                "scope": "run",
-                "selected": "live",
-                "lines": state.log_lines[offset:],
-                "next": len(state.log_lines),
-                "running": state.running(),
-                "pipeline": state.pipeline,
-                "returncode": state.returncode,
-                "started_at": state.started_at,
-                "finished_at": state.finished_at,
-            }
-
-    versions: List[Dict[str, Any]] = []
+    versions: List[Dict[str, Any]] = [{
+        "id": "live", "filename": "Live console", "timestamp": None,
+        "mtime": time.time(), "size": 0,
+    }]
     run_dir = os.path.join(audio, UI_RUN_LOG_DIR)
     try:
         names = os.listdir(run_dir)
@@ -1023,6 +1009,21 @@ def api_logs(base: Optional[str] = None, file: Optional[str] = None,
             "mtime": st.st_mtime,
             "size": st.st_size,
         })
+    if file == "live":
+        with state.lock:
+            offset = max(0, min(offset, len(state.log_lines)))
+            return {
+                "scope": "run",
+                "versions": versions,
+                "selected": "live",
+                "lines": state.log_lines[offset:],
+                "next": len(state.log_lines),
+                "running": state.running(),
+                "pipeline": state.pipeline,
+                "returncode": state.returncode,
+                "started_at": state.started_at,
+                "finished_at": state.finished_at,
+            }
     if file:
         selected = next((v for v in versions if v["id"] == file), None)
         if selected is None:
@@ -1059,6 +1060,18 @@ def api_run_status() -> Dict[str, Any]:
             "finished_at": state.finished_at,
             "returncode": state.returncode,
             "log_length": len(state.log_lines),
+        }
+
+
+@app.get("/api/run/log")
+def api_run_log(offset: int = 0) -> Dict[str, Any]:
+    with state.lock:
+        offset = max(0, min(offset, len(state.log_lines)))
+        return {
+            "offset": offset,
+            "next": len(state.log_lines),
+            "lines": state.log_lines[offset:],
+            "running": state.running(),
         }
 
 

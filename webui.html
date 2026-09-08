@@ -89,57 +89,37 @@
   #renderBar.busy { opacity: 0.6; }
   #renderBar.dirty .rlabel { color: var(--accent); }
   #transcriptText { flex: 1; overflow-y: auto; padding: 14px 20px;
-                    white-space: pre-wrap; word-break: break-word; line-height: 1.6;
-                    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.85rem; }
+                    white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
   #transcriptText .placeholder { color: var(--muted); margin-top: 40px; text-align: center; }
   .badge.tbadge, .badge.lbadge, .badge.jbadge { cursor: pointer; }
   .badge.tbadge:hover, .badge.lbadge:hover, .badge.jbadge:hover { border-color: var(--accent); color: var(--accent); }
 
-  /* run control bar (above tabs, always visible) */
-  #runControlBar { display: flex; gap: 10px; align-items: center; padding: 8px 16px;
-                   flex-wrap: wrap; background: var(--panel); border-bottom: 1px solid var(--border); }
-  #runControlBar .status { font-size: 0.8rem; color: var(--muted); }
+  /* logs view */
+  #logsView { flex: 1; display: flex; flex-direction: column; min-height: 0;
+              background: var(--panel); }
+  #runBar { display: flex; gap: 10px; align-items: center; padding: 8px 16px; flex-wrap: wrap; }
+  #runBar .status { font-size: 0.8rem; color: var(--muted); }
+  #runBar .msg { font-size: 0.8rem; color: var(--muted); flex: 1; min-width: 120px; }
+  #logSel { max-width: 24rem; }
   .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
          background: var(--muted); margin-right: 6px; flex-shrink: 0; }
   .dot.run { background: var(--ok); animation: pulse 1.2s infinite; }
   .dot.err { background: var(--err); }
   @keyframes pulse { 50% { opacity: .35; } }
-
-  /* logs tab — historical logs only */
-  #logsView { flex: 1; display: flex; flex-direction: column; min-height: 0;
-              background: var(--panel); }
-  #logsBar { display: flex; gap: 10px; align-items: center; padding: 8px 20px;
-             border-bottom: 1px solid var(--border); }
-  #logSel { max-width: 24rem; }
-  #logsBar .msg { font-size: 0.8rem; color: var(--muted); flex: 1; min-width: 120px; }
-  #logsText { flex: 1; overflow-y: auto; margin: 12px 20px; padding: 10px 12px;
-              background: #0d0f13; border: 1px solid var(--border); border-radius: 6px;
-              font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.78rem;
-              line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: #b9c2d0; }
-  #logsText .placeholder { color: var(--muted); text-align: center; margin-top: 40px;
-                           font-family: inherit; background: none; border: none; }
-
-  /* live console (bottom, foldable) */
-  #consolePanel { border-top: 1px solid var(--border); background: var(--panel);
-                  display: flex; flex-direction: column; flex-shrink: 0; height: 14rem; }
-  #consolePanel.collapsed { height: auto; }
-  #consolePanel.collapsed #log { display: none; }
-  #consoleBar { display: flex; gap: 10px; align-items: center; padding: 6px 16px; }
-  #consoleBar .msg { font-size: 0.8rem; color: var(--muted); flex: 1; }
   #log { flex: 1; overflow-y: auto; margin: 0 16px 10px; padding: 8px 10px;
          background: #0d0f13; border: 1px solid var(--border); border-radius: 6px;
          font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.75rem;
          line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: #b9c2d0; }
 
-  /* overlays: history + raw JSON transcript */
-  .overlay { position: fixed; inset: 8vh 10vw; background: var(--panel);
-             border: 1px solid var(--border); border-radius: 10px; z-index: 50;
-             display: none; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
-  .overlay.open { display: flex; }
-  .overlay-head { display: flex; align-items: center; padding: 12px 18px;
-                  border-bottom: 1px solid var(--border); }
-  .overlay-head h2 { font-size: 1rem; margin: 0; flex: 1; word-break: break-all; }
-  .overlay-body { overflow-y: auto; padding: 10px 18px; flex: 1; }
+  /* history overlay */
+  #historyPanel { position: fixed; inset: 8vh 10vw; background: var(--panel);
+                  border: 1px solid var(--border); border-radius: 10px; z-index: 50;
+                  display: none; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+  #historyPanel.open { display: flex; }
+  #historyHead { display: flex; align-items: center; padding: 12px 18px;
+                 border-bottom: 1px solid var(--border); }
+  #historyHead h2 { font-size: 1rem; margin: 0; flex: 1; }
+  #historyBody { overflow-y: auto; padding: 10px 18px; }
   .hentry { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; }
   .hentry summary { padding: 8px 12px; cursor: pointer; display: flex; gap: 12px;
                     align-items: baseline; flex-wrap: wrap; list-style: none; }
@@ -168,13 +148,6 @@
 <main>
   <div id="files"></div>
   <div id="right">
-    <div id="runControlBar">
-      <span class="dot" id="runDot"></span>
-      <select id="pipelineSel"></select>
-      <button class="primary" id="startBtn">Start run</button>
-      <button id="stopBtn" disabled>Stop</button>
-      <span class="status" id="runStatus">idle</span>
-    </div>
     <div id="tabBar">
       <button class="tab active" id="tabSettings">Settings</button>
       <button class="tab" id="tabTranscript">Transcript</button>
@@ -209,34 +182,32 @@
       <div id="transcriptText"><div class="placeholder">Select an audio file to view its transcript.</div></div>
     </div>
     <div id="logsView" style="display:none">
-      <div id="logsBar">
-        <select id="logSel" title="Historical log — per-file pipeline log or a saved UI run" disabled></select>
+      <div id="runBar">
+        <span class="dot" id="runDot"></span>
+        <select id="pipelineSel"></select>
+        <button class="primary" id="startBtn">Start run</button>
+        <button id="stopBtn" disabled>Stop</button>
+        <span class="status" id="runStatus">idle</span>
+        <select id="logSel" title="Log to view — live console, saved run, or per-file pipeline log" disabled></select>
+        <button id="clearLogBtn" title="Clear log view">Clear</button>
         <span class="msg" id="logMsg"></span>
       </div>
-      <div id="logsText"><div class="placeholder">Select an audio file, or start a run, to see its logs.</div></div>
+      <div id="log"></div>
     </div>
     <div id="editorBar" style="display:none">
       <button class="primary" id="saveBtn">Save</button>
       <button class="danger" id="deleteBtn">Delete sidecar</button>
       <span class="msg" id="editorMsg"></span>
     </div>
-    <div id="consolePanel">
-      <div id="consoleBar">
-        <button id="consoleToggle" title="Show/hide the live console">▾ Live console</button>
-        <span class="msg" id="consoleMsg"></span>
-        <button id="clearLogBtn" title="Clear log view">Clear</button>
-      </div>
-      <div id="log"></div>
-    </div>
   </div>
 </main>
 
-<div id="historyPanel" class="overlay">
-  <div id="historyHead" class="overlay-head">
+<div id="historyPanel">
+  <div id="historyHead">
     <h2>Run history</h2>
     <button id="historyClose">✕ Close</button>
   </div>
-  <div id="historyBody" class="overlay-body"></div>
+  <div id="historyBody"></div>
 </div>
 
 <script>
@@ -247,7 +218,7 @@ let META = null;
 let FILES_BY_BASE = {};
 let currentBase = null;
 let currentTab = "settings";
-let currentLogId = null;
+let currentLogSel = null;
 let logOffset = 0;
 let wasRunning = false;
 
@@ -306,10 +277,8 @@ async function changeDir() {
     $("versionSel").disabled = true;
     $("logSel").innerHTML = "";
     $("logSel").disabled = true;
-    $("logsText").innerHTML = '<div class="placeholder">Select an audio file, or start a run, to see its logs.</div>';
-    currentLogId = null;
     $("log").textContent = "";
-    logOffset = 0;
+    currentLogSel = null;
     showTab("settings");
     await loadMeta();
     await loadFiles();
@@ -395,7 +364,7 @@ function inputFor(key, spec, value) {
 
 async function selectFile(base) {
   currentBase = base;
-  showTab(currentTab);  // reload whichever tab is active for the new file, don't jump to Settings
+  showTab("settings");
   document.querySelectorAll("#files .file").forEach(d =>
     d.classList.toggle("sel", d.dataset.base === base));
   const { data } = await api(`/api/sidecar/${encodeURIComponent(base)}`);
@@ -630,10 +599,20 @@ async function loadTranscript(base, version) {
 
   let url = `/api/transcript/${encodeURIComponent(base)}`;
   if (version) url += `?version=${encodeURIComponent(version)}`;
+  msg.textContent = "Loading…";
+  msg.className = "msg";
   try {
     const { data } = await api(url);
-    if (base !== currentBase) return;
-    fillVersionSel(data.versions, hasRawJson, data.selected);
+    if (base !== currentBase) return;  // user switched files while loading
+    sel.innerHTML = "";
+    for (const v of data.versions) {
+      const o = document.createElement("option");
+      o.value = v.id;
+      o.textContent = v.timestamp ? fmtTimestamp(v.timestamp) : v.filename;
+      if (v.id === data.selected) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.disabled = false;
     text.textContent = data.content;
     msg.textContent = `${base} — ${data.versions.length} version(s)`;
     updateStatsToggle({ has_stats: data.has_stats, stats_available: data.stats_available });
@@ -674,31 +653,39 @@ async function loadLogList() {
   for (const v of data.versions) {
     const o = document.createElement("option");
     o.value = v.id;
-    o.textContent = v.timestamp ? fmtLogTimestamp(v.timestamp) + (v.pipeline ? ` · ${v.pipeline}` : "") : v.filename;
+    o.textContent = v.id === "live" ? "▶ Live console"
+      : v.timestamp ? fmtLogTimestamp(v.timestamp) + (v.pipeline ? ` · ${v.pipeline}` : "")
+      : v.filename;
     sel.appendChild(o);
   }
   const ids = data.versions.map(v => v.id);
-  if (!currentLogId || !ids.includes(currentLogId)) currentLogId = ids[0] || null;
-  sel.value = currentLogId || "";
+  if (!currentLogSel || !ids.includes(currentLogSel)) currentLogSel = ids[0] || null;
+  sel.value = currentLogSel || "";
   sel.disabled = !ids.length;
   await loadLogContent();
 }
 
 async function loadLogContent() {
   const sel = $("logSel");
-  const text = $("logsText");
+  const log = $("log");
   const msg = $("logMsg");
-  const id = currentLogId;
-  if (!id) {
-    text.innerHTML = `<div class="placeholder">${sel.dataset.scope === "file" ? "No logs found for this file yet." : "No saved run logs yet — start a run from the bar above."}</div>`;
-    msg.textContent = "";
+  const id = currentLogSel;
+  if (!id) { log.textContent = ""; msg.textContent = "No logs available."; return; }
+  if (sel.dataset.scope === "run" && id === "live") {
+    const { data } = await api("/api/logs?file=live");
+    log.textContent = (data.lines || []).join("\n") + (data.lines && data.lines.length ? "\n" : "");
+    log.scrollTop = log.scrollHeight;
+    logOffset = data.next;
+    msg.textContent = data.pipeline
+      ? (data.running ? `running ${data.pipeline}` : `last run: ${data.pipeline} · exit ${data.returncode ?? "?"}`)
+      : "No runs yet this session.";
     return;
   }
   const url = sel.dataset.scope === "file"
     ? `/api/logs?base=${encodeURIComponent(currentBase)}&file=${encodeURIComponent(id)}`
     : `/api/logs?file=${encodeURIComponent(id)}`;
   const { data } = await api(url);
-  text.textContent = data.content;
+  log.textContent = data.content;
   msg.textContent = data.selected;
 }
 
@@ -769,7 +756,8 @@ async function startRun() {
     });
     logOffset = 0;
     $("log").textContent = "";
-    setConsoleCollapsed(false);  // surface the console so the new run is visible
+    currentLogSel = "live";
+    if (currentTab === "logs") loadLogList();
   } catch (e) { alert(e.message); }
 }
 
@@ -782,7 +770,7 @@ async function pollRun() {
   try {
     const { data } = await api(`/api/logs?file=live&offset=${logOffset}`);
     if (data.next !== undefined) logOffset = data.next;
-    if (data.lines && data.lines.length) {
+    if (data.lines && data.lines.length && currentTab === "logs" && currentLogSel === "live") {
       const log = $("log");
       const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
       log.textContent += data.lines.join("\n") + "\n";
@@ -795,11 +783,12 @@ async function pollRun() {
     $("dirBtn").disabled = st.running;
     const dot = $("runDot");
     dot.className = "dot" + (st.running ? " run" : (st.returncode ? " err" : ""));
-    const statusText = st.running
-      ? `running ${st.pipeline} · ${((Date.now() / 1000 - st.started_at) / 60).toFixed(1)} min`
-      : st.pipeline ? `last run: ${st.pipeline} · exit ${st.returncode ?? "?"}` : "idle";
-    $("runStatus").textContent = statusText;
-    $("consoleMsg").textContent = statusText;
+    if (st.running) {
+      const mins = ((Date.now() / 1000 - st.started_at) / 60).toFixed(1);
+      $("runStatus").textContent = `running ${st.pipeline} · ${mins} min`;
+    } else if (st.pipeline) {
+      $("runStatus").textContent = `last run: ${st.pipeline} · exit ${st.returncode ?? "?"}`;
+    }
     if (wasRunning && !st.running) {
       loadFiles();  // refresh statuses when a run ends
       if (currentTab === "transcript" && currentBase) loadTranscript(currentBase);
@@ -809,19 +798,6 @@ async function pollRun() {
   } catch (e) { /* server briefly unavailable; keep polling */ }
 }
 
-/* ---------- console fold ---------- */
-
-function setConsoleCollapsed(collapsed) {
-  $("consolePanel").classList.toggle("collapsed", collapsed);
-  $("consoleToggle").textContent = (collapsed ? "▸" : "▾") + " Live console";
-  try { localStorage.setItem("swhisper_console_collapsed", collapsed ? "1" : "0"); } catch (e) {}
-}
-function initConsole() {
-  let collapsed = false;
-  try { collapsed = localStorage.getItem("swhisper_console_collapsed") === "1"; } catch (e) {}
-  setConsoleCollapsed(collapsed);
-}
-
 /* ---------- init ---------- */
 
 $("saveBtn").onclick = saveSidecar;
@@ -829,7 +805,7 @@ $("deleteBtn").onclick = deleteSidecar;
 $("tabSettings").onclick = () => showTab("settings");
 $("tabTranscript").onclick = () => showTab("transcript");
 $("tabLogs").onclick = () => showTab("logs");
-$("logSel").onchange = () => { currentLogId = $("logSel").value; loadLogContent(); };
+$("logSel").onchange = () => { currentLogSel = $("logSel").value; loadLogContent(); };
 $("versionSel").onchange = () => { if (currentBase) loadTranscript(currentBase, $("versionSel").value); };
 $("transcriptReload").onclick = () => { if (currentBase) loadTranscript(currentBase); };
 for (const id of ["optDisfluencies", "optPauses", "optBreaks"]) {
@@ -864,7 +840,6 @@ $("startBtn").onclick = startRun;
 $("stopBtn").onclick = stopRun;
 $("refreshBtn").onclick = loadFiles;
 $("clearLogBtn").onclick = () => { $("log").textContent = ""; };
-$("consoleToggle").onclick = () => setConsoleCollapsed(!$("consolePanel").classList.contains("collapsed"));
 $("dirBtn").onclick = changeDir;
 $("dirInput").addEventListener("keydown", e => { if (e.key === "Enter") changeDir(); });
 $("historyBtn").onclick = showHistory;
@@ -875,7 +850,6 @@ $("fontPlus").onclick = () => nudgeFont(2);
 
 (async () => {
   initFontSize();
-  initConsole();
   await loadMeta();
   await loadFiles();
   setInterval(pollRun, 1000);
