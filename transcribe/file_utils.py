@@ -119,9 +119,13 @@ class FileManager:
             audio_files = []
             for f in files_in_dir:
                 if any(f.lower().endswith(ext) for ext in self.converter.supported_formats):
-                    # Check if it has at least 4 alphabetic characters
-                    if sum(1 for char in f if char.isalpha()) >= 4:
-                        audio_files.append(f)
+                    # Disabled 2026-09-09: this rejected legitimate timestamp-only
+                    # filenames (e.g. Just Press Record's "09-58-40.m4a", which has
+                    # only 2 alphabetic characters), causing them to be silently
+                    # skipped. Reason for the filter is not yet confirmed as
+                    # obsolete, so kept here rather than deleted.
+                    # if sum(1 for char in f if char.isalpha()) >= 4:
+                    audio_files.append(f)
             
             return audio_files
             
