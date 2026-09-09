@@ -93,6 +93,7 @@ AUDIO_EXTENSIONS = {'.wav', '.m4a', '.mp3', '.mov', '.mp4', '.flac', '.aac', '.o
 COMMENT_PREFIX = "#;"  # user comment lines inside sidecar files (ignored by parsers)
 HISTORY_FILENAME = "swhisper_run_history.jsonl"
 UI_RUN_LOG_DIR = "logs"  # persisted console output of runs started from this UI
+ACTIVE_RUN_FILENAME = "ui-run-active.json"
 
 PIPELINES: Dict[str, Dict[str, str]] = {
     "transcribe4": {
@@ -224,6 +225,7 @@ _TYPE_BY_PARSER = {
 class AppState:
     def __init__(self, audio_dir: Optional[str] = None):
         self.audio_dir_override = audio_dir
+        self.audio_dir_pinned = audio_dir is not None
         self.lock = threading.Lock()
         self.process: Optional[subprocess.Popen] = None
         self.pipeline: Optional[str] = None
@@ -234,6 +236,8 @@ class AppState:
         self.stop_requested = False
         self.run_audio_dir: Optional[str] = None
         self.run_log_path: Optional[str] = None
+        self.run_id: Optional[str] = None
+        self.pid: Optional[int] = None
 
     # -- configuration ------------------------------------------------------
 
@@ -257,8 +261,210 @@ class AppState:
 
     # -- run control ---------------------------------------------------------
 
+    @staticmethod
+    def _pid_exists(pid: int) -> bool:
+        """Return whether *pid* is still alive without owning its process."""
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+        return True
+
+    def _active_run_path(self, audio_dir: str) -> str:
+        return os.path.join(audio_dir, UI_RUN_LOG_DIR, ACTIVE_RUN_FILENAME)
+
+    def _audio_dir_candidates(self) -> List[str]:
+        candidates: List[str] = []
+        try:
+            candidates.append(self.audio_dir())
+        except HTTPException:
+            pass
+        if not self.audio_dir_pinned:
+            candidates.extend(get_commented_audio_dirs())
+        unique: List[str] = []
+        seen = set()
+        for candidate in candidates:
+            normalized = os.path.realpath(candidate)
+            if normalized not in seen:
+                seen.add(normalized)
+                unique.append(normalized)
+        return unique
+
+    def _read_active_metadata(self, audio_dir: str) -> Optional[Dict[str, Any]]:
+        try:
+            with open(self._active_run_path(audio_dir), encoding="utf-8") as fh:
+                metadata = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return None
+        return metadata if isinstance(metadata, dict) else None
+
+    def _write_active_metadata_locked(self) -> None:
+        """Atomically publish enough state for a later UI to reattach."""
+        if not self.run_audio_dir or not self.run_id or self.pid is None:
+            return
+        run_dir = os.path.join(self.run_audio_dir, UI_RUN_LOG_DIR)
+        os.makedirs(run_dir, exist_ok=True)
+        metadata = {
+            "run_id": self.run_id,
+            "pid": self.pid,
+            "pipeline": self.pipeline,
+            "script": PIPELINES.get(self.pipeline, {}).get("script"),
+            "audio_dir": self.run_audio_dir,
+            "started_at": self.started_at,
+            "log_path": os.path.relpath(self.run_log_path, self.run_audio_dir)
+            if self.run_log_path else None,
+            "stop_requested": self.stop_requested,
+        }
+        path = self._active_run_path(self.run_audio_dir)
+        temporary = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+        Path(temporary).write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+
+    def _remove_active_metadata_locked(self) -> None:
+        if not self.run_audio_dir:
+            return
+        path = self._active_run_path(self.run_audio_dir)
+        try:
+            metadata = self._read_active_metadata(self.run_audio_dir)
+            if metadata and self.run_id and metadata.get("run_id") != self.run_id:
+                return
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+    @staticmethod
+    def _read_complete_lines(path: Optional[str]) -> List[str]:
+        if not path:
+            return []
+        try:
+            content = Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return []
+        lines = content.splitlines()
+        # Do not return a line while the child is still in the middle of
+        # writing it.  Otherwise the next poll would append that line twice.
+        if content and not content.endswith(("\n", "\r")) and lines:
+            lines.pop()
+        return lines
+
+    def _append_log_line_locked(self, line: str) -> None:
+        self.log_lines.append(line)
+        if len(self.log_lines) > 20000:
+            del self.log_lines[:5000]
+        if self.run_log_path:
+            try:
+                with open(self.run_log_path, "a", encoding="utf-8") as fh:
+                    fh.write(line + "\n")
+            except OSError:
+                pass
+
+    def _adopt_metadata_locked(self, metadata: Dict[str, Any]) -> bool:
+        try:
+            pid = int(metadata["pid"])
+            started_at = float(metadata["started_at"])
+        except (KeyError, TypeError, ValueError):
+            return False
+
+        audio_dir = str(metadata.get("audio_dir") or self.audio_dir())
+        log_path = metadata.get("log_path")
+        if not isinstance(log_path, str) or not log_path:
+            return False
+        candidate = os.path.realpath(os.path.join(audio_dir, log_path))
+        try:
+            if os.path.commonpath([candidate, os.path.realpath(audio_dir)]) != os.path.realpath(audio_dir):
+                return False
+        except ValueError:
+            return False
+
+        self.process = None
+        self.pid = pid
+        self.pipeline = metadata.get("pipeline")
+        self.started_at = started_at
+        self.finished_at = None
+        self.returncode = metadata.get("returncode")
+        self.stop_requested = bool(metadata.get("stop_requested"))
+        self.run_audio_dir = audio_dir
+        self.run_log_path = candidate
+        self.run_id = str(metadata.get("run_id") or "") or None
+        self.log_lines = self._read_complete_lines(self.run_log_path)
+        return bool(self.run_id and self.pipeline)
+
     def running(self) -> bool:
-        return self.process is not None and self.process.poll() is None
+        if self.process is not None:
+            return self.process.poll() is None
+        return self.pid is not None and self._pid_exists(self.pid)
+
+    def log_since(self, offset: int = 0) -> Dict[str, Any]:
+        with self.lock:
+            path = self.run_log_path
+            fallback = list(self.log_lines)
+        lines = self._read_complete_lines(path) if path else fallback
+        if not lines and fallback and not path:
+            lines = fallback
+        offset = max(0, min(offset, len(lines)))
+        return {"lines": lines[offset:], "next": len(lines)}
+
+    def attach_existing_run(self) -> None:
+        """Adopt the active child recorded by a previous web UI instance."""
+        finish: Optional[Tuple[str, Optional[int]]] = None
+        watcher: Optional[Tuple[int, str]] = None
+        with self.lock:
+            if self.running():
+                return
+            active_runs: List[Tuple[float, str, Dict[str, Any]]] = []
+            stale_runs: List[Tuple[float, str, Dict[str, Any]]] = []
+            for audio_dir in self._audio_dir_candidates():
+                metadata = self._read_active_metadata(audio_dir)
+                if not metadata:
+                    continue
+                try:
+                    active_pid = int(metadata.get("pid", 0))
+                except (TypeError, ValueError):
+                    active_pid = 0
+                if active_pid and self._pid_exists(active_pid):
+                    try:
+                        started = float(metadata.get("started_at", 0))
+                    except (TypeError, ValueError):
+                        started = 0
+                    active_runs.append((started, audio_dir, metadata))
+                else:
+                    try:
+                        started = float(metadata.get("started_at", 0))
+                    except (TypeError, ValueError):
+                        started = 0
+                    stale_runs.append((started, audio_dir, metadata))
+            selected_runs = active_runs or stale_runs
+            if not selected_runs:
+                return
+            _, audio_dir, metadata = max(selected_runs, key=lambda item: item[0])
+            if not self.audio_dir_pinned:
+                self.audio_dir_override = audio_dir
+            if not self._adopt_metadata_locked(metadata):
+                return
+            if self.pid is not None and self._pid_exists(self.pid):
+                watcher = (self.pid, self.run_id)  # type: ignore[arg-type]
+            else:
+                finish = (self.run_id, self.returncode)  # type: ignore[arg-type]
+
+        if watcher:
+            threading.Thread(
+                target=self._watch_attached_process,
+                args=watcher,
+                daemon=True,
+            ).start()
+        elif finish:
+            self._finish_run(finish[0], finish[1], offline=True)
 
     def start(self, pipeline: str) -> None:
         if pipeline not in PIPELINES:
@@ -268,72 +474,109 @@ class AppState:
                 raise HTTPException(409, "A run is already in progress")
             script = PROJECT_ROOT / PIPELINES[pipeline]["script"]
             audio_dir = self.audio_dir()
+            active = self._read_active_metadata(audio_dir)
+            if active:
+                try:
+                    active_pid = int(active.get("pid", 0))
+                except (TypeError, ValueError):
+                    active_pid = 0
+                if active_pid and self._pid_exists(active_pid):
+                    raise HTTPException(409, "A run is already in progress")
+                try:
+                    os.remove(self._active_run_path(audio_dir))
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass
+
+            started_at = time.time()
+            run_id = uuid.uuid4().hex
+            ts = datetime.fromtimestamp(started_at).strftime("%Y%m%d-%H%M%S")
+            run_dir = os.path.join(audio_dir, UI_RUN_LOG_DIR)
+            os.makedirs(run_dir, exist_ok=True)
+            run_log_path = os.path.join(
+                run_dir, f"ui-run-{ts}-{pipeline}-{run_id[:6]}.log")
+            header = f"▶ Started {PIPELINES[pipeline]['script']} — audio dir: {audio_dir}"
             env = dict(os.environ, PYTHONUNBUFFERED="1", SWHISPER_AUDIO_DIR=audio_dir)
-            self.process = subprocess.Popen(
-                [sys.executable, "-u", str(script)],
-                cwd=str(PROJECT_ROOT),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                env=env,
-                start_new_session=True,  # own process group → clean SIGINT
-            )
+            with open(run_log_path, "w", encoding="utf-8", buffering=1) as log_file:
+                log_file.write(header + "\n")
+                log_file.flush()
+                process = subprocess.Popen(
+                    [sys.executable, "-u", str(script)],
+                    cwd=str(PROJECT_ROOT),
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    env=env,
+                    start_new_session=True,  # own process group → clean SIGINT
+                )
+
+            self.process = process
+            self.pid = process.pid
             self.pipeline = pipeline
-            self.started_at = time.time()
+            self.started_at = started_at
             self.finished_at = None
             self.returncode = None
             self.stop_requested = False
             self.run_audio_dir = audio_dir
-            self.log_lines = [f"▶ Started {PIPELINES[pipeline]['script']} (pid {self.process.pid}) — audio dir: {audio_dir}"]
-            ts = datetime.fromtimestamp(self.started_at).strftime("%Y%m%d-%H%M%S")
-            self.run_log_path = os.path.join(audio_dir, UI_RUN_LOG_DIR, f"ui-run-{ts}-{pipeline}-{uuid.uuid4().hex[:6]}.log")
-            threading.Thread(target=self._pump, args=(self.process,), daemon=True).start()
+            self.run_log_path = run_log_path
+            self.run_id = run_id
+            self.log_lines = [header]
+            self._write_active_metadata_locked()
+            threading.Thread(
+                target=self._watch_process,
+                args=(process, run_id),
+                daemon=True,
+            ).start()
 
-    def _pump(self, proc: subprocess.Popen) -> None:
+    def _watch_process(self, process: subprocess.Popen, run_id: str) -> None:
         try:
-            for line in proc.stdout:  # type: ignore[union-attr]
-                with self.lock:
-                    self.log_lines.append(line.rstrip("\n"))
-                    if len(self.log_lines) > 20000:  # ring buffer
-                        del self.log_lines[:5000]
-        finally:
-            proc.wait()
-            with self.lock:
-                self.returncode = proc.returncode
-                self.finished_at = time.time()
+            returncode = process.wait()
+        except OSError:
+            returncode = None
+        self._finish_run(run_id, returncode)
+
+    def _watch_attached_process(self, pid: int, run_id: str) -> None:
+        while self._pid_exists(pid):
+            time.sleep(1.0)
+        self._finish_run(run_id, None, offline=True)
+
+    def _finish_run(
+        self, run_id: str, returncode: Optional[int], offline: bool = False
+    ) -> None:
+        with self.lock:
+            if self.run_id != run_id or self.finished_at is not None:
+                return
+            self.returncode = returncode
+            self.finished_at = time.time()
+            if offline and returncode is None:
+                status = "— Run ended while the web UI was offline (exit code unavailable) —"
+            else:
                 status = "⏹ stopped by user" if self.stop_requested else (
-                    "✅ finished" if proc.returncode == 0 else f"❌ exited with code {proc.returncode}")
-                self.log_lines.append(f"— Run {status} —")
-            try:
-                self._persist_run_log()
-            except Exception as exc:  # persistence must never break the UI
-                with self.lock:
-                    self.log_lines.append(f"⚠️ Could not save run log: {exc}")
-            try:
-                self._write_history_entry()
-            except Exception as exc:  # history must never break the UI
-                with self.lock:
-                    self.log_lines.append(f"⚠️ Could not write run history: {exc}")
+                    "✅ finished" if returncode == 0 else f"❌ exited with code {returncode}")
+                status = f"— Run {status} —"
+            self._append_log_line_locked(status)
+            self._remove_active_metadata_locked()
+        try:
+            self._write_history_entry()
+        except Exception as exc:  # history must never break the UI
+            with self.lock:
+                self._append_log_line_locked(f"⚠️ Could not write run history: {exc}")
 
     def stop(self) -> None:
         with self.lock:
             if not self.running():
                 raise HTTPException(409, "No run in progress")
             self.stop_requested = True
+            self._write_active_metadata_locked()
+            pid = self.pid
+            if pid is None:
+                raise HTTPException(409, "The active run has no process ID")
             # SIGINT → pipelines run their KeyboardInterrupt cleanup paths
-            os.killpg(os.getpgid(self.process.pid), signal.SIGINT)
-
-    def _persist_run_log(self) -> None:
-        """Write the finished run's console output to <audio>/logs/ so it stays
-        browsable in the Logs tab after the UI restarts."""
-        if not self.run_log_path or not self.run_audio_dir:
-            return
-        os.makedirs(os.path.dirname(self.run_log_path), exist_ok=True)
-        with self.lock:
-            lines = list(self.log_lines)
-        with open(self.run_log_path, "w", encoding="utf-8") as fh:
-            fh.write("\n".join(lines) + "\n")
+            try:
+                os.killpg(os.getpgid(pid), signal.SIGINT)
+            except ProcessLookupError:
+                raise HTTPException(409, "The run has already finished") from None
 
     # -- run history ----------------------------------------------------------
 
@@ -378,12 +621,18 @@ class AppState:
         with open(history_path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
         with self.lock:
-            self.log_lines.append(
+            self._append_log_line_locked(
                 f"🗂 Run recorded in {HISTORY_FILENAME} ({entry['file_count']} file(s) produced/updated)")
 
 
 state = AppState()
 app = FastAPI(title="swhisper web UI")
+
+
+@app.on_event("startup")
+async def _attach_active_run() -> None:
+    """Reconnect to a transcription that outlived the previous UI process."""
+    state.attach_existing_run()
 
 
 # ---------------------------------------------------------------------------
@@ -1021,14 +1270,14 @@ def api_logs(base: Optional[str] = None, file: Optional[str] = None,
             "size": st.st_size,
         })
     if file == "live":
+        live = state.log_since(offset)
         with state.lock:
-            offset = max(0, min(offset, len(state.log_lines)))
             return {
                 "scope": "run",
                 "versions": versions,
                 "selected": "live",
-                "lines": state.log_lines[offset:],
-                "next": len(state.log_lines),
+                "lines": live["lines"],
+                "next": live["next"],
                 "running": state.running(),
                 "pipeline": state.pipeline,
                 "returncode": state.returncode,
@@ -1076,12 +1325,12 @@ def api_run_status() -> Dict[str, Any]:
 
 @app.get("/api/run/log")
 def api_run_log(offset: int = 0) -> Dict[str, Any]:
+    live = state.log_since(offset)
     with state.lock:
-        offset = max(0, min(offset, len(state.log_lines)))
         return {
             "offset": offset,
-            "next": len(state.log_lines),
-            "lines": state.log_lines[offset:],
+            "next": live["next"],
+            "lines": live["lines"],
             "running": state.running(),
         }
 
@@ -1095,6 +1344,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.audio_dir:
         state.audio_dir_override = os.path.abspath(args.audio_dir)
+        state.audio_dir_pinned = True
     url = f"http://{args.host}:{args.port}"
     print(f"🌐 swhisper web UI: {url}")
     if not args.no_browser:
