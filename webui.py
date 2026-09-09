@@ -39,7 +39,12 @@ from typing import Any, Dict, List, Optional, Tuple
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from path_settings import get_path_settings
+from path_settings import (
+    get_commented_audio_dirs,
+    get_path_settings,
+    normalize_path_value,
+    remember_audio_dir,
+)
 from sidecar import (
     BLOCKED_KEYS,
     SIDECAR_PARAMS,
@@ -592,6 +597,7 @@ def api_meta() -> Dict[str, Any]:
     }
     return {
         "audio_dir": dirs["audio"],
+        "audio_paths": get_commented_audio_dirs(),
         "pipelines": [{"id": k, "label": v["label"]} for k, v in PIPELINES.items()],
         "groups": groups,
         "params": params,
@@ -600,16 +606,21 @@ def api_meta() -> Dict[str, Any]:
 
 @app.post("/api/audio-dir")
 def api_set_audio_dir(body: Dict[str, str]) -> Dict[str, Any]:
-    path = os.path.expanduser((body.get("path") or "").strip())
-    if not path:
-        raise HTTPException(400, "No path given")
-    path = os.path.abspath(path)
+    raw_path = body.get("path") or ""
+    try:
+        path = str(normalize_path_value(raw_path))
+    except ValueError as exc:
+        raise HTTPException(400, f"Invalid path: {exc}")
     if not os.path.isdir(path):
         raise HTTPException(400, f"Not a directory: {path}")
     if state.running():
         raise HTTPException(409, "Cannot change the audio directory while a run is in progress")
+    try:
+        remember_audio_dir(path)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(500, f"Could not update .swhisper.env: {exc}")
     state.audio_dir_override = path
-    return {"audio_dir": path}
+    return {"audio_dir": path, "audio_paths": get_commented_audio_dirs()}
 
 
 @app.get("/api/files")

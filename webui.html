@@ -19,8 +19,18 @@
   header { display: flex; align-items: center; gap: 12px; padding: 10px 16px;
            background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
   header h1 { font-size: 1.1rem; margin: 0; font-weight: 600; }
-  #dirBox { display: flex; gap: 6px; align-items: center; flex: 1; min-width: 260px; }
-  #dirInput { flex: 1; font-size: 0.8rem; color: var(--muted); }
+  #dirBox { display: flex; gap: 6px; align-items: center; flex: 1; min-width: 260px; flex-wrap: wrap; }
+  #dirCombo { display: flex; position: relative; flex: 1 1 18rem; min-width: 0; }
+  #dirInput { flex: 1; min-width: 0; max-width: 100%; font-size: 0.8rem; color: var(--text);
+              border-radius: 6px 0 0 6px; }
+  #dirMenuBtn { margin-left: -1px; border-radius: 0 6px 6px 0; padding: 6px 9px; }
+  #dirMenu { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; right: 0;
+             max-height: 18rem; overflow-y: auto; padding: 4px; background: var(--panel2);
+             border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 12px 30px rgba(0,0,0,.45); }
+  #dirMenu[hidden] { display: none; }
+  #dirMenu button { display: block; width: 100%; overflow: hidden; text-align: left;
+                    text-overflow: ellipsis; border: none; border-radius: 4px; }
+  #dirMenu button:hover { background: var(--panel); }
   select, button, input, textarea {
     background: var(--panel2); color: var(--text); border: 1px solid var(--border);
     border-radius: 6px; padding: 6px 10px; font-family: inherit; font-size: 0.9rem; }
@@ -116,6 +126,22 @@
          font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.75rem;
          line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: #b9c2d0; }
 
+  /* live console (always visible at the bottom) */
+  #consolePanel { flex: 0 0 var(--console-height, 14rem); min-height: 5rem; max-height: 70vh;
+                  border-top: 1px solid var(--border); background: var(--panel);
+                  display: flex; flex-direction: column; flex-shrink: 0; }
+  #consolePanel.collapsed { flex-basis: 2.4rem; min-height: 2.4rem; }
+  #consoleResize { height: 7px; flex-shrink: 0; cursor: row-resize;
+                   background: var(--border); opacity: .45; }
+  #consoleResize:hover { background: var(--accent); opacity: .9; }
+  #consoleBar { display: flex; gap: 10px; align-items: center; padding: 6px 16px; }
+  #consoleBar .msg { color: var(--muted); font-size: 0.8rem; flex: 1; }
+  #consoleLog { flex: 1; min-height: 0; overflow-y: auto; margin: 0 16px 10px; padding: 8px 10px;
+                background: #0d0f13; border: 1px solid var(--border); border-radius: 6px;
+                font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.75rem;
+                line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: #b9c2d0; }
+  #consolePanel.collapsed #consoleLog { display: none; }
+
   /* history overlay */
   #historyPanel { position: fixed; inset: 8vh 10vw; background: var(--panel);
                   border: 1px solid var(--border); border-radius: 10px; z-index: 50;
@@ -141,7 +167,11 @@
 <header>
   <h1>swhisper</h1>
   <div id="dirBox">
-    <input id="dirInput" title="Audio directory — edit and press Change (or Enter) to switch">
+    <div id="dirCombo">
+      <input id="dirInput" type="text" aria-label="Audio directory" placeholder="Enter an audio directory…" title="Audio directory — choose a saved path from the dropdown, or enter a new path and press Change (or Enter)">
+      <button id="dirMenuBtn" type="button" aria-haspopup="listbox" aria-expanded="false" title="Show previously used audio directories">▾</button>
+      <div id="dirMenu" role="listbox" hidden></div>
+    </div>
     <button id="dirBtn" title="Switch to this audio directory">Change</button>
   </div>
   <button id="historyBtn" title="Show run history">🗂 History</button>
@@ -206,6 +236,15 @@
       <button class="danger" id="deleteBtn">Delete sidecar</button>
       <span class="msg" id="editorMsg"></span>
     </div>
+    <div id="consolePanel">
+      <div id="consoleResize" role="separator" aria-label="Resize live console" title="Drag to resize the live console"></div>
+      <div id="consoleBar">
+        <button id="consoleToggle" title="Show/hide the live console">▾ Live console</button>
+        <span class="msg" id="consoleMsg">idle</span>
+        <button id="clearConsoleBtn" title="Clear live console">Clear</button>
+      </div>
+      <div id="consoleLog"></div>
+    </div>
   </div>
 </main>
 
@@ -228,6 +267,8 @@ let currentTab = "settings";
 let currentLogSel = null;
 let logOffset = 0;
 let wasRunning = false;
+let savedAudioPaths = new Set();
+let changingDir = false;
 
 async function api(path, opts) {
   const res = await fetch(path, opts);
@@ -258,6 +299,10 @@ function nudgeFont(delta) {
 async function loadMeta() {
   META = (await api("/api/meta")).data;
   $("dirInput").value = META.audio_dir;
+  const paths = [...(META.audio_paths || [])];
+  if (META.audio_dir && !paths.includes(META.audio_dir)) paths.push(META.audio_dir);
+  savedAudioPaths = new Set(paths);
+  renderDirMenu(paths);
   const sel = $("pipelineSel");
   sel.innerHTML = "";
   for (const p of META.pipelines) {
@@ -268,8 +313,10 @@ async function loadMeta() {
 }
 
 async function changeDir() {
+  if (changingDir) return;
   const path = $("dirInput").value.trim();
   if (!path) return;
+  changingDir = true;
   try {
     const { data } = await api("/api/audio-dir", {
       method: "POST",
@@ -285,11 +332,49 @@ async function changeDir() {
     $("logSel").innerHTML = "";
     $("logSel").disabled = true;
     $("log").textContent = "";
+    $("consoleLog").textContent = "";
     currentLogSel = null;
+    logOffset = 0;
     showTab("settings");
     await loadMeta();
     await loadFiles();
   } catch (e) { alert(e.message); }
+  finally { changingDir = false; }
+}
+
+function changeDirIfSavedPath() {
+  const path = $("dirInput").value.trim();
+  if (path && savedAudioPaths.has(path) && (!META || path !== META.audio_dir)) changeDir();
+}
+
+function renderDirMenu(paths) {
+  const menu = $("dirMenu");
+  menu.innerHTML = "";
+  for (const path of paths) {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.role = "option";
+    option.textContent = path;
+    option.title = path;
+    option.onclick = () => {
+      $("dirInput").value = path;
+      closeDirMenu();
+      changeDir();
+    };
+    menu.appendChild(option);
+  }
+}
+
+function toggleDirMenu() {
+  const menu = $("dirMenu");
+  const open = menu.hidden;
+  menu.hidden = !open;
+  $("dirMenuBtn").setAttribute("aria-expanded", String(open));
+}
+
+function closeDirMenu() {
+  $("dirMenu").hidden = true;
+  $("dirMenuBtn").setAttribute("aria-expanded", "false");
 }
 
 async function loadFiles() {
@@ -657,7 +742,10 @@ async function loadLogList() {
   if (!data) data = (await api("/api/logs")).data;
   sel.dataset.scope = scope;
   sel.innerHTML = "";
-  for (const v of data.versions) {
+  const versions = scope === "file"
+    ? [{ id: "live", filename: "Live console", timestamp: null }, ...data.versions]
+    : data.versions;
+  for (const v of versions) {
     const o = document.createElement("option");
     o.value = v.id;
     o.textContent = v.id === "live" ? "▶ Live console"
@@ -665,7 +753,7 @@ async function loadLogList() {
       : v.filename;
     sel.appendChild(o);
   }
-  const ids = data.versions.map(v => v.id);
+  const ids = versions.map(v => v.id);
   if (!currentLogSel || !ids.includes(currentLogSel)) currentLogSel = ids[0] || null;
   sel.value = currentLogSel || "";
   sel.disabled = !ids.length;
@@ -678,7 +766,7 @@ async function loadLogContent() {
   const msg = $("logMsg");
   const id = currentLogSel;
   if (!id) { log.textContent = ""; msg.textContent = "No logs available."; return; }
-  if (sel.dataset.scope === "run" && id === "live") {
+  if (id === "live") {
     const { data } = await api("/api/logs?file=live");
     log.textContent = (data.lines || []).join("\n") + (data.lines && data.lines.length ? "\n" : "");
     log.scrollTop = log.scrollHeight;
@@ -762,9 +850,8 @@ async function startRun() {
       body: JSON.stringify({ pipeline: $("pipelineSel").value }),
     });
     logOffset = 0;
-    $("log").textContent = "";
-    currentLogSel = "live";
-    if (currentTab === "logs") loadLogList();
+    $("consoleLog").textContent = "";
+    setConsoleCollapsed(false);
   } catch (e) { alert(e.message); }
 }
 
@@ -777,8 +864,8 @@ async function pollRun() {
   try {
     const { data } = await api(`/api/logs?file=live&offset=${logOffset}`);
     if (data.next !== undefined) logOffset = data.next;
-    if (data.lines && data.lines.length && currentTab === "logs" && currentLogSel === "live") {
-      const log = $("log");
+    if (data.lines && data.lines.length) {
+      const log = $("consoleLog");
       const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
       log.textContent += data.lines.join("\n") + "\n";
       if (atBottom) log.scrollTop = log.scrollHeight;
@@ -796,6 +883,9 @@ async function pollRun() {
     } else if (st.pipeline) {
       $("runStatus").textContent = `last run: ${st.pipeline} · exit ${st.returncode ?? "?"}`;
     }
+    $("consoleMsg").textContent = st.running
+      ? `running ${st.pipeline}`
+      : st.pipeline ? `last run: ${st.pipeline} · exit ${st.returncode ?? "?"}` : "idle";
     if (wasRunning && !st.running) {
       loadFiles();  // refresh statuses when a run ends
       if (currentTab === "transcript" && currentBase) loadTranscript(currentBase);
@@ -803,6 +893,51 @@ async function pollRun() {
     }
     wasRunning = st.running;
   } catch (e) { /* server briefly unavailable; keep polling */ }
+}
+
+/* ---------- console panel ---------- */
+
+function setConsoleCollapsed(collapsed) {
+  $("consolePanel").classList.toggle("collapsed", collapsed);
+  $("consoleToggle").textContent = (collapsed ? "▸" : "▾") + " Live console";
+  try { localStorage.setItem("swhisper_console_collapsed", collapsed ? "1" : "0"); } catch (e) {}
+}
+
+function setConsoleHeight(px) {
+  const panel = $("consolePanel");
+  const rightHeight = $("right").clientHeight;
+  const max = Math.max(160, Math.min(rightHeight * 0.7, 900));
+  px = Math.max(100, Math.min(max, px));
+  panel.style.setProperty("--console-height", `${Math.round(px)}px`);
+  try { localStorage.setItem("swhisper_console_height", String(Math.round(px))); } catch (e) {}
+}
+
+function initConsole() {
+  let collapsed = false;
+  let height = 14 * parseFloat(getComputedStyle(document.documentElement).fontSize || "22");
+  try {
+    collapsed = localStorage.getItem("swhisper_console_collapsed") === "1";
+    const saved = parseInt(localStorage.getItem("swhisper_console_height"), 10);
+    if (Number.isFinite(saved)) height = saved;
+  } catch (e) {}
+  setConsoleHeight(height);
+  setConsoleCollapsed(collapsed);
+}
+
+function initConsoleResize() {
+  $("consoleResize").addEventListener("pointerdown", event => {
+    event.preventDefault();
+    setConsoleCollapsed(false);
+    const startY = event.clientY;
+    const startHeight = $("consolePanel").getBoundingClientRect().height;
+    const move = moveEvent => setConsoleHeight(startHeight + startY - moveEvent.clientY);
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop, { once: true });
+  });
 }
 
 /* ---------- init ---------- */
@@ -847,7 +982,16 @@ $("startBtn").onclick = startRun;
 $("stopBtn").onclick = stopRun;
 $("refreshBtn").onclick = loadFiles;
 $("clearLogBtn").onclick = () => { $("log").textContent = ""; };
+$("clearConsoleBtn").onclick = () => { $("consoleLog").textContent = ""; };
+$("consoleToggle").onclick = () => setConsoleCollapsed(!$("consolePanel").classList.contains("collapsed"));
 $("dirBtn").onclick = changeDir;
+$("dirMenuBtn").onclick = event => { event.stopPropagation(); toggleDirMenu(); };
+document.addEventListener("click", event => {
+  if (!$("dirCombo").contains(event.target)) closeDirMenu();
+});
+$("dirInput").addEventListener("focus", closeDirMenu);
+$("dirInput").addEventListener("input", changeDirIfSavedPath);
+$("dirInput").addEventListener("change", changeDirIfSavedPath);
 $("dirInput").addEventListener("keydown", e => { if (e.key === "Enter") changeDir(); });
 $("historyBtn").onclick = showHistory;
 $("historyClose").onclick = () => $("historyPanel").classList.remove("open");
@@ -857,6 +1001,8 @@ $("fontPlus").onclick = () => nudgeFont(2);
 
 (async () => {
   initFontSize();
+  initConsole();
+  initConsoleResize();
   await loadMeta();
   await loadFiles();
   setInterval(pollRun, 1000);
