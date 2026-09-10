@@ -255,12 +255,6 @@ class FileManager:
         if self._convert_non_wav_file(staging_dir, staged_filename):
             base_name = os.path.splitext(staged_filename)[0]
             wav_filename = f"{base_name}.wav"
-            original_path = staged_path
-            if os.path.exists(original_path):
-                try:
-                    os.remove(original_path)
-                except Exception as exc:
-                    print(f"⚠️  Warning: Could not remove staged original '{staged_filename}': {exc}")
             return wav_filename
 
         return None
