@@ -7,7 +7,6 @@ CONTEXT.md
 # Python bytecode
 __pycache__/
 *.py[cod]
-test_*.py
 
 # macOS
 .DS_Store
@@ -18,3 +17,10 @@ diarize/enhanced_pipeline.py
 transcribe/minimal-diarizen-test.py
 AGENTS.md
 CLAUDE.md
+
+# Manual/live scripts: need real models, network, a GPU, or hardcode a
+# personal audio path. Not part of the tracked pytest suite; run locally.
+test_ina_vad.py
+test_pyannote_vad_vs_diarization.py
+test_sensevoice_backfill_live.py
+test_sensevoice_live.py
