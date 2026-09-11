@@ -26,6 +26,32 @@ SPEAKER_STATS_WARNING = (
 )
 
 
+def smart_join(parts: List[str]) -> str:
+    """Join text parts intelligently, preserving newlines around long silences."""
+    if not parts:
+        return ""
+
+    result = parts[0]
+    for i in range(1, len(parts)):
+        prev_part = parts[i - 1]
+        curr_part = parts[i]
+
+        # Add space unless the previous part ends with whitespace (including
+        # newlines) or the current part starts with whitespace.
+        needs_space = True
+        if prev_part and prev_part[-1] in (' ', '\n', '\t', '\r'):
+            needs_space = False
+        if curr_part and curr_part[0] in (' ', '\n', '\t', '\r'):
+            needs_space = False
+
+        if needs_space:
+            result += ' ' + curr_part
+        else:
+            result += curr_part
+
+    return result
+
+
 class TranscriptFormatter:
     """Base class for transcript formatters."""
 
@@ -178,33 +204,7 @@ class RTFFormatter(TranscriptFormatter):
         current_start_time = None
         
         gap_threshold = getattr(config, 'silence_gap_linebreak_threshold', None) if config else None
-        
-        def smart_join(parts):
-            """Join text parts intelligently, preserving newlines around long silences."""
-            if not parts:
-                return ""
-            
-            result = parts[0]
-            for i in range(1, len(parts)):
-                prev_part = parts[i-1]
-                curr_part = parts[i]
-                
-                # Check if we need a space separator
-                # Add space unless the previous part ends with whitespace (including newlines)
-                # or the current part starts with whitespace
-                needs_space = True
-                if prev_part and prev_part[-1] in (' ', '\n', '\t', '\r'):
-                    needs_space = False
-                if curr_part and curr_part[0] in (' ', '\n', '\t', '\r'):
-                    needs_space = False
-                
-                if needs_space:
-                    result += ' ' + curr_part
-                else:
-                    result += curr_part
-            
-            return result
-        
+
         for segment in segments:
             is_silence = segment.get('is_silence_marker', False)
             speaker = segment.get('speaker', 'UNKNOWN')
@@ -681,29 +681,6 @@ class TXTFormatter(TranscriptFormatter):
         current_speaker = None
         current_paragraph: List[str] = []
         current_start_time = None
-
-        def smart_join(parts: List[str]) -> str:
-            if not parts:
-                return ""
-            result = parts[0]
-            for i in range(1, len(parts)):
-                prev_part = parts[i - 1]
-                curr_part = parts[i]
-                
-                # Check if we need a space separator
-                # Add space unless the previous part ends with whitespace (including newlines)
-                # or the current part starts with whitespace
-                needs_space = True
-                if prev_part and prev_part[-1] in (' ', '\n', '\t', '\r'):
-                    needs_space = False
-                if curr_part and curr_part[0] in (' ', '\n', '\t', '\r'):
-                    needs_space = False
-                
-                if needs_space:
-                    result += ' ' + curr_part
-                else:
-                    result += curr_part
-            return result
 
         for segment in segments:
             is_silence = segment.get('is_silence_marker', False)
