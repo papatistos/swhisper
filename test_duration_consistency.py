@@ -73,3 +73,38 @@ def test_subthreshold_gaps_are_dropped_not_counted():
     assert len(enhanced[0]['words']) == 2, "sub-threshold gap should not get a silence marker"
     dropped = _timeline_span(segments) - _total_word_duration(enhanced)
     assert dropped == pytest.approx(0.1)
+
+
+def test_negative_gap_within_a_segment_inserts_no_marker():
+    # Overlapping word timestamps (e.g. from a diarization/ASR alignment
+    # quirk) produce a negative gap, which is well below min_silence_duration
+    # -- the same "too small to mark" branch subthreshold gaps take, not a
+    # separate crash-prone path.
+    segments = [
+        {
+            'start': 0.0, 'end': 2.0,
+            'words': [
+                {'start': 0.0, 'end': 1.5, 'word': 'a'},
+                {'start': 1.0, 'end': 2.0, 'word': 'b'},  # starts before 'a' ends
+            ],
+        },
+    ]
+
+    enhanced = SilenceMarkerProcessor.add_word_level_silence_markers(segments)
+
+    assert len(enhanced[0]['words']) == 2
+    assert enhanced[0]['words'] == segments[0]['words']
+
+
+def test_negative_gap_between_segments_inserts_no_standalone_segment():
+    segments = [
+        {'start': 0.0, 'end': 5.0, 'words': [{'start': 0.0, 'end': 5.0, 'word': 'hello'}]},
+        # overlaps the previous segment's end instead of leaving a gap
+        {'start': 4.0, 'end': 6.0, 'words': [{'start': 4.0, 'end': 6.0, 'word': 'world'}]},
+    ]
+
+    enhanced = SilenceMarkerProcessor.add_word_level_silence_markers(segments)
+
+    assert len(enhanced) == 2, "no standalone silence segment should be inserted for an overlapping gap"
+    assert enhanced[0]['words'] == segments[0]['words']
+    assert enhanced[1]['words'] == segments[1]['words']
