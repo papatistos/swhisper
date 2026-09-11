@@ -1,0 +1,14 @@
+# Dependencies needed to import and run the fast pytest suite (test_*.py at
+# repo root). None of these tests load a real model or touch real audio, but
+# diarize/utils.py and transcribe/__init__.py import torch and
+# whisper_timestamped at module scope, so every test that touches those
+# modules pulls them in transitively at import time.
+pytest==9.1.1
+torch==2.8.0
+whisper-timestamped==1.15.9
+librosa==0.11.0
+scipy==1.15.3
+soundfile==0.13.1
+numpy==2.2.6
+pyannote-core==6.0.1
+psutil==7.1.2
