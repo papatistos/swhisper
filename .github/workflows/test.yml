@@ -18,6 +18,9 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-test.txt
 
+      # test_file_conversion.py exercises the real ffmpeg conversion path.
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - run: pip install -r requirements-test.txt
 
       - run: pytest -v
