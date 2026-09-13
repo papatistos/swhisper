@@ -80,9 +80,41 @@ class RemainingTests(unittest.TestCase):
         self.assertEqual(response.status_code,422)
         self.assertIn('SWHISPER_NUM_SPEAKERS',response.json()['errors'])
 
+    def test_export_creates_copies_and_requires_explicit_replace(self):
+        original=self.transcript();body={'formats':['txt','rtf'],'name':'review','destination':'exports','options':{'stats':False}}
+        plan=self.client.post('/api/render/a/export-preview',json=body)
+        self.assertEqual(plan.status_code,200,plan.text)
+        self.assertEqual(plan.json()['existing'],[])
+        response=self.client.post('/api/render/a/save',json={**body,'token':plan.json()['token']})
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(original.read_text(),'Original transcript')
+        self.assertTrue((self.root/'exports/review.rtf').exists())
+        self.assertIn('Hello',(self.root/'exports/review.txt').read_text())
+        next_plan=self.client.post('/api/render/a/export-preview',json=body).json()
+        self.assertEqual(len(next_plan['existing']),2)
+        self.assertEqual(self.client.post('/api/render/a/save',json={**body,'token':next_plan['token']}).status_code,409)
+        self.assertEqual(self.client.post('/api/render/a/save',json={**body,'token':next_plan['token'],'overwrite':True}).status_code,200)
 
+    def test_export_protects_originals_and_paths(self):
+        self.transcript()
+        for body in [{'name':'a_20260913-120000','destination':'transcripts/txt'}, {'name':'../escape'}, {'destination':'../outside'}]:
+            response=self.client.post('/api/render/a/export-preview',json=body)
+            self.assertIn(response.status_code,(400,409),response.text)
+        self.assertEqual(self.client.post('/api/render/a/save',json={'name':'review'}).status_code,409)
 
+    def test_export_detects_conflict_after_preview(self):
+        self.transcript();body={'name':'review'}
+        plan=self.client.post('/api/render/a/export-preview',json=body).json()
+        target=self.write('exports/review.txt','Someone else wrote this')
+        response=self.client.post('/api/render/a/save',json={**body,'token':plan['token'],'overwrite':True})
+        self.assertEqual(response.status_code,409)
+        self.assertEqual(target.read_text(),'Someone else wrote this')
 
+    def test_view_options_do_not_modify_original(self):
+        original=self.transcript();response=self.client.post('/api/render/a',json={'options':{'stats':False,'preamble':False}})
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(original.read_text(),'Original transcript')
+        self.assertEqual(response.json()['timeline'][0]['text'],'Hello world')
 
     def test_env_loader_keeps_empty_values_and_hashes(self):
         self.write('.swhisper.env', 'TEST_SWHISPER_EMPTY=""\nTEST_SWHISPER_PROMPT="A # title"\n')
@@ -105,6 +137,14 @@ class RemainingTests(unittest.TestCase):
         after=self.client.get('/api/run/preview',params={'pipeline':'transcribe4'}).json()['token']
         self.assertNotEqual(before,after)
 
+    def test_timeline_and_audio_range(self):
+        self.transcript();timeline=self.client.get('/api/timeline/a')
+        self.assertEqual(timeline.status_code,200,timeline.text)
+        self.assertEqual(timeline.json()['segments'][0]['start'],1.0)
+        audio=self.client.get('/api/audio/a',headers={'Range':'bytes=0-3'})
+        self.assertEqual(audio.status_code,206)
+        self.assertEqual(audio.content,b'mock')
+        self.assertEqual(self.client.get('/api/audio/missing').status_code,404)
 
 
 if __name__=='__main__':unittest.main()

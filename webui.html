@@ -201,6 +201,17 @@
   details.group > summary { cursor: pointer; font-size: .9rem; padding: 8px 0; border-bottom: 1px solid var(--border); }
   #pipelineSel { min-width: 0; max-width: 100%; }
   #editorBar, #transcriptBar { flex-wrap: wrap; }
+  #audioBar { padding: 8px 16px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  #audioBar[hidden], #timeline[hidden] { display: none; }
+  #audioPlayer { max-width: 100%; height: 36px; }
+  #timeline { overflow-y: auto; flex: 1; min-height: 0; padding: 12px 20px; }
+  .segment { padding: 8px; border-bottom: 1px solid var(--border); }
+  .segment.active { background: var(--panel2); border-left: 3px solid var(--accent); }
+  .segment button { font-size: .7rem; margin-right: 8px; }
+  .segment p { margin: 4px 0; white-space: pre-wrap; }
+  #exportDialog { width: min(660px, 92vw); }
+  #exportDialog input[type=text] { display: block; width: 100%; margin: 5px 0 12px; }
+  #exportPaths { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8rem; }
   @media (max-width: 1100px) {
     .row { grid-template-columns: 1fr; gap: 4px; }
     #filePanel { flex-basis: var(--sidebar-width, 270px); }
@@ -287,11 +298,12 @@
       <div id="transcriptBar">
         <select id="versionSel" aria-label="Transcript version" title="Transcript version — one per pipeline run" disabled></select>
         <button id="transcriptReload" title="Reload (newest version)">↻</button>
-        <button id="statsToggle" style="display:none"></button>
         <span class="msg" id="transcriptMsg"></span>
       </div>
       <div id="renderBar" style="display:none">
         <span class="rlabel">Show</span>
+        <label><input type="checkbox" id="optStats" checked> speaker statistics</label>
+        <label><input type="checkbox" id="optPreamble" checked> introduction</label>
         <label title="Markers like [*] or [S02**] for sounds that could not be transcribed. Hiding them folds each marker's span into the pauses around it, so the durations stay true to the recording.">
           <input type="checkbox" id="optDisfluencies" checked> disfluency markers</label>
         <label title="Pause durations in seconds, e.g. (1.3) or (.4).">
@@ -304,8 +316,13 @@
           hide under <input type="number" id="optMinPause" value="0" min="0" max="60" step="0.1"> s</label>
         <span class="rspacer"></span>
         <button id="renderReset" title="Back to the view the pipeline produced">Reset</button>
-        <button id="renderSave" title="Write this view to disk beside the transcript">Save as…</button>
+        <button id="renderSave" title="Export a copy of this view">Export…</button>
       </div>
+      <div id="audioBar" hidden><audio id="audioPlayer" controls preload="none"></audio>
+        <label><input id="reviewAudio" type="checkbox"> Review with timestamps</label>
+        <span id="audioMsg" class="settingsNote"></span>
+      </div>
+      <div id="timeline" hidden aria-label="Timestamped transcript segments"></div>
       <div id="transcriptText"><div class="placeholder">Select an audio file to view its transcript.</div></div>
     </div>
     <div id="logsView" role="tabpanel" aria-labelledby="tabLogs" tabindex="0" style="display:none">
@@ -339,6 +356,17 @@
     <button id="historyClose">✕ Close</button>
   </div>
   <div id="historyBody"></div>
+</dialog>
+<dialog id="exportDialog" aria-labelledby="exportTitle">
+  <h2 id="exportTitle">Export transcript view</h2>
+  <p class="settingsNote">Creates a copy. Pipeline transcript versions are preserved.</p>
+  <label for="exportName">Filename without extension</label><input id="exportName" type="text">
+  <label for="exportDestination">Folder inside the audio folder</label><input id="exportDestination" type="text" value="exports">
+  <label><input id="exportTXT" type="checkbox" checked> TXT</label>
+  <label><input id="exportRTF" type="checkbox" checked> RTF</label>
+  <p id="exportPaths" role="status"></p>
+  <label id="overwriteLabel" hidden><input id="exportOverwrite" type="checkbox"> Replace the existing export files listed above</label>
+  <div class="dialogActions"><button id="exportCancel" autofocus>Cancel</button><button id="exportPreview">Check destination</button><button id="exportConfirm" class="primary" disabled>Export copy</button></div>
 </dialog>
 
 <dialog id="dirtyDialog" aria-labelledby="dirtyTitle" aria-describedby="dirtyText">
@@ -375,7 +403,7 @@ let changingDir = false;
 let editorBase = null, savedForm = null, saving = false, editorLoading = false;
 let editorSeq = 0, folderSeq = 0, filesSeq = 0, transcriptSeq = 0, logSeq = 0, logListSeq = 0;
 let connected = false, lastStatus = null, runBusy = false, pollBusy = false, activeRunId = null;
-let editorScope = "file", editorMeta = null, globalRevision = null;
+let editorScope = "file", editorMeta = null, globalRevision = null, timelineSeq = 0, exportContext = null, exportPlan = null, exporting = false;
 let pendingPreview = null, dirtyChoice = null, initialized = false;
 const escapeHTML = value => String(value).replace(/[&<>"']/g, c => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"}[c]));
 
@@ -499,6 +527,7 @@ async function changeDir() {
     });
     $("dirInput").value = data.audio_dir;
     folderSeq++; editorSeq++; transcriptSeq++; renderSeq++; logSeq++; logListSeq++;
+    resetAudioReview();
     currentBase = editorBase = savedForm = null;
     editorLoading = false;
     $("editor").inert = false;
@@ -807,6 +836,7 @@ async function selectFile(base, force = false) {
   if (changingDir || saving) return false;
   if (!force && base === editorBase && base === currentBase) return true;
   if (!force && !await resolveUnsaved()) return false;
+  resetAudioReview();
   const seq = ++editorSeq, folder = folderSeq;
   transcriptSeq++; renderSeq++; logSeq++; logListSeq++;
   currentBase = base;
@@ -887,21 +917,6 @@ function fillVersionSel(txtVersions, hasRawJson, selectedId) {
   sel.disabled = false;
 }
 
-function updateStatsToggle(info) {
-  const btn = $("statsToggle");
-  if (!info) {
-    btn.style.display = "none";
-    return;
-  }
-  btn.style.display = "";
-  btn.dataset.hasStats = info.has_stats ? "1" : "";
-  btn.textContent = info.has_stats ? "− Remove stats" : "+ Add stats";
-  btn.title = info.has_stats
-    ? "Remove the preamble and stats header from this file"
-    : info.stats_available
-      ? "Add the preamble and per-speaker stats header to this file"
-      : "Add the preamble to this file (no saved per-speaker stats for this run)";
-}
 
 /* ---------- render options ----------
    Which markers and pauses a transcript shows is recoverable from the diarized
@@ -909,9 +924,10 @@ function updateStatsToggle(info) {
    one. Everything here re-renders server-side in tens of milliseconds. */
 
 const RENDER_DEFAULTS = {
-  disfluencies: true, pauses: true, pause_linebreaks: true,
+  stats: true, preamble: true, disfluencies: true, pauses: true, pause_linebreaks: true,
   pause_linebreak_threshold: 1.0, min_pause: 0,
 };
+let renderBaseline = {...RENDER_DEFAULTS};
 let renderSeq = 0;          // drops responses that arrive out of order
 let renderTimer = null;
 
@@ -923,6 +939,7 @@ let renderAvailable = false;
 
 function renderOptions() {
   return {
+    stats: $("optStats").checked, preamble: $("optPreamble").checked,
     disfluencies: $("optDisfluencies").checked,
     pauses: $("optPauses").checked,
     pause_linebreaks: $("optBreaks").checked,
@@ -932,10 +949,11 @@ function renderOptions() {
 }
 
 function renderIsDefault(o) {
-  return Object.keys(RENDER_DEFAULTS).every(k => o[k] === RENDER_DEFAULTS[k]);
+  return Object.keys(RENDER_DEFAULTS).every(k => o[k] === renderBaseline[k]);
 }
 
 function setRenderOptions(o) {
+  $("optStats").checked = o.stats; $("optPreamble").checked = o.preamble;
   $("optDisfluencies").checked = o.disfluencies;
   $("optPauses").checked = o.pauses;
   $("optBreaks").checked = o.pause_linebreaks;
@@ -967,6 +985,7 @@ async function applyRenderOptions() {
     });
     if (seq !== renderSeq || base !== currentBase || folder !== folderSeq || version !== $("versionSel").value) return;   // superseded
     $("transcriptText").textContent = data.content;
+    if (data.timeline) renderTimeline(data.timeline);
     $("transcriptMsg").textContent = data.suffix
       ? `${base} — re-rendered view (${data.suffix.slice(1).replace(/_/g, ", ")})`
       : `${base} — as produced by the pipeline`;
@@ -982,34 +1001,67 @@ async function applyRenderOptions() {
 
 async function saveRenderedView() {
   if (!renderAvailable || !currentBase) return;
-  const formats = prompt(
-    "Save this view as (comma-separated: txt, rtf)", "txt, rtf");
-  if (formats === null) return;
-  const list = formats.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
-  if (!list.length) return;
-  const msg = $("transcriptMsg");
-  const base = currentBase, folder = folderSeq, seq = transcriptSeq, version = $("versionSel").value;
-  const valid = () => base === currentBase && folder === folderSeq && seq === transcriptSeq && version === $("versionSel").value;
+  exportContext = {base:currentBase, version:$("versionSel").value, options:renderOptions()};
+  const filename = exportContext.version.split("/").pop().replace(/\.txt$/, "");
+  $("exportName").value = filename + "_view";
+  $("exportDestination").value = "exports"; $("exportOverwrite").checked = false;
+  invalidateExport(); $("exportDialog").showModal(); await previewExport();
+}
+function invalidateExport() {exportPlan=null;$("exportConfirm").disabled=true;$("exportPaths").textContent="Check the destination before exporting.";$("overwriteLabel").hidden=true;$("exportOverwrite").checked=false;}
+function exportBody() {return {...exportContext,name:$("exportName").value,destination:$("exportDestination").value,formats:[...($("exportTXT").checked?["txt"]:[]),...($("exportRTF").checked?["rtf"]:[])]};}
+async function previewExport() {
+  if (!exportContext || exporting) return;
+  const body=exportBody(), identity=JSON.stringify(body);
   try {
-    const { data } = await api(`/api/render/${encodeURIComponent(base)}/save`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        version, options: renderOptions(), formats: list,
-      }),
-    });
-    if (!valid()) return;
-    msg.textContent = `Saved ${data.written.join("  and  ")}`;
-    msg.className = "msg ok";
-  } catch (e) {
-    if (!valid()) return;
-    msg.textContent = e.message;
-    msg.className = "msg err";
-  }
+    if (!body.formats.length) throw new Error("Choose TXT and/or RTF.");
+    const {data}=await api(`/api/render/${encodeURIComponent(body.base)}/export-preview`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    if (!exportContext || identity!==JSON.stringify(exportBody())) return;
+    exportPlan=data;$("exportPaths").textContent=data.paths.join("\n") + (data.existing.length ? "\nExisting files: explicitly choose replacement below." : "\nNew files will be created.");
+    $("overwriteLabel").hidden=!data.existing.length;$("exportConfirm").disabled=!!data.existing.length && !$("exportOverwrite").checked;
+  } catch(e) {if(exportContext && identity===JSON.stringify(exportBody())){exportPlan=null;$("exportConfirm").disabled=true;$("exportPaths").textContent=e.message;}}
+}
+async function confirmExport() {
+  if (!exportContext || !exportPlan || exporting) return;
+  exporting=true;$("exportConfirm").disabled=true;
+  for (const id of ["exportName","exportDestination","exportTXT","exportRTF","exportOverwrite","exportCancel","exportPreview"]) $(id).disabled=true;
+  try {
+    const {data}=await api(`/api/render/${encodeURIComponent(exportContext.base)}/save`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...exportBody(),token:exportPlan.token,overwrite:$("exportOverwrite").checked})});
+    $("exportPaths").textContent="Exported:\n"+data.written.join("\n");exportPlan=null;
+  } catch(e) {$("exportPaths").textContent=e.message;exportPlan=null;}
+  finally {exporting=false;for (const id of ["exportName","exportDestination","exportTXT","exportRTF","exportOverwrite","exportCancel","exportPreview"]) $(id).disabled=false;}
+}
+function resetAudioReview() {
+  timelineSeq++; $("audioPlayer").pause(); $("audioPlayer").removeAttribute("src");$("audioPlayer").load();
+  $("audioBar").hidden=true;$("timeline").hidden=true;$("timeline").replaceChildren();$("reviewAudio").checked=false;$("transcriptText").style.display="";
+}
+async function loadAudioReview(base, version) {
+  const seq=++timelineSeq, folder=folderSeq, renderAtLoad=renderSeq;
+  try {
+    const {data}=await api(`/api/timeline/${encodeURIComponent(base)}?version=${encodeURIComponent(version)}`);
+    if(seq!==timelineSeq||base!==currentBase||folder!==folderSeq)return;
+    $("audioPlayer").src=`/api/audio/${encodeURIComponent(base)}?folder=${folderSeq}`;
+    $("audioBar").hidden=false;$("reviewAudio").disabled=!data.segments.length;
+    $("audioMsg").textContent=data.segments.length ? "Select a timestamp to play that segment." : "No timestamped segments for this version.";
+    if (renderAtLoad === renderSeq) renderTimeline(data.segments);
+
+  }catch(e){if(seq===timelineSeq){$("audioBar").hidden=false;$("audioMsg").textContent=e.message;$("reviewAudio").disabled=true;}}
+}
+
+function renderTimeline(segments) {
+  $("timeline").replaceChildren();
+  $("reviewAudio").disabled = !segments.length;
+    for(const segment of segments){
+      const row=document.createElement("div");row.className="segment";row.dataset.start=segment.start;row.dataset.end=segment.end;
+      const button=document.createElement("button");const seconds=Math.floor(segment.start);
+      button.textContent=`${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,"0")} ${segment.speaker}`;
+      button.onclick=()=>{$("audioPlayer").currentTime=segment.start;$("audioPlayer").play().catch(()=>{$("audioMsg").textContent="Press Play to start audio, or choose a browser-supported audio format.";});};
+      const text=document.createElement("p");text.textContent=segment.text;row.append(button,text);$("timeline").appendChild(row);
+    }
 }
 
 async function loadTranscript(base, version) {
   const seq = ++transcriptSeq, folder = folderSeq;
+  resetAudioReview();
   renderSeq++;
   $("renderBar").classList.remove("busy", "dirty");
   clearTimeout(renderTimer);
@@ -1019,13 +1071,13 @@ async function loadTranscript(base, version) {
   const msg = $("transcriptMsg");
   const hasRawJson = !!(FILES_BY_BASE[base] && FILES_BY_BASE[base].transcribed);
   updateRenderBar(false);
-  updateStatsToggle(null);
+
   sel.disabled = true;
   msg.textContent = "Loading…";
   msg.className = "msg";
 
   if (version === RAW_JSON_VERSION) {
-    updateStatsToggle(null);  // raw JSON isn't a txt file — nothing to toggle
+
     updateRenderBar(false);
     try {
       const { data } = await api(`/api/json-transcript/${encodeURIComponent(base)}`);
@@ -1059,12 +1111,14 @@ async function loadTranscript(base, version) {
     sel.disabled = false;
     text.textContent = data.content;
     msg.textContent = `${base} — ${data.versions.length} version(s)`;
-    updateStatsToggle({ has_stats: data.has_stats, stats_available: data.stats_available });
-    setRenderOptions(RENDER_DEFAULTS);
+
+    setRenderOptions({...RENDER_DEFAULTS, stats: !!data.has_stats, preamble: data.has_preamble ?? true});
+    renderBaseline = renderOptions();
     updateRenderBar(!!data.can_render);
+    loadAudioReview(base, data.selected);
   } catch (e) {
     if (!valid()) return;
-    updateStatsToggle(null);
+
     updateRenderBar(false);
     if (hasRawJson) { loadTranscript(base, RAW_JSON_VERSION); return; }
     sel.innerHTML = "";
@@ -1390,36 +1444,16 @@ $("tabLogs").onclick = () => showTab("logs");
 $("logSel").onchange = handle(async () => { currentLogSel = $("logSel").value; await loadLogContent(); });
 $("versionSel").onchange = () => { if (currentBase) loadTranscript(currentBase, $("versionSel").value); };
 $("transcriptReload").onclick = () => { if (currentBase) loadTranscript(currentBase); };
-for (const id of ["optDisfluencies", "optPauses", "optBreaks"]) {
+for (const id of ["optStats", "optPreamble", "optDisfluencies", "optPauses", "optBreaks"]) {
   $(id).onchange = applyRenderOptions;
 }
 for (const id of ["optThreshold", "optMinPause"]) {
   $(id).oninput = debounceRender;
 }
 $("renderReset").onclick = () => {
-  setRenderOptions(RENDER_DEFAULTS);
-  applyRenderOptions();
+  if (currentBase) loadTranscript(currentBase, $("versionSel").value);
 };
 $("renderSave").onclick = saveRenderedView;
-$("statsToggle").onclick = async () => {
-  const base = currentBase;
-  const version = $("versionSel").value;
-  if (!base || !version || version === RAW_JSON_VERSION) return;
-  const seq = ++transcriptSeq, folder = folderSeq;
-  renderSeq++;
-  const action = $("statsToggle").dataset.hasStats ? "remove" : "add";
-  try {
-    const { data } = await api(`/api/transcript/${encodeURIComponent(base)}/stats`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ version, action }),
-    });
-    if (base !== currentBase || seq !== transcriptSeq || folder !== folderSeq || version !== $("versionSel").value) return;
-    $("transcriptText").textContent = data.content;
-    $("transcriptMsg").textContent = `${base} — ${data.versions.length} version(s)`;
-    updateStatsToggle({ has_stats: data.has_stats, stats_available: data.stats_available });
-  } catch (e) { alert(e.message); }
-};
 $("startBtn").onclick = startRun;
 $("stopBtn").onclick = stopRun;
 $("refreshBtn").onclick = handle(loadFiles);
@@ -1481,6 +1515,16 @@ $("consoleResize").addEventListener("keydown", e => {
 $("globalSettingsBtn").onclick=handle(openGlobalSettings);
 $("pipelineSel").addEventListener("change", filterSettings);
 for(const id of ["fileSearch","fileFilter","fileSort"]) $(id).addEventListener(id==="fileSearch"?"input":"change",renderFiles);
+for(const id of ["exportName","exportDestination","exportTXT","exportRTF"]) $(id).addEventListener("input",invalidateExport);
+$("exportPreview").onclick=handle(previewExport);$("exportConfirm").onclick=handle(confirmExport);
+$("exportCancel").onclick=()=>{$("exportDialog").close();exportContext=null;};
+$("exportDialog").addEventListener("cancel",e=>{if(exporting)e.preventDefault();else exportContext=null;});
+$("exportOverwrite").onchange=()=>{$("exportConfirm").disabled=!exportPlan || (exportPlan.existing.length>0&&!$("exportOverwrite").checked);};
+$("reviewAudio").onchange=()=>{$("timeline").hidden=!$("reviewAudio").checked;$("transcriptText").style.display=$("reviewAudio").checked?"none":"";};
+$("audioPlayer").addEventListener("timeupdate",()=>{
+  const time=$("audioPlayer").currentTime;
+  document.querySelectorAll("#timeline .segment").forEach(row=>row.classList.toggle("active",time>=Number(row.dataset.start)&&time<Number(row.dataset.end)));
+});
 function setSidebarWidth(width){
   width=Math.max(220,Math.min(window.innerWidth*.55,700,width));
   document.body.style.setProperty("--sidebar-width",width+"px");$("sidebarResize").setAttribute("aria-valuenow",Math.round(width));

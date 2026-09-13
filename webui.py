@@ -33,6 +33,7 @@ import threading
 import time
 import uuid
 import webbrowser
+import tempfile
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -67,11 +68,12 @@ from transcript_render import (
     TXTFormatter,
     derive_segments,
     DEFAULT_MIN_SILENCE,
+    create_paragraph_text_from_words,
 )
 
 try:
     from fastapi import FastAPI, HTTPException
-    from fastapi.responses import HTMLResponse, JSONResponse
+    from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
     import uvicorn
 except ImportError:  # pragma: no cover
     sys.exit("❌ The web UI needs fastapi and uvicorn:  conda install -c conda-forge fastapi uvicorn")
@@ -1168,12 +1170,15 @@ def api_transcript(basename: str, version: Optional[str] = None) -> Dict[str, An
         content = Path(path).read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         raise HTTPException(500, f"Could not read transcript: {exc}")
+    config = _dconfig.DiarizationConfig()
+    introduction = config.get_preamble_with_transcript_id(selected['timestamp']) if selected.get('timestamp') else config.output_preamble
     return {
         "base": base,
         "versions": versions,
         "selected": selected["id"],
         "content": content,
         "has_stats": transcript_stats.has_stats_header(content),
+        "has_preamble": bool(introduction and content.lstrip().startswith(introduction.strip())),
         "stats_available": bool(transcript_stats.find_analysis_json(path)),
         # Only transcripts with a diarized JSON beside them can be re-rendered.
         "can_render": _diarized_json_for(dirs, selected["id"]) is not None,
@@ -1311,37 +1316,113 @@ def api_render(basename: str, body: Dict[str, Any]) -> Dict[str, Any]:
         "content": content,
         "options": asdict(options),
         "suffix": options.suffix(),
+        "timeline": _timeline_segments(segments, options.linebreak_threshold),
     }
 
 
-@app.post("/api/render/{basename}/save")
-def api_render_save(basename: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    """Write the current view to disk, next to the transcript it came from."""
-    formats = body.get("formats") or ["txt"]
-    unknown = [f for f in formats if f not in ("txt", "rtf")]
-    if unknown:
-        raise HTTPException(400, f"Unknown format(s): {', '.join(unknown)}")
-
+def _export_plan(basename, body):
     dirs, base, selected, segments, options, metadata = _render(basename, body)
+    formats = body.get('formats') or ['txt']
+    if not isinstance(formats, list) or not formats or any(f not in ('txt', 'rtf') for f in formats):
+        raise HTTPException(400, 'Choose TXT and/or RTF')
+    formats = list(dict.fromkeys(formats))
+    name = body.get('name') or (Path(selected['id']).stem + options.suffix() + '_view')
+    if not isinstance(name, str) or not name.strip() or name in ('.', '..') or any(c in name for c in '/\\\x00'):
+        raise HTTPException(400, 'Export name must be a filename without folders')
+    root = Path(dirs['audio']).resolve()
+    destination = (root / (body.get('destination') or 'exports')).resolve()
+    if destination != root and root not in destination.parents:
+        raise HTTPException(400, 'Choose an export folder inside the audio folder')
+    targets = [destination / (name + '.' + fmt) for fmt in formats]
+    protected = set()
+    for version in _transcript_versions(dirs, base):
+        original = Path(dirs['audio']) / version['id']
+        protected.add(original.resolve())
+        protected.add((original.parent.parent / 'rtf' / (original.stem + '.rtf')).resolve())
+    if any(target.resolve() in protected for target in targets):
+        raise HTTPException(409, 'Choose a new name or folder. Pipeline transcript versions are preserved.')
+    if any(target.is_symlink() for target in targets):
+        raise HTTPException(409, 'Export targets cannot be symbolic links')
+    evidence = [(str(t), t.stat().st_mtime_ns, t.stat().st_size) if t.exists() else (str(t), None) for t in targets]
+    token = hashlib.sha256(json.dumps([selected['id'], body.get('options'), evidence], sort_keys=True).encode()).hexdigest()
+    plan = dict(name=name, destination=str(destination), paths=[str(t) for t in targets],
+                existing=[str(t) for t in targets if t.exists()], token=token)
+    return plan, targets, formats, selected, segments, options, metadata
+
+
+@app.post('/api/render/{basename}/export-preview')
+def api_export_preview(basename: str, body: Dict[str, Any]):
+    return _export_plan(basename, body)[0]
+
+
+@app.post('/api/render/{basename}/save')
+def api_render_save(basename: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    plan, targets, formats, selected, segments, options, metadata = _export_plan(basename, body)
+    if body.get('token') != plan['token']:
+        raise HTTPException(409, 'Review the export destination again before saving')
+    if plan['existing'] and not body.get('overwrite'):
+        raise HTTPException(409, 'Export files already exist. Choose a new name or explicitly replace them.')
     config = _render_config(options.linebreak_threshold, options.preamble)
-    stats = metadata.get("speaker_stats")
-    transcript_id = selected.get("timestamp")
+    rendered = [(TXTFormatter() if fmt == 'txt' else RTFFormatter()).render(
+        segments, config=config, transcript_id=selected.get('timestamp'),
+        speaker_stats=metadata.get('speaker_stats'), stats=options.stats) for fmt in formats]
+    # Generate before touching any destination; pipeline originals are never targets.
+    for target, content in zip(targets, rendered):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if body.get('overwrite'):
+            fd, temporary = tempfile.mkstemp(prefix='.swhisper-export-', dir=target.parent)
+            try:
+                with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                    handle.write(content)
+                os.replace(temporary, target)
+            finally:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
+        else:
+            try:
+                with target.open('x', encoding='utf-8') as handle:
+                    handle.write(content)
+            except FileExistsError:
+                raise HTTPException(409, 'An export file appeared after preview. Review the destination again.')
+    return {'written': plan['paths']}
 
-    stem = os.path.splitext(os.path.basename(selected["id"]))[0] + options.suffix()
-    root = os.path.dirname(os.path.dirname(os.path.join(dirs["audio"], selected["id"])))
 
-    written: List[str] = []
-    for fmt in formats:
-        target_dir = os.path.join(root, fmt)
-        os.makedirs(target_dir, exist_ok=True)
-        path = os.path.join(target_dir, f"{stem}.{fmt}")
-        formatter = TXTFormatter() if fmt == "txt" else RTFFormatter()
-        formatter.format(segments, path, config=config,
-                         transcript_id=transcript_id, speaker_stats=stats,
-                         stats=options.stats)
-        written.append(os.path.relpath(path, dirs["audio"]))
+def _audio_file(base):
+    audio = Path(state.audio_dir())
+    _safe_base(str(audio), base)
+    candidates = [p for p in audio.iterdir() if p.stem == base and p.suffix.lower() in AUDIO_EXTENSIONS and p.is_file()]
+    candidates.sort(key=lambda p: (p.suffix.lower() != '.wav', p.name))
+    if not candidates:
+        raise HTTPException(404, 'No audio file found')
+    return candidates[0]
 
-    return {"base": base, "written": written, "suffix": options.suffix()}
+
+def _timeline_segments(segments, threshold=1.0):
+    rows = []
+    for segment in segments:
+        start, end = segment.get('start'), segment.get('end')
+        if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
+            continue
+        text = create_paragraph_text_from_words(segment, gap_threshold=threshold)
+        rows.append(dict(start=max(0, start), end=max(start, end), speaker=segment.get('speaker', ''), text=text))
+    return rows
+
+
+@app.get('/api/audio/{basename}')
+def api_audio(basename: str):
+    return FileResponse(_audio_file(basename))
+
+
+@app.get('/api/timeline/{basename}')
+def api_timeline(basename: str, version: Optional[str] = None):
+    dirs = state.dirs()
+    base = _safe_base(dirs['audio'], basename)
+    selected = _selected_version(dirs, base, version)
+    path = _diarized_json_for(dirs, selected['id'])
+    if path is None:
+        return {'segments': [], 'audio': str(_audio_file(base).name)}
+    data = json.loads(Path(path).read_text(encoding='utf-8'))
+    return {'segments': _timeline_segments(data.get('segments', [])), 'audio': _audio_file(base).name}
 
 
 @app.get("/api/json-transcript/{basename}")
