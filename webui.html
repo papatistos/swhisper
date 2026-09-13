@@ -284,6 +284,17 @@
       <span class="status" id="runStatus" role="status">Idle</span>
       <span id="connectionStatus" role="status">Connecting…</span>
       <span id="progressStatus"></span>
+      <div id="scribeControls" hidden>
+        <select id="scribeScope" aria-label="Scribe recordings scope">
+          <option value="selected">Selected recording only</option>
+          <option value="folder">Every recording in the folder</option>
+        </select>
+        <select id="scribeLanguage" aria-label="Scribe language">
+          <option value="Swedish (verbatim)">Swedish (verbatim)</option>
+          <option value="Swedish">Swedish</option>
+        </select>
+        <span id="scribeNotice" role="note">Scribe uploads the recordings to scribe.sunet.se for remote transcription. Local Whisper model, language, decoding, VAD, chunking, force-reprocessing and file-limit settings do not apply.</span>
+      </div>
     </div>
     <div id="uiNotice" role="alert" hidden></div>
     <div id="tabBar" role="tablist" aria-label="File views">
@@ -379,8 +390,10 @@
   </div>
 </dialog>
 <dialog id="previewDialog" aria-labelledby="previewTitle">
-  <h2 id="previewTitle">Run folder preview</h2>
+  <h2 id="previewTitle"></h2>
   <p id="previewFolder"></p>
+  <p id="previewConsent" hidden>Scribe uploads the listed recordings to scribe.sunet.se and transcribes them there. Confirm only if remote processing is permitted.</p>
+  <label id="consentRow" hidden><input type="checkbox" id="scribeConsent"> I consent to uploading these recordings to Scribe</label>
   <p id="previewSummary" role="status"></p>
   <ul id="previewNotes"></ul>
   <table id="previewTable"><thead><tr><th>File</th><th>Stage</th><th>Action</th><th>Reason</th></tr></thead><tbody></tbody></table>
@@ -457,7 +470,8 @@ function finishDirtyDialog(choice) {
 }
 function updateRunControls() {
   const running = !!(lastStatus && lastStatus.running);
-  $("startBtn").disabled = !connected || !initialized || running || runBusy || changingDir || saving || editorLoading;
+  const scribeGate = $("pipelineSel").value === "scribe" && !scribeSelectionReady();
+  $("startBtn").disabled = !connected || !initialized || running || runBusy || changingDir || saving || editorLoading || scribeGate;
   $("stopBtn").disabled = !connected || !running || runBusy;
   for (const id of ["pipelineSel", "dirBtn", "dirInput", "dirMenuBtn"]) {
     $(id).disabled = !connected || running || runBusy || changingDir;
@@ -798,9 +812,19 @@ function renderSettings(data, base, scope) {
   filterSettings(); updateSaveState(); updateRunControls();
 }
 function filterSettings() {
+  const scribe = $("pipelineSel").value === "scribe";
+  $("scribeControls").hidden = !scribe;
   const onlyDiarize = editorScope === "file" && $("pipelineSel").value === "diarize4" && !$("showOtherSettings")?.checked;
   document.querySelectorAll("#editor .row").forEach(row => {row.hidden = onlyDiarize && row.dataset.stage === "transcribe";});
   document.querySelectorAll("#editor details.group").forEach(group => {group.hidden = ![...group.querySelectorAll(".row")].some(row=>!row.hidden);});
+  if (scribe) document.querySelectorAll("#editor details.group").forEach(group => {group.hidden = true;});
+}
+function scribeSelectionReady() {
+  return $("scribeScope").value !== "selected" || Object.values(FILES_BY_BASE).some(file => file.base === currentBase);
+}
+function updateScribeGate() {
+  if ($("pipelineSel").value !== "scribe" || pendingPreview?.pipeline !== "scribe") return;
+  $("startBtn").disabled = !scribeSelectionReady();
 }
 async function openGlobalSettings() {
   if (changingDir || !await resolveUnsaved()) return;
@@ -846,6 +870,7 @@ async function selectFile(base, force = false) {
   $("editor").textContent = "Loading settings…";
   $("deleteBtn").disabled = true;
   updateSaveState(); updateRunControls();
+  updateScribeGate();
   showTab(currentTab);
   document.querySelectorAll("#files .file").forEach(d => {
     d.classList.toggle("sel", d.dataset.base === base);
@@ -1215,6 +1240,7 @@ async function saveSidecar() {
     savedForm = JSON.stringify(values);
     $("deleteBtn").disabled = !data.exists;
     handle(loadFiles)();
+    updateScribeGate();
     return true;
   } catch (e) {
     $("deleteBtn").disabled = deleteDisabled;
@@ -1280,9 +1306,24 @@ async function startRun() {
   runBusy = true; updateRunControls();
   try {
     const pipeline = $("pipelineSel").value;
-    const { data } = await api(`/api/run/preview?pipeline=${encodeURIComponent(pipeline)}`);
+    const scribe = pipeline === "scribe";
+    const selected = scribe && $("scribeScope").value === "selected" ? (currentBase || "") : "";
+    const language = scribe ? $("scribeLanguage").value : undefined;
+    if (scribe && $("scribeScope").value === "selected" && !selected) {
+      $("runStatus").textContent = "Select a recording, or choose the explicit folder scope.";
+      return;
+    }
+    const query = new URLSearchParams({ pipeline });
+    if (scribe) { query.set("selected", selected); query.set("language", language); }
+    const { data } = await api(`/api/run/preview?${query}`);
     pendingPreview = data;
-    $("previewFolder").textContent = `${META.pipelines.find(p => p.id === pipeline).label} · ${data.audio_dir}`;
+    const label = META.pipelines.find(p => p.id === pipeline).label;
+    $("previewTitle").textContent = scribe ? "Scribe remote upload preview" : "Run folder preview";
+    $("previewConsent").hidden = !scribe;
+    $("consentRow").hidden = !scribe;
+    $("scribeConsent").checked = false;
+    $("previewStart").textContent = scribe ? "Upload to Scribe and run" : "Run folder";
+    $("previewFolder").textContent = `${label} · ${data.audio_dir}` + (scribe && selected ? ` · ${selected}` : "");
     const counts = {};
     for (const row of data.files) counts[row.action] = (counts[row.action] || 0) + 1;
     $("previewSummary").textContent = data.files.length
@@ -1297,6 +1338,7 @@ async function startRun() {
       return tr;
     }));
     $("previewStart").disabled = !data.files.some(row => ["process", "reprocess"].includes(row.action));
+    updateScribeGate();
     $("previewDialog").showModal();
   } catch (e) { $("runStatus").textContent = e.message; }
   finally { runBusy = false; updateRunControls(); }
@@ -1306,9 +1348,16 @@ async function launchPreview() {
   runBusy = true; updateRunControls();
   $("previewStart").disabled = true; $("previewCancel").disabled = true;
   try {
+    const body = { pipeline: pendingPreview.pipeline, preview_token: pendingPreview.token };
+    if (pendingPreview.pipeline === "scribe") {
+      if (!$("scribeConsent").checked) { $("previewSummary").textContent = "Consent to the remote upload first, or cancel."; return; }
+      body.remote_upload = true;
+      body.selected = pendingPreview.selected || "";
+      body.language = pendingPreview.language;
+    }
     const { data } = await api("/api/run", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pipeline: pendingPreview.pipeline, preview_token: pendingPreview.token }),
+      body: JSON.stringify(body),
     });
     lastStatus = data;
     logOffset = 0; activeRunId = data.run_id;

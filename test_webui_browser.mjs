@@ -12,7 +12,7 @@ const saved = {a:{values:{SWHISPER_NUM_SPEAKERS:'2',SWHISPER_CONDITION_ON_PREVIO
 const writes = [], launches = [], errors = [], exports = [];
 let globalValues={}, globalRevision="g1", exportExists=false;
 const meta = () => ({audio_dir:audioDir,audio_paths:['/mock/audio','/mock/other'],
-  pipelines:[{id:'transcribe4',label:'Standard pipeline'},{id:'diarize4',label:'Diarization only'}],groups:[{name:'Speakers',keys:['SWHISPER_NUM_SPEAKERS','SWHISPER_CONDITION_ON_PREVIOUS']}],
+  pipelines:[{id:'transcribe4',label:'Standard pipeline'},{id:'diarize4',label:'Diarization only'},{id:'scribe',label:'SUNET Scribe + local diarization'}],groups:[{name:'Speakers',keys:['SWHISPER_NUM_SPEAKERS','SWHISPER_CONDITION_ON_PREVIOUS']}],
   params:{SWHISPER_NUM_SPEAKERS:{type:'int',min:1,label:'Number of speakers',global:2,stage:'diarize',help:'Speaker count'},SWHISPER_CONDITION_ON_PREVIOUS:{type:'bool',global:true,stage:'transcribe',help:'Use previous text'}}});
 const server = http.createServer(async (req,res) => {
   const u = new URL(req.url, 'http://localhost');
@@ -205,6 +205,18 @@ try {
   });
   await check('Clean page has no unload warning',async()=>{
     assert.equal(await evaluate('(()=>{const e=new Event("beforeunload",{cancelable:true});window.dispatchEvent(e);return e.defaultPrevented})()'),false);
+  });
+  await check('Scribe defaults to explicit selected scope and Swedish verbatim without changing local defaults',async()=>{
+    assert.equal(await evaluate('$("pipelineSel").value'),'transcribe4');
+    await evaluate('$("pipelineSel").value="scribe";$("pipelineSel").dispatchEvent(new Event("change"))');
+    assert.equal(await evaluate('$("scribeControls")?.hidden'),false);
+    assert.equal(await evaluate('$("scribeLanguage").value'),'Swedish (verbatim)');
+    assert.equal(await evaluate('$("scribeScope").value'),'selected');
+    assert.match(await evaluate('$("scribeNotice").textContent'),/Local Whisper.*do not apply/);
+    await evaluate('currentBase=null;updateRunControls()');
+    assert.equal(await evaluate('$("startBtn").disabled'),true,'Selected scope without a recording must not start');
+    await select('a');await wait('editorBase==="a"');
+    assert.equal(await evaluate('$("startBtn").disabled'),false);
   });
   assert.deepEqual(errors,[],'No uncaught browser errors');
   console.log('All browser workflow checks passed.');
