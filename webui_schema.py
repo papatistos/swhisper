@@ -70,14 +70,16 @@ def validate_settings(values, specs):
                 value = float(raw)
             else:
                 value = raw
+            # List-valued settings (comma separated temperatures, token ids)
+            # are bounded element by element, never compared as a whole.
             numeric = value if isinstance(value, list) else [value]
             if any(isinstance(v, float) and not math.isfinite(v) for v in numeric):
                 raise ValueError('Must be a finite number')
-            if 'min' in spec and value < spec['min']:
+            if 'min' in spec and any(v < spec['min'] for v in numeric):
                 raise ValueError(f'Must be at least {spec["min"]}')
-            if 'max' in spec and value > spec['max']:
+            if 'max' in spec and any(v > spec['max'] for v in numeric):
                 raise ValueError(f'Must be at most {spec["max"]}')
-            if 'choices' in spec and value not in spec['choices']:
+            if 'choices' in spec and any(v not in spec['choices'] for v in numeric):
                 raise ValueError('Choose ' + ' or '.join(spec['choices']))
         except (ValueError, TypeError) as exc:
             errors[key] = str(exc)
