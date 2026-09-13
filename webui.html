@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>swhisper</title>
 <style>
+  [hidden] { display: none !important; }
   :root {
     --bg: #14161a; --panel: #1c1f26; --panel2: #22262f; --border: #2e3340;
     --text: #d7dce4; --muted: #8b93a3; --accent: #5aa7ff; --ok: #4cc38a;
@@ -177,6 +178,19 @@
                       font-family: ui-monospace, Menlo, monospace; font-size: 0.72rem;
                       color: var(--muted); white-space: pre-wrap; word-break: break-all; }
 </style>
+<style>
+  .row { grid-template-columns: minmax(140px, 230px) minmax(0, 1fr); align-items: start; padding: 9px 0; }
+  .row label { word-break: normal; border: 0; cursor: pointer; }
+  .row input, .row select, .row textarea { max-width: 100%; }
+  .fieldHelp, .inheritance, .fieldError, .settingsNote { font-size: .72rem; color: var(--muted); }
+  .fieldHelp { margin-top: 4px; }
+  .fieldError { color: var(--err); }
+  .fieldValue { min-width: 0; }
+  .boolControl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row input[type=checkbox] { width: 22px; height: 22px; flex-shrink: 0; }
+  .resetSetting { padding: 2px 6px; font-size: .65rem; margin-left: 6px; }
+  details.group > summary { cursor: pointer; font-size: .9rem; padding: 8px 0; border-bottom: 1px solid var(--border); }
+</style>
 </head>
 <body>
 <header>
@@ -308,33 +322,36 @@ let changingDir = false;
 let editorBase = null, savedForm = null, saving = false, editorLoading = false;
 let editorSeq = 0, folderSeq = 0, filesSeq = 0, transcriptSeq = 0, logSeq = 0, logListSeq = 0;
 let connected = false, lastStatus = null, runBusy = false, pollBusy = false, activeRunId = null;
+let editorScope = "file", editorMeta = null;
 let pendingPreview = null, dirtyChoice = null, initialized = false;
 const escapeHTML = value => String(value).replace(/[&<>"']/g, c => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"}[c]));
 
 function formValues() {
-  const values = { _comment: ($("commentField") || { value: "" }).value };
+  const values = editorScope === "global" ? {} : { _comment: ($("commentField") || { value: "" }).value };
   document.querySelectorAll("#editor [data-key]").forEach(el => {
     const raw = el.dataset.originalValue === el.value ? el.dataset.originalRaw : el.value;
-    if (raw.trim() !== "") values[el.dataset.key] = raw.trim();
+    if (raw.trim() !== "" || (editorScope === "global" && el.dataset.explicit === "1")) values[el.dataset.key] = raw.trim();
   });
   return values;
 }
 function formDirty() {
-  return !!editorBase && savedForm !== null && JSON.stringify(formValues()) !== savedForm;
+  return !!editorBase && savedForm !== null && (JSON.stringify(formValues()) !== savedForm || !!document.querySelector("#editor input:invalid"));
 }
 function updateSaveState() {
-  $("saveBtn").disabled = saving || editorLoading || !formDirty();
+  $("saveBtn").disabled = saving || editorLoading || !formDirty() || (editorScope === "global" && lastStatus?.running);
   $("saveBtn").textContent = saving ? "Saving…" : "Save";
   if (!saving && !editorLoading && editorBase) setMsg(formDirty() ? "Unsaved changes" : "All changes saved.", "");
 }
 function restoreSavedForm() {
   if (savedForm === null) return;
   const values = JSON.parse(savedForm);
-  $("commentField").value = values._comment || "";
+  if ($("commentField")) $("commentField").value = values._comment || "";
   document.querySelectorAll("#editor [data-key]").forEach(el => {
     const value = values[el.dataset.key] || "";
     el.value = value === el.dataset.originalRaw ? el.dataset.originalValue : value;
-    el.classList.toggle("set", el.value.trim() !== "");
+    el.dataset.explicit = Object.hasOwn(values, el.dataset.key) ? "1" : "0";
+    if (el.type === "checkbox") el.checked = el.value ? ["true", "1", "yes", "on"].includes(el.value) : el.dataset.globalBool === "true";
+    syncSetting(el);
   });
   updateSaveState();
 }
@@ -342,7 +359,7 @@ async function resolveUnsaved() {
   if (saving) return false;
   if (!formDirty()) return true;
   if (dirtyChoice) return false;
-  $("dirtyText").textContent = `Save changes to ${editorBase} before continuing?`;
+  $("dirtyText").textContent = `Save changes to ${editorScope === "global" ? "global settings" : editorBase} before continuing?`;
   const choice = await new Promise(resolve => {
     dirtyChoice = resolve;
     $("dirtyDialog").showModal();
@@ -364,6 +381,7 @@ function updateRunControls() {
   for (const id of ["pipelineSel", "dirBtn", "dirInput", "dirMenuBtn"]) {
     $(id).disabled = !connected || running || runBusy || changingDir;
   }
+  if (editorScope === "global") $("saveBtn").disabled = saving || editorLoading || !formDirty() || running;
 }
 function reportError(error) { setMsg(error.message, "err"); }
 function handle(action) { return (...args) => Promise.resolve().then(() => action(...args)).catch(reportError); }
@@ -557,45 +575,143 @@ async function loadFiles() {
 
 /* ---------- sidecar editor ---------- */
 
+function syncSetting(el) {
+  const box = el.closest(".fieldValue");
+  if (!box) return;
+  const explicit = editorScope === "global" ? el.dataset.explicit === "1" : el.value !== "";
+  el.classList.toggle("set", explicit);
+  const note = box.querySelector(".inheritance");
+  note.textContent = explicit ? (editorScope === "global" ? "global value" : "per-file override") :
+    (editorScope === "global" ? "program default" : "global");
+  box.querySelector(".resetSetting").disabled = !explicit;
+  box.querySelector(".resetSetting").hidden = !explicit;
+  const error = box.querySelector(".fieldError");
+  error.textContent = el.validity.valid ? "" : el.validationMessage;
+  el.setAttribute("aria-invalid", String(!el.validity.valid));
+}
 function inputFor(key, spec, value) {
   const globalVal = spec.global === null || spec.global === undefined ? "" : String(spec.global);
+  const box = document.createElement("div"); box.className = "fieldValue";
   let el;
   if (spec.type === "bool") {
-    el = document.createElement("select");
-    for (const [v, label] of [["", `global (${globalVal || "unset"})`], ["true", "true"], ["false", "false"]]) {
-      const o = document.createElement("option");
-      o.value = v; o.textContent = label;
-      el.appendChild(o);
-    }
+    el = document.createElement("input"); el.type = "checkbox";
     const raw = value !== undefined ? String(value).toLowerCase() : "";
     const normalized = ["1", "yes", "on"].includes(raw) ? "true" : ["0", "no", "off"].includes(raw) ? "false" : raw;
-    if (normalized && !["true", "false"].includes(normalized)) {
-      const invalid = document.createElement("option");
-      invalid.value = raw; invalid.textContent = `Invalid value: ${raw}`; el.appendChild(invalid);
-    }
     el.value = normalized;
-    el.dataset.originalValue = normalized;
-    el.dataset.originalRaw = raw;
-  } else if (key === "SWHISPER_OUTPUT_PREAMBLE" || key === "SWHISPER_INITIAL_PROMPT") {
-    el = document.createElement("textarea");
-    el.rows = 2;
-    el.placeholder = globalVal ? `global: ${globalVal.slice(0, 120)}${globalVal.length > 120 ? "…" : ""}` : "global: (empty)";
-    el.value = value !== undefined ? value : "";
+    el.checked = raw ? ["true", "1", "yes", "on"].includes(raw) : ["true", "1", "yes", "on"].includes(globalVal.toLowerCase());
+    el.dataset.globalBool = String(["true", "1", "yes", "on"].includes(globalVal.toLowerCase()));
+    el.dataset.originalValue = normalized; el.dataset.originalRaw = raw;
+    if (raw && !["true", "false"].includes(normalized)) el.setCustomValidity("Choose true or false, or use the inherited value.");
+  } else if (key.includes("PREAMBLE") || key.includes("INITIAL_PROMPT")) {
+    el = document.createElement("textarea"); el.rows = 3;
+  } else if (spec.choices) {
+    el = document.createElement("select");
+    for (const choice of ["", ...spec.choices]) {
+      const option = document.createElement("option"); option.value = choice; option.textContent = choice || `Use ${editorScope === "global" ? "program default" : "global"}`; el.appendChild(option);
+    }
   } else {
     el = document.createElement("input");
-    el.type = "text";
-    el.placeholder = globalVal !== "" ? `global: ${globalVal}` : "global: unset";
-    el.value = value !== undefined ? value : "";
+    el.type = ["int", "float"].includes(spec.type) ? "number" : "text";
+    if (el.type === "number") { el.step = spec.type === "int" ? "1" : "any"; if (spec.min !== undefined) el.min = spec.min; if (spec.max !== undefined) el.max = spec.max; }
   }
-  el.dataset.key = key;
-  el.id = `setting-${key}`;
-  el.title = spec.help || key;
-  const mark = () => el.classList.toggle("set", el.value.trim() !== "");
-  el.addEventListener("input", mark);
-  el.addEventListener("input", updateSaveState);
-  el.addEventListener("change", updateSaveState);
-  mark();
-  return el;
+  if (spec.type !== "bool") {
+    if (el.type === "number" && value !== undefined && !Number.isFinite(Number(value))) {
+      el.type = "text"; el.dataset.numericType = spec.type; el.setCustomValidity("Enter a valid number.");
+    }
+    el.value = value ?? ""; el.placeholder = globalVal || "Not set";
+  }
+  el.dataset.explicit = value !== undefined ? "1" : "0";
+  el.dataset.key = key; el.id = `setting-${key}`;
+  el.setAttribute("aria-describedby", `help-${key} error-${key} inherit-${key}`);
+  const control = document.createElement("div"); control.className = spec.type === "bool" ? "boolControl" : "";
+  control.appendChild(el);
+  const inheritance = document.createElement("span"); inheritance.className = "inheritance"; inheritance.id = `inherit-${key}`;
+  control.appendChild(inheritance);
+  const reset = document.createElement("button"); reset.className = "resetSetting"; reset.type = "button";
+  reset.textContent = editorScope === "global" ? "Use program default" : "Use global";
+  reset.setAttribute("aria-label", `${reset.textContent} for ${spec.label || key}`);
+  reset.onclick = () => {
+    el.value = ""; el.dataset.explicit = "0";
+    el.setCustomValidity("");
+    if (el.type === "checkbox") { el.checked = el.dataset.globalBool === "true"; el.indeterminate = editorScope === "global"; }
+    syncSetting(el); if (editorScope === "global") inheritance.textContent = "program default after saving"; updateSaveState();
+  };
+  control.appendChild(reset); box.appendChild(control);
+  const help = document.createElement("div"); help.className = "fieldHelp"; help.id = `help-${key}`;
+  help.textContent = `${spec.help || ""}${spec.type !== "bool" && editorScope !== "global" ? ` Global: ${globalVal || "not set"}.` : ""}`;
+  box.appendChild(help);
+  const error = document.createElement("div"); error.className = "fieldError"; error.id = `error-${key}`; box.appendChild(error);
+  const change = () => {
+    if (el.type === "checkbox") { el.value = String(el.checked); el.indeterminate = false; el.setCustomValidity(""); }
+    if (el.dataset.numericType) {
+      const n = Number(el.value);
+      el.setCustomValidity(el.value && (!Number.isFinite(n) || (el.dataset.numericType === "int" && !Number.isInteger(n)) || (spec.min !== undefined && n < spec.min) || (spec.max !== undefined && n > spec.max)) ? "Enter a valid number within the allowed range." : "");
+    }
+    el.dataset.explicit = "1"; syncSetting(el); updateSaveState();
+  };
+  el.addEventListener("input", change); el.addEventListener("change", change);
+  return box;
+}
+function fieldErrors(errors) {
+  if (Object.keys(errors || {}).length && $("showOtherSettings")) { $("showOtherSettings").checked = true; filterSettings(); }
+  for (const [key, message] of Object.entries(errors || {})) {
+    const el = $(`setting-${key}`); if (!el) continue;
+    $(`error-${key}`).textContent = message; el.setAttribute("aria-invalid", "true");
+    const group = el.closest("details"); if (group) group.open = true;
+  }
+}
+function renderSettings(data, base, scope) {
+  editorScope = scope; editorMeta = scope === "global" ? data : META;
+  const editor = $("editor"); editor.replaceChildren();
+  const title = document.createElement("h2"); title.textContent = scope === "global" ? "Global settings" : base; editor.appendChild(title);
+  if (scope === "file") {
+    const comment = document.createElement("textarea"); comment.id = "commentField"; comment.rows = 3; comment.value = data.comment || "";
+    comment.setAttribute("aria-label", "Comments about this file"); comment.placeholder = "Comments do not trigger reprocessing."; comment.style.width = "100%";
+    comment.addEventListener("input", updateSaveState); editor.appendChild(comment);
+  } else {
+    const note = document.createElement("p"); note.className = "settingsNote";
+    note.textContent = "Defaults for future runs. Per-file overrides take precedence. Changes are saved to " + data.path + ". Credentials are not shown."; editor.appendChild(note);
+  }
+  const common = ["SWHISPER_LANGUAGE", "SWHISPER_NUM_SPEAKERS", "SWHISPER_MIN_SPEAKERS", "SWHISPER_MAX_SPEAKERS", "SWHISPER_INITIAL_PROMPT", "SWHISPER_FORCE_REPROCESS", "SWHISPER_DIARIZE_FORCE_REPROCESS"];
+  const groups = [{name:"Common settings",keys:common.filter(k=>editorMeta.params[k])}, ...editorMeta.groups.map(g=>({...g,keys:g.keys.filter(k=>!common.includes(k))}))];
+  if (scope === "file") {
+    const note = document.createElement("label"); note.className = "settingsNote";
+    note.innerHTML = '<input id="showOtherSettings" type="checkbox"> Show settings for other pipelines'; editor.appendChild(note);
+    note.querySelector("input").onchange = filterSettings;
+  }
+  for (const group of groups) {
+    if (!group.keys.length) continue;
+    const section = document.createElement("details"); section.className = "group";
+    section.open = group.name === "Common settings" || group.keys.some(k=>Object.hasOwn(data.values,k));
+    const summary = document.createElement("summary"); summary.textContent = group.name; section.appendChild(summary);
+    for (const key of group.keys) {
+      const spec = editorMeta.params[key]; if (!spec) continue;
+      const row = document.createElement("div"); row.className = "row"; row.dataset.stage = spec.stage;
+      const label = document.createElement("label"); label.htmlFor = `setting-${key}`;
+      label.textContent = spec.label || key.replace("SWHISPER_", "").replaceAll("_", " ").toLowerCase(); label.title = key;
+      row.append(label, inputFor(key, spec, data.values[key])); section.appendChild(row);
+    }
+    editor.appendChild(section);
+  }
+  if (data.unknown && Object.keys(data.unknown).length) {
+    const note = document.createElement("p"); note.className="settingsNote"; note.textContent="Additional settings are preserved: " + Object.keys(data.unknown).join(", ");editor.appendChild(note);
+  }
+  editorBase = scope === "global" ? "__global__" : base;
+  editor.querySelectorAll("[data-key]").forEach(syncSetting);
+  savedForm = JSON.stringify(formValues()); editorLoading = false; editor.inert = false;
+  $("editorBar").style.display = currentTab === "settings" ? "" : "none";
+  $("deleteBtn").hidden = scope === "global"; $("deleteBtn").disabled = !data.exists;
+  filterSettings(); updateSaveState(); updateRunControls();
+}
+function filterSettings() {
+  const onlyDiarize = editorScope === "file" && $("pipelineSel").value === "diarize4" && !$("showOtherSettings")?.checked;
+  document.querySelectorAll("#editor .row").forEach(row => {row.hidden = onlyDiarize && row.dataset.stage === "transcribe";});
+  document.querySelectorAll("#editor details.group").forEach(group => {group.hidden = ![...group.querySelectorAll(".row")].some(row=>!row.hidden);});
+}
+function validateForm() {
+  const invalid = document.querySelector("#editor input:invalid");
+  if (invalid) {if($("showOtherSettings")){$("showOtherSettings").checked=true;filterSettings();}invalid.closest("details").open=true;invalid.reportValidity();syncSetting(invalid);return false;}
+  return true;
 }
 
 async function selectFile(base, force = false) {
@@ -628,56 +744,7 @@ async function selectFile(base, force = false) {
     return false;
   }
   if (seq !== editorSeq || folder !== folderSeq || base !== currentBase) return false;
-  const editor = $("editor");
-  editor.innerHTML = `<h2 style="margin:0 0 12px;font-size:1.05rem">${escapeHTML(base)}</h2>`;
-
-  const commentBox = document.createElement("div");
-  commentBox.id = "commentBox";
-  commentBox.innerHTML = `<h3 style="font-size:0.75rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 6px;border-bottom:1px solid var(--border);padding-bottom:4px">Comments</h3>`;
-  const commentEl = document.createElement("textarea");
-  commentEl.id = "commentField";
-  commentEl.rows = 3;
-  commentEl.placeholder = "Free-text notes about this file (stored in the sidecar as comment lines, ignored by the pipeline — editing this never triggers reprocessing).";
-  commentEl.title = "Free-text notes, not read by any script.";
-  commentEl.value = data.comment || "";
-  commentEl.setAttribute("aria-label", "Comments about this file");
-  commentEl.addEventListener("input", updateSaveState);
-  commentBox.appendChild(commentEl);
-  editor.appendChild(commentBox);
-
-  for (const group of META.groups) {
-    const g = document.createElement("div");
-    g.className = "group";
-    g.innerHTML = `<h3>${group.name}</h3>`;
-    for (const key of group.keys) {
-      const spec = META.params[key];
-      const row = document.createElement("div");
-      row.className = "row";
-      const label = document.createElement("label");
-      label.innerHTML = `${key.replace("SWHISPER_", "")}<span class="stage">${spec.stage}</span>`;
-      label.title = `${spec.help || ""}\n\n(${key})`;
-      label.htmlFor = `setting-${key}`;
-      row.appendChild(label);
-      row.appendChild(inputFor(key, spec, data.values[key]));
-      g.appendChild(row);
-    }
-    editor.appendChild(g);
-  }
-  if (data.unknown && Object.keys(data.unknown).length) {
-    const warn = document.createElement("div");
-    warn.className = "group";
-    warn.innerHTML = `<h3>Additional settings (preserved when saving)</h3>
-      <div style="color:var(--muted);font-size:0.8rem">${Object.entries(data.unknown).map(([k, v]) => `${escapeHTML(k)}=${escapeHTML(v)}`).join("<br>")}</div>`;
-    editor.appendChild(warn);
-  }
-  editorBase = base;
-  savedForm = JSON.stringify(formValues());
-  editorLoading = false;
-  editor.inert = false;
-  $("editorBar").style.display = currentTab === "settings" ? "" : "none";
-  $("deleteBtn").disabled = !data.exists;
-  updateSaveState(); updateRunControls();
-  setMsg(data.exists ? "Sidecar file exists — blue fields are per-file overrides." : "No sidecar yet — fill in any field and save.", "");
+  renderSettings(data, base, "file");
   return true;
 }
 
@@ -703,7 +770,7 @@ function showTab(tab) {
   $("editor").style.display = tab === "settings" ? "" : "none";
   $("transcriptView").style.display = tab === "transcript" ? "" : "none";
   $("logsView").style.display = tab === "logs" ? "" : "none";
-  $("editorBar").style.display = (tab === "settings" && currentBase) ? "" : "none";
+  $("editorBar").style.display = (tab === "settings" && editorBase) ? "" : "none";
   if (tab === "transcript" && currentBase) loadTranscript(currentBase);
   if (tab === "logs") handle(loadLogList)();
 }
@@ -986,6 +1053,7 @@ async function loadLogContent() {
 }
 
 async function saveSidecar() {
+  if (!validateForm()) return false;
   if (saving || editorLoading || !editorBase || editorBase !== currentBase) return false;
   if (!formDirty()) return true;
   const base = editorBase, folder = folderSeq, values = formValues();
@@ -998,7 +1066,7 @@ async function saveSidecar() {
     const { status, data } = await api(`/api/sidecar/${encodeURIComponent(base)}`, {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values),
     });
-    if (status === 422) throw new Error("Invalid values: " + Object.entries(data.errors || {}).map(([k, e]) => `${k}: ${e}`).join(" · "));
+    if (status === 422) { fieldErrors(data.errors); throw new Error("Invalid values: " + Object.entries(data.errors || {}).map(([k, e]) => `${k}: ${e}`).join(" · ")); }
     if (folder !== folderSeq || base !== editorBase) return false;
     savedForm = JSON.stringify(values);
     $("deleteBtn").disabled = !data.exists;
@@ -1312,6 +1380,7 @@ $("consoleResize").addEventListener("keydown", e => {
   e.preventDefault(); setConsoleCollapsed(false);
   setConsoleHeight($("consolePanel").getBoundingClientRect().height + (e.key === "ArrowUp" ? 20 : -20));
 });
+$("pipelineSel").addEventListener("change", filterSettings);
 initFontSize();
 initConsole();
 initConsoleResize();

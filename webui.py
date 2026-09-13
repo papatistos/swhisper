@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import math
 import json
 import os
 import re
@@ -88,6 +89,60 @@ def _load_module(name: str, relpath: str):
 # modules directly instead so the UI starts instantly and works without ML deps.
 _tconfig = _load_module("swhisper_webui_tconfig", "transcribe/config.py")
 _dconfig = _load_module("swhisper_webui_dconfig", "diarize/config.py")
+
+
+def parameter_ui(key):
+    labels = {'NUM_SPEAKERS': 'Number of speakers', 'MIN_SPEAKERS': 'Minimum speakers',
+              'MAX_SPEAKERS': 'Maximum speakers', 'FORCE_REPROCESS': 'Reprocess transcription',
+              'DIARIZE_FORCE_REPROCESS': 'Reprocess diarization', 'VAD': 'Voice activity detection',
+              'INITIAL_PROMPT': 'Transcription context', 'CONDITION_ON_PREVIOUS': 'Use previous text as context',
+              'OUTPUT_PREAMBLE': 'Transcript introduction'}
+    short = key.removeprefix('SWHISPER_')
+    result = {'label': labels.get(short, short.replace('_', ' ').capitalize())}
+    if short in ('NUM_SPEAKERS', 'MIN_SPEAKERS', 'MAX_SPEAKERS', 'BEAM_SIZE', 'BEST_OF', 'FILE_LIMIT'):
+        result['min'] = 1
+    if short in ('NO_SPEECH_THRESHOLD',):
+        result.update(min=0, max=1)
+    if any(part in short for part in ('DURATION', 'OVERLAP_DURATION')):
+        result['min'] = 0
+    if short == 'TASK':
+        result['choices'] = ['transcribe', 'translate']
+    return result
+
+
+def validate_settings(values, specs):
+    errors = {}
+    for key, raw in values.items():
+        spec = specs.get(key)
+        if spec is None:
+            errors[key] = 'Not an editable setting'
+            continue
+        try:
+            if key in SIDECAR_PARAMS:
+                value = SIDECAR_PARAMS[key].parse(raw)
+            elif spec['type'] == 'bool':
+                value = SIDECAR_PARAMS['SWHISPER_FORCE_REPROCESS'].parse(raw)
+            elif spec['type'] == 'int':
+                value = int(raw)
+            elif spec['type'] == 'float':
+                value = float(raw)
+            else:
+                value = raw
+            numeric = value if isinstance(value, list) else [value]
+            if any(isinstance(v, float) and not math.isfinite(v) for v in numeric):
+                raise ValueError('Must be a finite number')
+            if 'min' in spec and value < spec['min']:
+                raise ValueError(f'Must be at least {spec["min"]}')
+            if 'max' in spec and value > spec['max']:
+                raise ValueError(f'Must be at most {spec["max"]}')
+            if 'choices' in spec and value not in spec['choices']:
+                raise ValueError('Choose ' + ' or '.join(spec['choices']))
+        except (ValueError, TypeError) as exc:
+            errors[key] = str(exc)
+    low, high = values.get('SWHISPER_MIN_SPEAKERS'), values.get('SWHISPER_MAX_SPEAKERS')
+    if low and high and not errors and int(low) > int(high):
+        errors['SWHISPER_MAX_SPEAKERS'] = 'Must be at least the minimum speaker count'
+    return errors
 
 AUDIO_EXTENSIONS = {'.wav', '.m4a', '.mp3', '.mov', '.mp4', '.flac', '.aac', '.ogg'}
 
@@ -842,6 +897,7 @@ def api_meta() -> Dict[str, Any]:
             "help": PARAM_HELP.get(key, p.note),
             "type": _TYPE_BY_PARSER.get(p.parse.__name__, "str"),
             "global": defaults.get(key),
+            **parameter_ui(key),
         }
         for key, p in SIDECAR_PARAMS.items()
     }
@@ -942,6 +998,10 @@ def api_put_sidecar(basename: str, body: Dict[str, str]) -> Dict[str, Any]:
             continue
         clean[key] = raw
 
+    if errors:
+        return JSONResponse(status_code=422, content={"errors": errors})
+
+    errors = validate_settings(clean, api_meta()['params'])
     if errors:
         return JSONResponse(status_code=422, content={"errors": errors})
 
