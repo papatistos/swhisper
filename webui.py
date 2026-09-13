@@ -905,6 +905,18 @@ def index() -> str:
     return (PROJECT_ROOT / "webui.html").read_text(encoding="utf-8")
 
 
+# The stylesheet and script are served as separate files so the browser can
+# cache them and so each can be linted on its own.
+@app.get("/webui.css")
+def webui_css() -> FileResponse:
+    return FileResponse(PROJECT_ROOT / "webui.css", media_type="text/css")
+
+
+@app.get("/webui.js")
+def webui_js() -> FileResponse:
+    return FileResponse(PROJECT_ROOT / "webui.js", media_type="text/javascript")
+
+
 @app.get("/api/meta")
 def api_meta() -> Dict[str, Any]:
     dirs = state.dirs()

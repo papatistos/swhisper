@@ -6,6 +6,8 @@ import assert from 'node:assert/strict';
 import {setTimeout as delay} from 'node:timers/promises';
 
 const html = await fs.readFile(new URL('./webui.html', import.meta.url), 'utf8');
+const css = await fs.readFile(new URL('./webui.css', import.meta.url), 'utf8');
+const js = await fs.readFile(new URL('./webui.js', import.meta.url), 'utf8');
 let audioDir = '/mock/audio', offline = false, failSave = false, sidecarDelay = {}, versionDelay = {}, renderDelay = {}, logDelay = {};
 let status = {running:false, pipeline:null, returncode:null, run_id:null, progress:{completed:{}}};
 const saved = {a:{values:{SWHISPER_NUM_SPEAKERS:'2',SWHISPER_CONDITION_ON_PREVIOUS:'yes'},comment:'original'}, b:{values:{},comment:'B'}};
@@ -20,6 +22,8 @@ const server = http.createServer(async (req,res) => {
   const data = body ? JSON.parse(body) : {};
   const send = (value, code=200) => {res.writeHead(code, {'Content-Type':'application/json'});res.end(JSON.stringify(value));};
   if (u.pathname === '/') {res.writeHead(200, {'Content-Type':'text/html'});res.end(html);return;}
+  if (u.pathname === '/webui.css') {res.writeHead(200, {'Content-Type':'text/css'});res.end(css);return;}
+  if (u.pathname === '/webui.js') {res.writeHead(200, {'Content-Type':'text/javascript'});res.end(js);return;}
   if (u.pathname === '/api/meta') return send(meta());
   if (u.pathname === '/api/files') return send({files:['a','b','<unsafe>'].map(base=>({base,transcribed:base!=='<unsafe>',diarized:base!=='<unsafe>',has_transcript:base!=='<unsafe>',has_logs:true,will_reprocess:base==='b',mtime:base==='b'?20:10}))});
   if (u.pathname === '/api/run/status') return offline ? send({detail:'Offline'},503) : send(status);
