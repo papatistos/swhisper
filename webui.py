@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import hashlib
 import math
 import json
 import os
@@ -57,6 +58,7 @@ from sidecar import (
     sidecar_requests_reprocess,
 )
 from webui_run import preview_run, inspect_progress
+from env_settings import env_snapshot, parse_env, update_env
 import transcript_stats
 
 from transcript_render import (
@@ -89,6 +91,29 @@ def _load_module(name: str, relpath: str):
 # modules directly instead so the UI starts instantly and works without ML deps.
 _tconfig = _load_module("swhisper_webui_tconfig", "transcribe/config.py")
 _dconfig = _load_module("swhisper_webui_dconfig", "diarize/config.py")
+GLOBAL_ENV_PATH = PROJECT_ROOT / '.swhisper.env'
+
+# Extra defaults that cannot be overridden by individual files.
+GLOBAL_EXTRAS = {
+    'SWHISPER_MODEL': ('transcription', 'model_str', 'str', 'Whisper model'),
+    'SWHISPER_MODEL_REVISION': ('transcription', 'revision', 'str', 'Model revision'),
+    'SWHISPER_DEVICE': ('transcription', 'device', 'str', 'Transcription device'),
+    'SWHISPER_DIARIZE_DEVICE': ('diarization', 'device', 'str', 'Diarization device'),
+    'SWHISPER_FILE_LIMIT': ('transcription', 'file_limit', 'int', 'Files per run'),
+    'SWHISPER_JSON_DIR': ('transcription', 'json_dir', 'str', 'Transcription JSON folder'),
+    'JSON_INPUT_DIR': ('diarization', 'json_input_dir', 'str', 'Diarization JSON input folder'),
+    'SWHISPER_OUTPUT_DIR': ('diarization', 'output_dir', 'str', 'Transcript output folder'),
+    'SWHISPER_PRESERVE_CHECKPOINTS': ('transcription', 'preserve_checkpoints', 'bool', 'Preserve checkpoints'),
+    'SWHISPER_SPEAKER_VAD': ('transcription', 'use_speaker_segments_as_vad', 'bool', 'Use speaker segments for voice detection'),
+    'SWHISPER_SPEAKER_CHUNKING': ('transcription', 'speaker_aware_chunking', 'bool', 'Split audio at speaker boundaries'),
+    'SWHISPER_USE_PRECISION': ('diarization', 'use_precision_service', 'bool', 'Use Precision diarization service'),
+    'SWHISPER_PRECISION_MODEL': ('diarization', 'precision_pipeline_model', 'str', 'Precision model'),
+    'SWHISPER_BACKFILL_MODEL': ('diarization', 'backfill_model', 'str', 'Backfill model'),
+    'SWHISPER_BACKFILL_DEVICE': ('diarization', 'backfill_device', 'str', 'Backfill device'),
+    'SWHISPER_FP16': ('whisper', 'fp16', 'bool', 'Half precision'),
+    'SWHISPER_ALIGNMENT_LAYERS': ('whisper', 'word_alignment_most_top_layers', 'int', 'Alignment layers'),
+    'SWHISPER_VERBOSE': ('whisper', 'verbose', 'bool', 'Detailed transcription logging'),
+}
 
 
 def parameter_ui(key):
@@ -910,6 +935,56 @@ def api_meta() -> Dict[str, Any]:
     }
 
 
+def _global_form():
+    meta = api_meta()
+    params = {k: dict(v) for k, v in meta['params'].items() if k != 'SWHISPER_NUM_SPEAKERS'}
+    objs = {'transcription': _tconfig.TranscriptionConfig(), 'whisper': _tconfig.WhisperSettings(),
+            'diarization': _dconfig.DiarizationConfig()}
+    for key, (target, attr, kind, label) in GLOBAL_EXTRAS.items():
+        params[key] = dict(type=kind, stage='diarize' if target == 'diarization' else 'transcribe',
+                           help='Used by future runs. Per-file overrides take precedence where supported.',
+                           **{**parameter_ui(key), 'label': label, 'global': getattr(objs[target], attr)})
+    text, revision = env_snapshot(GLOBAL_ENV_PATH)
+    raw = parse_env(text)
+    values = {key: os.environ.get(key, raw.get(key)) for key in params if key in raw or key in os.environ}
+    groups = [{'name': g['name'], 'keys': [k for k in g['keys'] if k in params]} for g in meta['groups']]
+    groups.append({'name': 'Models and execution', 'keys': list(GLOBAL_EXTRAS)})
+    return dict(params=params, groups=groups, values=values, revision=revision, path=str(GLOBAL_ENV_PATH))
+
+
+@app.get('/api/settings/global')
+def api_global_settings():
+    return _global_form()
+
+
+@app.put('/api/settings/global')
+def api_save_global_settings(body: Dict[str, Any]):
+    global _tconfig, _dconfig
+    values = body.get('values')
+    if not isinstance(values, dict) or not all(isinstance(v, str) for v in values.values()):
+        raise HTTPException(422, 'Settings must be text values')
+    with state.lock:
+        if state.running():
+            raise HTTPException(409, 'Global settings cannot be changed during a run.')
+        form = _global_form()
+        errors = validate_settings(values, form['params'])
+        if errors:
+            return JSONResponse(status_code=422, content={'errors': errors})
+        try:
+            update_env(GLOBAL_ENV_PATH, values, set(form['params']), body.get('revision'))
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+        for key in form['params']:
+            if key in values:
+                os.environ[key] = values[key]
+            else:
+                os.environ.pop(key, None)
+        # Config dataclasses capture environment values at import time.
+        _tconfig, _dconfig = (_load_module('swhisper_webui_tconfig', 'transcribe/config.py'),
+                              _load_module('swhisper_webui_dconfig', 'diarize/config.py'))
+        return _global_form()
+
+
 @app.post("/api/audio-dir")
 def api_set_audio_dir(body: Dict[str, str]) -> Dict[str, Any]:
     raw_path = body.get("path") or ""
@@ -1368,8 +1443,11 @@ def api_logs(base: Optional[str] = None, file: Optional[str] = None,
 def api_run_preview(pipeline: str) -> Dict[str, Any]:
     if pipeline not in PIPELINES:
         raise HTTPException(400, "Unknown pipeline")
-    return preview_run(state.audio_dir(), pipeline,
-                       _tconfig.TranscriptionConfig(), _dconfig.DiarizationConfig())
+    preview = preview_run(state.audio_dir(), pipeline,
+                          _tconfig.TranscriptionConfig(), _dconfig.DiarizationConfig())
+    _, revision = env_snapshot(GLOBAL_ENV_PATH)
+    preview['token'] = hashlib.sha256((preview['token'] + revision).encode()).hexdigest()
+    return preview
 
 
 @app.post("/api/run")

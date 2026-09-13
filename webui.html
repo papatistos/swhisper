@@ -195,6 +195,7 @@
 <body>
 <header>
   <h1>swhisper</h1>
+  <button id="globalSettingsBtn" aria-pressed="false">Global settings</button>
   <div id="dirBox">
     <div id="dirCombo">
       <input id="dirInput" type="text" aria-label="Audio directory" placeholder="Enter an audio directory…" title="Audio directory — choose a saved path from the dropdown, or enter a new path and press Change (or Enter)">
@@ -322,7 +323,7 @@ let changingDir = false;
 let editorBase = null, savedForm = null, saving = false, editorLoading = false;
 let editorSeq = 0, folderSeq = 0, filesSeq = 0, transcriptSeq = 0, logSeq = 0, logListSeq = 0;
 let connected = false, lastStatus = null, runBusy = false, pollBusy = false, activeRunId = null;
-let editorScope = "file", editorMeta = null;
+let editorScope = "file", editorMeta = null, globalRevision = null;
 let pendingPreview = null, dirtyChoice = null, initialized = false;
 const escapeHTML = value => String(value).replace(/[&<>"']/g, c => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"}[c]));
 
@@ -701,12 +702,37 @@ function renderSettings(data, base, scope) {
   savedForm = JSON.stringify(formValues()); editorLoading = false; editor.inert = false;
   $("editorBar").style.display = currentTab === "settings" ? "" : "none";
   $("deleteBtn").hidden = scope === "global"; $("deleteBtn").disabled = !data.exists;
+  $("globalSettingsBtn").setAttribute("aria-pressed", String(scope === "global"));
   filterSettings(); updateSaveState(); updateRunControls();
 }
 function filterSettings() {
   const onlyDiarize = editorScope === "file" && $("pipelineSel").value === "diarize4" && !$("showOtherSettings")?.checked;
   document.querySelectorAll("#editor .row").forEach(row => {row.hidden = onlyDiarize && row.dataset.stage === "transcribe";});
   document.querySelectorAll("#editor details.group").forEach(group => {group.hidden = ![...group.querySelectorAll(".row")].some(row=>!row.hidden);});
+}
+async function openGlobalSettings() {
+  if (changingDir || !await resolveUnsaved()) return;
+  const seq = ++editorSeq; editorLoading = true; editorBase = savedForm = null;
+  $("editor").inert = true; $("editor").textContent = "Loading global settings…";
+  showTab("settings"); updateSaveState();
+  try {
+    const {data} = await api("/api/settings/global");
+    if (seq !== editorSeq) return;
+    globalRevision = data.revision; renderSettings(data, null, "global");
+  } catch (e) { if (seq === editorSeq) {editorLoading = false;$("editor").inert=false;reportError(e);updateSaveState();} }
+}
+async function saveGlobalSettings() {
+  if (saving || !formDirty()) return !saving;
+  if (!validateForm()) return false;
+  saving = true; $("editor").inert = true; updateSaveState(); updateRunControls();
+  try {
+    const {status,data} = await api("/api/settings/global", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({values:formValues(),revision:globalRevision})});
+    if (status === 422) {fieldErrors(data.errors);throw new Error("Correct the highlighted settings.");}
+    globalRevision = data.revision;
+    await loadMeta(); await loadFiles(); renderSettings(data, null, "global");
+    return true;
+  } catch(e) {reportError(e);return false;}
+  finally {saving=false;$("editor").inert=false;$("saveBtn").disabled=!formDirty();$("saveBtn").textContent="Save";if(!formDirty())setMsg("Global defaults saved for future runs.","ok");updateRunControls();}
 }
 function validateForm() {
   const invalid = document.querySelector("#editor input:invalid");
@@ -1053,6 +1079,7 @@ async function loadLogContent() {
 }
 
 async function saveSidecar() {
+  if (editorScope === "global") return saveGlobalSettings();
   if (!validateForm()) return false;
   if (saving || editorLoading || !editorBase || editorBase !== currentBase) return false;
   if (!formDirty()) return true;
@@ -1380,6 +1407,7 @@ $("consoleResize").addEventListener("keydown", e => {
   e.preventDefault(); setConsoleCollapsed(false);
   setConsoleHeight($("consolePanel").getBoundingClientRect().height + (e.key === "ArrowUp" ? 20 : -20));
 });
+$("globalSettingsBtn").onclick=handle(openGlobalSettings);
 $("pipelineSel").addEventListener("change", filterSettings);
 initFontSize();
 initConsole();

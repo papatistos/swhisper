@@ -229,21 +229,9 @@ def _load_env_file() -> None:
     if not env_path.exists():
         return
 
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        # Strip inline comments (but not from quoted values)
-        if '#' in value and ('"' not in value and "'" not in value):
-            value = value.split('#')[0].strip()
-        # Decode common escape sequences
-        value = value.replace('\\n', '\n').replace('\\t', '\t').replace('\\r', '\r')
-        if key and value and key not in os.environ:
+    from env_settings import parse_env
+    for key, value in parse_env(env_path.read_text(encoding="utf-8")).items():
+        if key not in os.environ:
             os.environ[key] = value
 
 

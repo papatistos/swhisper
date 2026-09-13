@@ -1,0 +1,110 @@
+"""Global settings, export, and audio tests using temporary files only."""
+import json
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+from fastapi.testclient import TestClient
+
+import path_settings
+import webui
+from env_settings import parse_env, env_snapshot, update_env
+
+
+class RemainingTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        for name, value in [('state', webui.AppState(str(self.root))), ('GLOBAL_ENV_PATH', self.root / '.env'),
+                            ('_tconfig', webui._tconfig), ('_dconfig', webui._dconfig)]:
+            p = patch.object(webui, name, value);p.start();self.addCleanup(p.stop)
+        p = patch.dict(os.environ);p.start();self.addCleanup(p.stop)
+        for key in list(os.environ):
+            if key.startswith('SWHISPER_') or key == 'JSON_INPUT_DIR': os.environ.pop(key)
+        p = patch.object(path_settings, '_load_env_file', lambda: None);p.start();self.addCleanup(p.stop)
+        self.client = TestClient(webui.app)
+        self.addCleanup(self.client.close)
+
+    def write(self, name, text=''):
+        path = self.root / name;path.parent.mkdir(parents=True, exist_ok=True);path.write_text(text);return path
+
+    def transcript(self):
+        self.write('a.wav', 'mock audio')
+        original = self.write('transcripts/txt/a_20260913-120000.txt', 'Original transcript')
+        self.write('transcripts/json/a_20260913-120000_diarized.json', json.dumps({'segments':[
+            {'start':1.0,'end':3.0,'speaker':'S01','text':'Hello world','words':[
+                {'start':1.0,'end':2.0,'word':'Hello'},{'start':2.0,'end':3.0,'word':'world'}]}]}))
+        return original
+
+    def test_env_round_trip_and_unrelated_lines(self):
+        path=self.write('.env','# Header\nTOKEN=private-value\nSWHISPER_LANGUAGE=sv # language\n# saved path\n')
+        _, revision=env_snapshot(path)
+        update_env(path,{'SWHISPER_LANGUAGE':'en','SWHISPER_INITIAL_PROMPT':'A # quote " plus\nnewline','SWHISPER_OUTPUT_PREAMBLE':''},
+                   {'SWHISPER_LANGUAGE','SWHISPER_INITIAL_PROMPT','SWHISPER_OUTPUT_PREAMBLE'},revision)
+        text=path.read_text();self.assertIn('TOKEN=private-value\n',text);self.assertIn('# language',text)
+        self.assertEqual(parse_env(text)['SWHISPER_INITIAL_PROMPT'],'A # quote " plus\nnewline')
+        self.assertEqual(parse_env(text)['SWHISPER_OUTPUT_PREAMBLE'],'')
+        self.assertEqual(parse_env('X=first\\nsecond\n')['X'],'first\nsecond')
+
+    def test_env_stale_revision_rejected(self):
+        path=self.write('.env','A=1\n');_,revision=env_snapshot(path);path.write_text('A=2\n')
+        with self.assertRaises(ValueError):update_env(path,{'A':'3'},{'A'},revision)
+        self.assertEqual(path.read_text(),'A=2\n')
+
+    def test_global_schema_and_save_refreshes_defaults(self):
+        self.write('.env','# Keep this\nSECRET_TOKEN=hidden\n')
+        before=self.client.get('/api/settings/global');self.assertEqual(before.status_code,200)
+        form=before.json();self.assertNotIn('SECRET_TOKEN',form['values']);self.assertIn('SWHISPER_MODEL',form['params'])
+        response=self.client.put('/api/settings/global',json={'values':{'SWHISPER_LANGUAGE':'en','SWHISPER_FORCE_REPROCESS':'true','SWHISPER_INITIAL_PROMPT':''},'revision':form['revision']})
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(webui._global_defaults()['SWHISPER_LANGUAGE'],'en')
+        self.assertEqual(webui._tconfig.TranscriptionConfig().force_reprocess,True)
+        self.assertEqual(os.environ['SWHISPER_INITIAL_PROMPT'],'')
+        self.assertIn('SECRET_TOKEN=hidden',webui.GLOBAL_ENV_PATH.read_text())
+        reset=self.client.put('/api/settings/global',json={'values':{},'revision':response.json()['revision']})
+        self.assertEqual(reset.status_code,200,reset.text)
+        self.assertEqual(webui._global_defaults()['SWHISPER_LANGUAGE'],'sv')
+
+    def test_global_validation_and_running_lock(self):
+        form=self.client.get('/api/settings/global').json()
+        body={'values':{'SWHISPER_MIN_SPEAKERS':'4','SWHISPER_MAX_SPEAKERS':'2'},'revision':form['revision']}
+        self.assertEqual(self.client.put('/api/settings/global',json=body).status_code,422)
+        self.assertFalse(webui.GLOBAL_ENV_PATH.exists())
+        with patch.object(webui.state,'running',return_value=True):
+            self.assertEqual(self.client.put('/api/settings/global',json={'values':{},'revision':form['revision']}).status_code,409)
+
+    def test_per_file_numeric_bounds(self):
+        response=self.client.put('/api/sidecar/a',json={'SWHISPER_NUM_SPEAKERS':'0'})
+        self.assertEqual(response.status_code,422)
+        self.assertIn('SWHISPER_NUM_SPEAKERS',response.json()['errors'])
+
+
+
+
+
+    def test_env_loader_keeps_empty_values_and_hashes(self):
+        self.write('.swhisper.env', 'TEST_SWHISPER_EMPTY=""\nTEST_SWHISPER_PROMPT="A # title"\n')
+        # Exercise the actual loader instead of the test's model-config stub.
+        import importlib.util
+        spec=importlib.util.spec_from_file_location('path_settings_loader_test', Path(path_settings.__file__))
+        module=importlib.util.module_from_spec(spec)
+        import sys
+        with patch.dict(sys.modules, {'path_settings_loader_test':module}):
+            spec.loader.exec_module(module)
+            module.__file__=str(self.root/'path_settings.py')
+            module._load_env_file()
+        self.assertEqual(os.environ['TEST_SWHISPER_EMPTY'],'')
+        self.assertEqual(os.environ['TEST_SWHISPER_PROMPT'],'A # title')
+
+    def test_global_change_invalidates_run_preview(self):
+        self.write('a.wav')
+        before=self.client.get('/api/run/preview',params={'pipeline':'transcribe4'}).json()['token']
+        self.write('.env','SWHISPER_MODEL=different-model\n')
+        after=self.client.get('/api/run/preview',params={'pipeline':'transcribe4'}).json()['token']
+        self.assertNotEqual(before,after)
+
+
+
+if __name__=='__main__':unittest.main()
