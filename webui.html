@@ -1050,76 +1050,127 @@ async function showHistory() {
     const result = e.stopped_by_user ? "⏹ stopped" : (e.success ? "✅ ok" : `❌ exit ${e.returncode}`);
     const resultCls = e.success ? "ok" : "bad";
     det.innerHTML = `<summary>
-        <span class="when">${(e.started || "").replace("T", " ")}</span>
-        <span class="meta">${e.pipeline}</span>
+        <span class="when">${escapeHTML((e.started || "").replace("T", " "))}</span>
+        <span class="meta">${escapeHTML(e.pipeline)}</span>
         <span class="result ${resultCls}">${result}</span>
         <span class="meta">${mins} min · ${e.file_count} file(s) produced/updated</span>
       </summary>
-      <div class="filelist">${(e.files_produced || []).join("\n") || "(no new files detected)"}</div>`;
+      <div class="filelist">${escapeHTML((e.files_produced || []).join("\n") || "(no new files detected)")}</div>`;
     body.appendChild(det);
   }
-  $("historyPanel").classList.add("open");
+  $("historyPanel").showModal();
 }
 
 /* ---------- run control ---------- */
 
 async function startRun() {
+  if (!connected || runBusy || lastStatus?.running || !await resolveUnsaved()) return;
+  runBusy = true; updateRunControls();
   try {
-    await api("/api/run", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pipeline: $("pipelineSel").value }),
+    const pipeline = $("pipelineSel").value;
+    const { data } = await api(`/api/run/preview?pipeline=${encodeURIComponent(pipeline)}`);
+    pendingPreview = data;
+    $("previewFolder").textContent = `${META.pipelines.find(p => p.id === pipeline).label} · ${data.audio_dir}`;
+    const counts = {};
+    for (const row of data.files) counts[row.action] = (counts[row.action] || 0) + 1;
+    $("previewSummary").textContent = data.files.length
+      ? Object.entries(counts).map(([action, count]) => `${count} ${action === "blocked" ? "blocked" : `to ${action}`}`).join(" · ") + ". Counts are per stage."
+      : "No eligible inputs found.";
+    $("previewNotes").replaceChildren(...data.notes.map(note => { const li = document.createElement("li"); li.textContent = note; return li; }));
+    $("previewTable").querySelector("tbody").replaceChildren(...data.files.map(row => {
+      const tr = document.createElement("tr");
+      for (const value of [row.file, row.stage, row.action, row.reason]) {
+        const td = document.createElement("td"); td.textContent = value; tr.appendChild(td);
+      }
+      return tr;
+    }));
+    $("previewStart").disabled = !data.files.some(row => ["process", "reprocess"].includes(row.action));
+    $("previewDialog").showModal();
+  } catch (e) { $("runStatus").textContent = e.message; }
+  finally { runBusy = false; updateRunControls(); }
+}
+async function launchPreview() {
+  if (!pendingPreview || runBusy) return;
+  runBusy = true; updateRunControls();
+  $("previewStart").disabled = true; $("previewCancel").disabled = true;
+  try {
+    const { data } = await api("/api/run", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pipeline: pendingPreview.pipeline, preview_token: pendingPreview.token }),
     });
-    logOffset = 0;
+    lastStatus = data;
+    logOffset = 0; activeRunId = data.run_id;
     $("consoleLog").textContent = "";
     setConsoleCollapsed(false);
-  } catch (e) { alert(e.message); }
+    $("previewDialog").close(); pendingPreview = null;
+    await pollRun();
+  } catch (e) { $("previewSummary").textContent = e.message + " Close this preview and try again."; }
+  finally { runBusy = false; $("previewCancel").disabled = false; updateRunControls(); }
 }
-
 async function stopRun() {
-  try { await api("/api/run/stop", { method: "POST" }); }
-  catch (e) { alert(e.message); }
-}
-
-async function pollRun() {
+  if (runBusy) return;
+  runBusy = true; updateRunControls();
   try {
+    const { data } = await api("/api/run/stop", { method: "POST" });
+    lastStatus = data; $("runStatus").textContent = "Stopping…";
+  } catch (e) { $("runStatus").textContent = e.message; }
+  finally { runBusy = false; updateRunControls(); }
+}
+function statusText(st) {
+  if (st.running) return st.stop_requested ? "Stopping…" : `Running ${st.pipeline} · ${((Date.now() / 1000 - st.started_at) / 60).toFixed(1)} min`;
+  if (!st.pipeline) return "Idle";
+  if (st.stop_requested) return "Stopped by you";
+  if (st.returncode === null) return "Run ended; exit status unavailable";
+  if (st.progress?.error_count) return "Run ended with reported errors. Check the console.";
+  if (st.returncode !== 0) return `Run failed (exit ${st.returncode}). Check the console.`;
+  return "Run finished successfully";
+}
+async function pollRun() {
+  if (pollBusy || changingDir) return;
+  pollBusy = true;
+  try {
+    if (!initialized) { await loadMeta(); await loadFiles(); initialized = true; }
+    const st = (await api("/api/run/status")).data;
+    if (activeRunId !== st.run_id) {
+      activeRunId = st.run_id; logOffset = 0; $("consoleLog").textContent = "";
+    }
     const { data } = await api(`/api/logs?file=live&offset=${logOffset}`);
     if (data.next !== undefined) logOffset = data.next;
-    if (data.lines && data.lines.length) {
+    if (data.lines?.length) {
       const log = $("consoleLog");
       const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
       log.textContent += data.lines.join("\n") + "\n";
       if (atBottom) log.scrollTop = log.scrollHeight;
     }
-    const st = (await api("/api/run/status")).data;
-    $("startBtn").disabled = st.running;
-    $("stopBtn").disabled = !st.running;
-    $("pipelineSel").disabled = st.running;
-    $("dirBtn").disabled = st.running;
-    const dot = $("runDot");
-    dot.className = "dot" + (st.running ? " run" : (st.returncode ? " err" : ""));
-    if (st.running) {
-      const mins = ((Date.now() / 1000 - st.started_at) / 60).toFixed(1);
-      $("runStatus").textContent = `running ${st.pipeline} · ${mins} min`;
-    } else if (st.pipeline) {
-      $("runStatus").textContent = `last run: ${st.pipeline} · exit ${st.returncode ?? "?"}`;
-    }
-    $("consoleMsg").textContent = st.running
-      ? `running ${st.pipeline}`
-      : st.pipeline ? `last run: ${st.pipeline} · exit ${st.returncode ?? "?"}` : "idle";
+    connected = true; lastStatus = st;
+    $("connectionStatus").textContent = "Connected";
+    $("runDot").className = "dot" + (st.running ? " run" : (st.returncode || st.progress?.error_count ? " err" : ""));
+    $("runStatus").textContent = statusText(st);
+    $("consoleMsg").textContent = statusText(st);
+    const p = st.progress || {};
+    const counts = Object.entries(p.completed || {}).map(([stage, n]) => `${stage}: ${n} completed`).join(" · ");
+    $("progressStatus").textContent = st.pipeline
+      ? [st.audio_dir, p.stage, p.detail, p.current_file, p.total_files ? `file ${p.file_index} of ${p.total_files}` : "", counts, p.last_error].filter(Boolean).join(" · ") : "";
     if (wasRunning && !st.running) {
-      loadFiles();  // refresh statuses when a run ends
-      if (currentTab === "transcript" && currentBase) loadTranscript(currentBase);
-      if (currentTab === "logs") loadLogList();  // persisted run log appears
+      await loadFiles();
+      if (currentTab === "transcript" && currentBase) await loadTranscript(currentBase);
+      if (currentTab === "logs") await loadLogList();
     }
     wasRunning = st.running;
-  } catch (e) { /* server briefly unavailable; keep polling */ }
+  } catch (e) {
+    connected = false;
+    $("connectionStatus").textContent = "Disconnected · retrying connection…";
+    $("runDot").className = "dot err";
+    $("runStatus").textContent = "Run status unavailable";
+    $("consoleMsg").textContent = "Connection lost; transcription may still be running.";
+  } finally { pollBusy = false; updateRunControls(); }
 }
 
 /* ---------- console panel ---------- */
 
 function setConsoleCollapsed(collapsed) {
   $("consolePanel").classList.toggle("collapsed", collapsed);
+  $("consoleToggle").setAttribute("aria-expanded", String(!collapsed));
   $("consoleToggle").textContent = (collapsed ? "▸" : "▾") + " Live console";
   try { localStorage.setItem("swhisper_console_collapsed", collapsed ? "1" : "0"); } catch (e) {}
 }
@@ -1216,20 +1267,54 @@ $("dirInput").addEventListener("focus", closeDirMenu);
 $("dirInput").addEventListener("input", changeDirIfSavedPath);
 $("dirInput").addEventListener("change", changeDirIfSavedPath);
 $("dirInput").addEventListener("keydown", e => { if (e.key === "Enter") changeDir(); });
-$("historyBtn").onclick = showHistory;
-$("historyClose").onclick = () => $("historyPanel").classList.remove("open");
-$("historyPanel").addEventListener("click", e => { if (e.target.id === "historyPanel") $("historyPanel").classList.remove("open"); });
+$("historyBtn").onclick = handle(showHistory);
+$("historyClose").onclick = () => $("historyPanel").close();
+
 $("fontMinus").onclick = () => nudgeFont(-2);
 $("fontPlus").onclick = () => nudgeFont(2);
 
-(async () => {
-  initFontSize();
-  initConsole();
-  initConsoleResize();
-  await loadMeta();
-  await loadFiles();
-  setInterval(pollRun, 1000);
-})();
+$("dirtyCancel").onclick = () => finishDirtyDialog("cancel");
+$("dirtyDiscard").onclick = () => finishDirtyDialog("discard");
+$("dirtySave").onclick = () => finishDirtyDialog("save");
+$("dirtyDialog").addEventListener("cancel", e => { e.preventDefault(); finishDirtyDialog("cancel"); });
+$("previewCancel").onclick = () => { pendingPreview = null; $("previewDialog").close(); };
+$("previewStart").onclick = handle(launchPreview);
+$("previewDialog").addEventListener("cancel", e => { if (runBusy) e.preventDefault(); else pendingPreview = null; });
+window.addEventListener("beforeunload", e => {
+  if (formDirty() || saving) { e.preventDefault(); e.returnValue = ""; }
+});
+$("tabBar").addEventListener("keydown", e => {
+  const tabs = [...$("tabBar").querySelectorAll('[role="tab"]')];
+  let index = tabs.indexOf(document.activeElement);
+  if (e.key === "ArrowRight") index++;
+  else if (e.key === "ArrowLeft") index--;
+  else if (e.key === "Home") index = 0;
+  else if (e.key === "End") index = tabs.length - 1;
+  else return;
+  e.preventDefault();
+  const tab = tabs[(index + tabs.length) % tabs.length]; tab.focus(); tab.click();
+});
+$("dirMenu").addEventListener("keydown", e => {
+  if (e.key === "Escape") { e.preventDefault(); closeDirMenu(); $("dirMenuBtn").focus(); return; }
+  const items = [...$("dirMenu").querySelectorAll("button")];
+  let index = items.indexOf(document.activeElement);
+  if (e.key === "ArrowDown") index++;
+  else if (e.key === "ArrowUp") index--;
+  else if (e.key === "Home") index = 0;
+  else if (e.key === "End") index = items.length - 1;
+  else return;
+  e.preventDefault(); items[(index + items.length) % items.length]?.focus();
+});
+$("consoleResize").addEventListener("keydown", e => {
+  if (!["ArrowUp", "ArrowDown"].includes(e.key)) return;
+  e.preventDefault(); setConsoleCollapsed(false);
+  setConsoleHeight($("consolePanel").getBoundingClientRect().height + (e.key === "ArrowUp" ? 20 : -20));
+});
+initFontSize();
+initConsole();
+initConsoleResize();
+pollRun();
+setInterval(pollRun, 1000);
 </script>
 </body>
 </html>
