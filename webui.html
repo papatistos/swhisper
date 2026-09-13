@@ -1181,6 +1181,8 @@ function setConsoleHeight(px) {
   const max = Math.max(160, Math.min(rightHeight * 0.7, 900));
   px = Math.max(100, Math.min(max, px));
   panel.style.setProperty("--console-height", `${Math.round(px)}px`);
+  $("consoleResize").setAttribute("aria-valuenow", String(Math.round(px)));
+  $("consoleResize").setAttribute("aria-valuemax", String(Math.round(max)));
   try { localStorage.setItem("swhisper_console_height", String(Math.round(px))); } catch (e) {}
 }
 
@@ -1214,12 +1216,12 @@ function initConsoleResize() {
 
 /* ---------- init ---------- */
 
-$("saveBtn").onclick = saveSidecar;
-$("deleteBtn").onclick = deleteSidecar;
+$("saveBtn").onclick = handle(saveSidecar);
+$("deleteBtn").onclick = handle(deleteSidecar);
 $("tabSettings").onclick = () => showTab("settings");
 $("tabTranscript").onclick = () => showTab("transcript");
 $("tabLogs").onclick = () => showTab("logs");
-$("logSel").onchange = () => { currentLogSel = $("logSel").value; loadLogContent(); };
+$("logSel").onchange = handle(async () => { currentLogSel = $("logSel").value; await loadLogContent(); });
 $("versionSel").onchange = () => { if (currentBase) loadTranscript(currentBase, $("versionSel").value); };
 $("transcriptReload").onclick = () => { if (currentBase) loadTranscript(currentBase); };
 for (const id of ["optDisfluencies", "optPauses", "optBreaks"]) {
