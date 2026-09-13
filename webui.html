@@ -179,6 +179,12 @@
                       color: var(--muted); white-space: pre-wrap; word-break: break-all; }
 </style>
 <style>
+  body { height: 100dvh; }
+  #filePanel { flex: 0 0 var(--sidebar-width, 340px); min-width: 220px; max-width: 55vw;
+               display: flex; flex-direction: column; background: var(--panel); min-height: 0; }
+  #files { width: auto; border: 0; flex: 1; min-height: 0; }
+  #sidebarResize { width: 7px; flex-shrink: 0; background: var(--border); cursor: col-resize; }
+  body.filesCollapsed #filePanel, body.filesCollapsed #sidebarResize { display: none; }
   .row { grid-template-columns: minmax(140px, 230px) minmax(0, 1fr); align-items: start; padding: 9px 0; }
   .row label { word-break: normal; border: 0; cursor: pointer; }
   .row input, .row select, .row textarea { max-width: 100%; }
@@ -190,11 +196,41 @@
   .row input[type=checkbox] { width: 22px; height: 22px; flex-shrink: 0; }
   .resetSetting { padding: 2px 6px; font-size: .65rem; margin-left: 6px; }
   details.group > summary { cursor: pointer; font-size: .9rem; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  #pipelineSel { min-width: 0; max-width: 100%; }
+  #editorBar, #transcriptBar { flex-wrap: wrap; }
+  @media (max-width: 1100px) {
+    .row { grid-template-columns: 1fr; gap: 4px; }
+    #filePanel { flex-basis: var(--sidebar-width, 270px); }
+    #editor { padding: 12px; }
+  }
+  @media (max-width: 760px) {
+    main { flex-direction: column; }
+    #filePanel { flex: 0 0 210px; max-height: 26vh; width: 100%; max-width: none; min-width: 0; }
+    #consolePanel { flex-basis: var(--console-mobile-height, 120px); min-height: 50px; max-height: 70vh; }
+    #sidebarResize { display: none; }
+    #right { min-height: 0; }
+    #dirBox { min-width: 0; flex-basis: 100%; flex-wrap: nowrap; }
+    #dirCombo { flex-basis: 0; }
+    #runControlBar { gap: 6px; padding: 6px; }
+    #progressStatus { overflow-wrap: anywhere; }
+    #tabBar { padding-left: 4px; }
+    #tabBar .tab { padding-left: 8px; padding-right: 8px; }
+    #transcriptBar select { width: 100%; max-width: 100%; }
+  }
+  @media (max-width: 520px) {
+    header { gap: 6px; padding: 8px; }
+    header button { font-size: .8rem; }
+    #filePanel { flex-basis: 155px; }
+    #consolePanel { flex-basis: var(--console-mobile-height, 100px); }
+    #consoleBar { padding: 6px; gap: 6px; }
+    #consoleBar .msg { min-width: 0; overflow-wrap: anywhere; }
+  }
 </style>
 </head>
 <body>
 <header>
   <h1>swhisper</h1>
+  <button id="filesToggle" aria-expanded="true" aria-controls="filePanel">Files</button>
   <button id="globalSettingsBtn" aria-pressed="false">Global settings</button>
   <div id="dirBox">
     <div id="dirCombo">
@@ -211,7 +247,10 @@
 </header>
 
 <main>
-  <div id="files" role="region" aria-label="Audio files"></div>
+  <aside id="filePanel" aria-label="Audio library">
+    <div id="files" role="region" aria-label="Audio files"></div>
+  </aside>
+  <div id="sidebarResize" role="separator" tabindex="0" aria-label="Resize file list" aria-orientation="vertical" aria-valuemin="220" aria-valuemax="700" aria-valuenow="340"></div>
   <div id="right">
     <div id="runControlBar">
       <span class="dot" id="runDot"></span>
@@ -1270,12 +1309,16 @@ function setConsoleCollapsed(collapsed) {
   try { localStorage.setItem("swhisper_console_collapsed", collapsed ? "1" : "0"); } catch (e) {}
 }
 
-function setConsoleHeight(px) {
+function setConsoleHeight(px, userResize = false) {
   const panel = $("consolePanel");
   const rightHeight = $("right").clientHeight;
   const max = Math.max(160, Math.min(rightHeight * 0.7, 900));
   px = Math.max(100, Math.min(max, px));
   panel.style.setProperty("--console-height", `${Math.round(px)}px`);
+  if (userResize && window.innerWidth <= 760) {
+    panel.style.setProperty("--console-mobile-height", `${Math.round(px)}px`);
+    try { localStorage.setItem("swhisper_console_mobile_height", String(Math.round(px))); } catch {}
+  }
   $("consoleResize").setAttribute("aria-valuenow", String(Math.round(px)));
   $("consoleResize").setAttribute("aria-valuemax", String(Math.round(max)));
   try { localStorage.setItem("swhisper_console_height", String(Math.round(px))); } catch (e) {}
@@ -1290,6 +1333,10 @@ function initConsole() {
     if (Number.isFinite(saved)) height = saved;
   } catch (e) {}
   setConsoleHeight(height);
+  try {
+    const mobileHeight = Number(localStorage.getItem("swhisper_console_mobile_height"));
+    if (mobileHeight) $("consolePanel").style.setProperty("--console-mobile-height", `${Math.max(50, Math.min(300, mobileHeight))}px`);
+  } catch {}
   setConsoleCollapsed(collapsed);
 }
 
@@ -1299,7 +1346,7 @@ function initConsoleResize() {
     setConsoleCollapsed(false);
     const startY = event.clientY;
     const startHeight = $("consolePanel").getBoundingClientRect().height;
-    const move = moveEvent => setConsoleHeight(startHeight + startY - moveEvent.clientY);
+    const move = moveEvent => setConsoleHeight(startHeight + startY - moveEvent.clientY, true);
     const stop = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
@@ -1405,10 +1452,28 @@ $("dirMenu").addEventListener("keydown", e => {
 $("consoleResize").addEventListener("keydown", e => {
   if (!["ArrowUp", "ArrowDown"].includes(e.key)) return;
   e.preventDefault(); setConsoleCollapsed(false);
-  setConsoleHeight($("consolePanel").getBoundingClientRect().height + (e.key === "ArrowUp" ? 20 : -20));
+  setConsoleHeight($("consolePanel").getBoundingClientRect().height + (e.key === "ArrowUp" ? 20 : -20), true);
 });
 $("globalSettingsBtn").onclick=handle(openGlobalSettings);
 $("pipelineSel").addEventListener("change", filterSettings);
+function setSidebarWidth(width){
+  width=Math.max(220,Math.min(window.innerWidth*.55,700,width));
+  document.body.style.setProperty("--sidebar-width",width+"px");$("sidebarResize").setAttribute("aria-valuenow",Math.round(width));
+  try{localStorage.setItem("swhisper_sidebar_width",width);}catch{}
+}
+function toggleFiles(force){
+  const collapsed=force??!document.body.classList.contains("filesCollapsed");
+  document.body.classList.toggle("filesCollapsed",collapsed);$("filesToggle").setAttribute("aria-expanded",String(!collapsed));
+  try{localStorage.setItem("swhisper_files_collapsed",collapsed?"1":"0");}catch{}
+}
+$("filesToggle").onclick=()=>toggleFiles();
+$("sidebarResize").addEventListener("keydown",e=>{if(["ArrowLeft","ArrowRight"].includes(e.key)){e.preventDefault();setSidebarWidth($("filePanel").getBoundingClientRect().width+(e.key==="ArrowRight"?20:-20));}});
+$("sidebarResize").addEventListener("pointerdown",e=>{
+  e.preventDefault();const start=e.clientX,width=$("filePanel").getBoundingClientRect().width;
+  const move=event=>setSidebarWidth(width+event.clientX-start),stop=()=>{window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",stop);};
+  window.addEventListener("pointermove",move);window.addEventListener("pointerup",stop,{once:true});
+});
+try{const width=Number(localStorage.getItem("swhisper_sidebar_width"));if(width)setSidebarWidth(width);toggleFiles(localStorage.getItem("swhisper_files_collapsed")==="1");}catch{}
 initFontSize();
 initConsole();
 initConsoleResize();
