@@ -753,27 +753,28 @@ function fmtLogTimestamp(ts) {
 async function loadLogList() {
   const seq = ++logListSeq, folder = folderSeq, base = currentBase;
   const sel = $("logSel");
-  let data = null, scope = "run";
-  if (currentBase) {
-    const res = await api(`/api/logs?base=${encodeURIComponent(currentBase)}`);
-    if (res.data.versions.length) { data = res.data; scope = "file"; }
-  }
-  if (!data) data = (await api("/api/logs")).data;
+  // Both scopes are listed together. Selecting a file used to replace the run
+  // logs, which left saved runs unreachable with no way to deselect the file.
+  const runLogs = (await api("/api/logs")).data.versions || [];
+  let fileLogs = [];
+  if (base) fileLogs = (await api(`/api/logs?base=${encodeURIComponent(base)}`)).data.versions || [];
   if (seq !== logListSeq || folder !== folderSeq || base !== currentBase) return;
-  sel.dataset.scope = scope;
-  sel.innerHTML = "";
-  const versions = scope === "file"
-    ? [{ id: "live", filename: "Live console", timestamp: null }, ...data.versions]
-    : data.versions;
-  for (const v of versions) {
-    const o = document.createElement("option");
-    o.value = v.id;
-    o.textContent = v.id === "live" ? "▶ Live console"
-      : v.timestamp ? fmtLogTimestamp(v.timestamp) + (v.pipeline ? ` · ${v.pipeline}` : "")
-      : v.filename;
-    sel.appendChild(o);
+  sel.replaceChildren();
+  const ids = [];
+  const label = v => v.id === "live" ? "▶ Live console"
+    : v.timestamp ? fmtLogTimestamp(v.timestamp) + (v.pipeline ? ` · ${v.pipeline}` : "")
+    : v.filename;
+  for (const [name, versions, scope] of [["Runs", runLogs, "run"], [`Logs for ${base || ""}`, fileLogs, "file"]]) {
+    if (!versions.length) continue;
+    const group = document.createElement("optgroup");
+    group.label = name;
+    for (const v of versions) {
+      const o = document.createElement("option");
+      o.value = v.id; o.textContent = label(v); o.dataset.scope = scope;
+      group.appendChild(o); ids.push(v.id);
+    }
+    sel.appendChild(group);
   }
-  const ids = versions.map(v => v.id);
   if (!currentLogSel || !ids.includes(currentLogSel)) currentLogSel = ids[0] || null;
   sel.value = currentLogSel || "";
   sel.disabled = !ids.length;
@@ -798,7 +799,7 @@ async function loadLogContent() {
       : "No runs yet this session.";
     return;
   }
-  const url = sel.dataset.scope === "file"
+  const url = sel.selectedOptions[0]?.dataset.scope === "file"
     ? `/api/logs?base=${encodeURIComponent(currentBase)}&file=${encodeURIComponent(id)}`
     : `/api/logs?file=${encodeURIComponent(id)}`;
   const { data } = await api(url);

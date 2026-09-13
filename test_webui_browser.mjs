@@ -30,7 +30,9 @@ const server = http.createServer(async (req,res) => {
   if (u.pathname === '/api/logs') {
     const file = u.searchParams.get('file');
     await delay(logDelay[file] || 0);
-    return file ? send({lines:[],next:0,content:`Log ${file}`,selected:file}) : send({versions:[{id:'live',filename:'Live console'},{id:'first',filename:'First log'},{id:'second',filename:'Second log'}]});
+    if (file) return send({lines:[],next:0,content:`Log ${file}`,selected:file});
+    if (u.searchParams.get('base')) return send({base:u.searchParams.get('base'),versions:[{id:'logs/a.log',filename:'a.log'}]});
+    return send({versions:[{id:'live',filename:'Live console'},{id:'first',filename:'First log'},{id:'second',filename:'Second log'}]});
   }
   if (u.pathname === '/api/settings/global') {
     if(req.method==='PUT') {if(data.revision!==globalRevision)return send({detail:'stale'},409);globalValues=data.values;globalRevision+='x';}
@@ -101,6 +103,17 @@ try {
   await check('Failed save keeps draft and blocks navigation',async()=>{failSave=true;await input('invalid');await select('b');await wait('$("dirtyDialog").open');await click('dirtySave');await wait('!saving && $("editorMsg").classList.contains("err")');assert.equal(await evaluate('editorBase'),'a');assert.equal(await evaluate('$("saveBtn").disabled'),false);failSave=false;await click('saveBtn');await wait('!formDirty()');});
   await check('Out-of-order settings response cannot replace new selection',async()=>{sidecarDelay.b=250;await select('b');await wait('editorLoading');await select('a');await wait('editorBase==="a"');await delay(300);assert.equal(await evaluate('editorBase'),'a');assert.equal(await evaluate('$("commentField").value'),saved.a.comment);sidecarDelay.b=0;});
   await check('Out-of-order transcript version response ignored',async()=>{await click('tabTranscript');await wait('$("transcriptText").textContent==="Transcript v2"');versionDelay.v1=250;await evaluate('loadTranscript(currentBase,"v1"); void 0');await evaluate('loadTranscript(currentBase,"v2"); void 0');await delay(300);assert.equal(await evaluate('$("transcriptText").textContent'),'Transcript v2');versionDelay.v1=0;});
+  await check('Run logs stay reachable while a file is selected',async()=>{
+    await select('a');await wait('editorBase==="a"');await click('tabLogs');
+    await wait('$("logSel").options.length===4');
+    assert.deepEqual(await evaluate('[...$("logSel").querySelectorAll("optgroup")].map(g=>g.label)'),['Runs','Logs for a']);
+    assert.deepEqual(await evaluate('[...$("logSel").options].map(o=>o.value)'),['live','first','second','logs/a.log']);
+    await evaluate('$("logSel").value="second";$("logSel").dispatchEvent(new Event("change"))');
+    await wait('$("log").textContent==="Log second"');
+    await evaluate('$("logSel").value="logs/a.log";$("logSel").dispatchEvent(new Event("change"))');
+    await wait('$("log").textContent==="Log logs/a.log"');
+    await click('tabTranscript');
+  });
   await check('Raw JSON view keeps every version selectable',async()=>{
     await select('a');await wait('editorBase==="a"');await click('tabTranscript');
     await wait('$("transcriptText").textContent==="Transcript v2"');
