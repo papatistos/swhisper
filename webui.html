@@ -182,6 +182,9 @@
   body { height: 100dvh; }
   #filePanel { flex: 0 0 var(--sidebar-width, 340px); min-width: 220px; max-width: 55vw;
                display: flex; flex-direction: column; background: var(--panel); min-height: 0; }
+  #fileTools { padding: 10px; display: grid; gap: 8px; }
+  #fileTools input, #fileTools select { width: 100%; min-width: 0; }
+  #fileCount { font-size: .75rem; color: var(--muted); }
   #files { width: auto; border: 0; flex: 1; min-height: 0; }
   #sidebarResize { width: 7px; flex-shrink: 0; background: var(--border); cursor: col-resize; }
   body.filesCollapsed #filePanel, body.filesCollapsed #sidebarResize { display: none; }
@@ -207,6 +210,8 @@
     main { flex-direction: column; }
     #filePanel { flex: 0 0 210px; max-height: 26vh; width: 100%; max-width: none; min-width: 0; }
     #consolePanel { flex-basis: var(--console-mobile-height, 120px); min-height: 50px; max-height: 70vh; }
+    #fileTools { grid-template-columns: 1fr 1fr; }
+    #fileTools input { grid-column: 1 / -1; }
     #sidebarResize { display: none; }
     #right { min-height: 0; }
     #dirBox { min-width: 0; flex-basis: 100%; flex-wrap: nowrap; }
@@ -221,6 +226,8 @@
     header { gap: 6px; padding: 8px; }
     header button { font-size: .8rem; }
     #filePanel { flex-basis: 155px; }
+    #fileTools { gap: 4px; padding: 6px; }
+    #fileCount { display: none; }
     #consolePanel { flex-basis: var(--console-mobile-height, 100px); }
     #consoleBar { padding: 6px; gap: 6px; }
     #consoleBar .msg { min-width: 0; overflow-wrap: anywhere; }
@@ -248,6 +255,12 @@
 
 <main>
   <aside id="filePanel" aria-label="Audio library">
+    <div id="fileTools">
+      <input id="fileSearch" type="search" aria-label="Search filenames" placeholder="Search filenames…">
+      <select id="fileFilter" aria-label="Filter files"><option value="all">All files</option><option value="unfinished">Unfinished</option><option value="reprocess">Needs reprocessing</option><option value="ready">Transcript ready</option><option value="overrides">Per-file settings</option></select>
+      <select id="fileSort" aria-label="Sort files"><option value="name">Name A–Z</option><option value="newest">Newest audio first</option><option value="status">Processing status</option></select>
+      <span id="fileCount" role="status"></span>
+    </div>
     <div id="files" role="region" aria-label="Audio files"></div>
   </aside>
   <div id="sidebarResize" role="separator" tabindex="0" aria-label="Resize file list" aria-orientation="vertical" aria-valuemin="220" aria-valuemax="700" aria-valuenow="340"></div>
@@ -547,35 +560,46 @@ async function loadFiles() {
   const seq = ++filesSeq, folder = folderSeq;
   const { data } = await api("/api/files");
   if (seq !== filesSeq || folder !== folderSeq) return;
+  FILES_BY_BASE = Object.fromEntries(data.files.map(f => [f.base, f]));
+  renderFiles();
+}
+
+function renderFiles() {
   const box = $("files");
   box.innerHTML = "";
-  FILES_BY_BASE = {};
-  for (const f of data.files) FILES_BY_BASE[f.base] = f;
-  if (!data.files.length) {
-    box.innerHTML = '<div class="file"><span class="name" style="color:var(--muted)">No audio files found</span></div>';
+  const all = Object.values(FILES_BY_BASE);
+  const query = $("fileSearch").value.toLocaleLowerCase();
+  const filter = $("fileFilter").value;
+  const rows = all.filter(f => f.base.toLocaleLowerCase().includes(query) &&
+    (filter === "all" || filter === "unfinished" && !f.has_transcript || filter === "reprocess" && f.will_reprocess ||
+     filter === "ready" && f.has_transcript || filter === "overrides" && f.sidecar));
+  const stateRank = f => f.will_reprocess ? 0 : !f.transcribed ? 1 : !f.has_transcript ? 2 : 3;
+  rows.sort((a, b) => ($("fileSort").value === "newest" ? (b.mtime || 0) - (a.mtime || 0) :
+    $("fileSort").value === "status" ? stateRank(a) - stateRank(b) : 0) || a.base.localeCompare(b.base, undefined, {numeric:true}));
+  $("fileCount").textContent = `${rows.length} of ${all.length} files`;
+  if (!rows.length) {
+    box.textContent = all.length ? "No files match these filters." : "No audio files found.";
     return;
   }
-  for (const f of data.files) {
+  for (const f of rows) {
     const div = document.createElement("div");
     div.className = "file" + (f.base === currentBase ? " sel" : "");
     div.dataset.base = f.base;
     div.setAttribute("role", "group");
     div.setAttribute("aria-label", f.base);
     const badges = [];
-    badges.push(f.transcribed
-      ? '<span class="badge on-ok jbadge" title="View raw JSON transcript">transcribed</span>'
-      : '<span class="badge">not transcribed</span>');
-    badges.push(f.diarized ? '<span class="badge on-ok">diarized</span>' : '<span class="badge">not diarized</span>');
-    if (f.sidecar) badges.push('<span class="badge on-info">per-file settings</span>');
-    if (f.comment) badges.push('<span class="badge on-info">💬 comment</span>');
-    if (f.will_reprocess) badges.push('<span class="badge on-warn">will reprocess</span>');
-    if (f.has_transcript) badges.push('<span class="badge on-ok tbadge" title="Open transcript">transcript ready</span>');
-    if (f.has_logs) badges.push('<span class="badge on-ok lbadge" title="Open logs">logs</span>');
+    const primary = f.will_reprocess ? "Needs reprocessing" : f.has_transcript ? "Transcript ready" : f.transcribed ? "Awaiting diarization" : "Not transcribed";
+    badges.push(`<span class="badge ${f.will_reprocess ? "on-warn" : f.has_transcript ? "on-ok" : ""}">${primary}</span>`);
+    if (f.sidecar) badges.push('<span class="badge on-info">overrides</span>');
+    if (f.comment) badges.push('<span class="badge">comment</span>');
+    if (f.has_transcript) badges.push('<span class="badge tbadge" title="Open transcript">Transcript</span>');
+    if (f.transcribed) badges.push('<span class="badge jbadge" title="View raw JSON transcript">JSON</span>');
+    if (f.has_logs) badges.push('<span class="badge lbadge" title="Open logs">Logs</span>');
     div.innerHTML = `<button class="name fileSelect">${escapeHTML(f.base)}</button><div class="badges">${badges.join("")}</div>`;
     const fileButton = div.querySelector(".fileSelect");
     fileButton.setAttribute("aria-pressed", String(f.base === currentBase));
     fileButton.setAttribute("aria-label", `Edit settings for ${f.base}`);
-    fileButton.tabIndex = f.base === currentBase || (!currentBase && f === data.files[0]) ? 0 : -1;
+    fileButton.tabIndex = f.base === currentBase || (!rows.some(row => row.base === currentBase) && f === rows[0]) ? 0 : -1;
     div.onclick = handle(() => selectFile(f.base));
     for (const [selector, tab, version] of [[".tbadge", "transcript"], [".lbadge", "logs"], [".jbadge", "transcript", RAW_JSON_VERSION]]) {
       const badge = div.querySelector(selector);
@@ -1456,6 +1480,7 @@ $("consoleResize").addEventListener("keydown", e => {
 });
 $("globalSettingsBtn").onclick=handle(openGlobalSettings);
 $("pipelineSel").addEventListener("change", filterSettings);
+for(const id of ["fileSearch","fileFilter","fileSort"]) $(id).addEventListener(id==="fileSearch"?"input":"change",renderFiles);
 function setSidebarWidth(width){
   width=Math.max(220,Math.min(window.innerWidth*.55,700,width));
   document.body.style.setProperty("--sidebar-width",width+"px");$("sidebarResize").setAttribute("aria-valuenow",Math.round(width));

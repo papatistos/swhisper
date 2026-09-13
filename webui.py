@@ -1008,6 +1008,14 @@ def api_set_audio_dir(body: Dict[str, str]) -> Dict[str, Any]:
 def api_files() -> Dict[str, Any]:
     dirs = state.dirs()
     files = []
+    audio_mtimes = {}
+    for name in os.listdir(dirs['audio']):
+        base, ext = os.path.splitext(name)
+        if ext.lower() in AUDIO_EXTENSIONS:
+            try:
+                audio_mtimes[base] = max(audio_mtimes.get(base, 0), os.path.getmtime(os.path.join(dirs['audio'], name)))
+            except FileNotFoundError:
+                pass
     for base in _basenames(dirs["audio"]):
         json_path = os.path.join(dirs["json"], f"{base}.json")
         ok_path = os.path.join(dirs["output"], f"{base}.ok")
@@ -1031,6 +1039,7 @@ def api_files() -> Dict[str, Any]:
             "will_reprocess": redo_t or redo_d,
             "has_transcript": bool(_transcript_versions(dirs, base)),
             "has_logs": bool(_log_versions(dirs, base)),
+            "mtime": audio_mtimes.get(base, 0),
         })
     return {"files": files}
 
