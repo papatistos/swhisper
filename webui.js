@@ -139,6 +139,7 @@ async function changeDir() {
     folderSeq++; editorSeq++; transcriptSeq++; renderSeq++; logSeq++; logListSeq++;
     resetAudioReview();
     currentBase = editorBase = savedForm = null;
+    txtVersionsByBase = {};
     editorLoading = false;
     $("editor").inert = false;
     $("editor").innerHTML = '<div class="placeholder">Select an audio file.</div>';
@@ -538,6 +539,7 @@ const RENDER_DEFAULTS = {
   pause_linebreak_threshold: 1.0, min_pause: 0,
 };
 let renderBaseline = {...RENDER_DEFAULTS};
+let txtVersionsByBase = {};   // keeps the version list available on the raw JSON view
 let renderSeq = 0;          // drops responses that arrive out of order
 let renderTimer = null;
 
@@ -687,12 +689,19 @@ async function loadTranscript(base, version) {
   msg.className = "msg";
 
   if (version === RAW_JSON_VERSION) {
-
-    updateRenderBar(false);
     try {
       const { data } = await api(`/api/json-transcript/${encodeURIComponent(base)}`);
       if (!valid()) return;
-      fillVersionSel([], hasRawJson, RAW_JSON_VERSION);
+      // Offer the rendered versions alongside the raw JSON, so this view is not
+      // a dead end. Fetch the list only when it is not already known.
+      let txtVersions = txtVersionsByBase[base];
+      if (!txtVersions) {
+        try { txtVersions = (await api(`/api/transcript/${encodeURIComponent(base)}`)).data.versions || []; }
+        catch (e) { txtVersions = []; }
+        if (!valid()) return;
+        txtVersionsByBase[base] = txtVersions;
+      }
+      fillVersionSel(txtVersions, hasRawJson, RAW_JSON_VERSION);
       text.textContent = data.content;
       msg.textContent = `${base} — raw JSON transcript (${data.path})`;
     } catch (e) {
@@ -710,15 +719,8 @@ async function loadTranscript(base, version) {
   try {
     const { data } = await api(url);
     if (!valid()) return;
-    sel.innerHTML = "";
-    for (const v of data.versions) {
-      const o = document.createElement("option");
-      o.value = v.id;
-      o.textContent = v.timestamp ? fmtTimestamp(v.timestamp) : v.filename;
-      if (v.id === data.selected) o.selected = true;
-      sel.appendChild(o);
-    }
-    sel.disabled = false;
+    txtVersionsByBase[base] = data.versions;
+    fillVersionSel(data.versions, hasRawJson, data.selected);
     text.textContent = data.content;
     msg.textContent = `${base} — ${data.versions.length} version(s)`;
 
@@ -728,7 +730,7 @@ async function loadTranscript(base, version) {
     loadAudioReview(base, data.selected);
   } catch (e) {
     if (!valid()) return;
-
+    delete txtVersionsByBase[base];
     updateRenderBar(false);
     if (hasRawJson) { loadTranscript(base, RAW_JSON_VERSION); return; }
     sel.innerHTML = "";
@@ -974,6 +976,7 @@ async function pollRun() {
     $("progressStatus").textContent = st.pipeline
       ? [st.audio_dir, p.stage, p.detail, p.current_file, p.total_files ? `file ${p.file_index} of ${p.total_files}` : "", counts, p.last_error].filter(Boolean).join(" · ") : "";
     if (wasRunning && !st.running) {
+      txtVersionsByBase = {};   // a finished run may have written new versions
       await loadFiles();
       if (currentTab === "transcript" && currentBase) await loadTranscript(currentBase);
       if (currentTab === "logs") await loadLogList();

@@ -59,6 +59,7 @@ const server = http.createServer(async (req,res) => {
     await delay(sidecarDelay[base] || 0);
     return send({exists:true,unknown:{FUTURE:'preserve'},...(saved[base]||{values:{},comment:''})});
   }
+  if (u.pathname.startsWith('/api/json-transcript/')) return send({base:'a',path:'whisper-json-output/a.json',content:'{"raw": true}'});
   if (u.pathname.startsWith('/api/transcript/')) {
     const version=u.searchParams.get('version')||'v2';
     await delay(versionDelay[version]||0);
@@ -100,6 +101,17 @@ try {
   await check('Failed save keeps draft and blocks navigation',async()=>{failSave=true;await input('invalid');await select('b');await wait('$("dirtyDialog").open');await click('dirtySave');await wait('!saving && $("editorMsg").classList.contains("err")');assert.equal(await evaluate('editorBase'),'a');assert.equal(await evaluate('$("saveBtn").disabled'),false);failSave=false;await click('saveBtn');await wait('!formDirty()');});
   await check('Out-of-order settings response cannot replace new selection',async()=>{sidecarDelay.b=250;await select('b');await wait('editorLoading');await select('a');await wait('editorBase==="a"');await delay(300);assert.equal(await evaluate('editorBase'),'a');assert.equal(await evaluate('$("commentField").value'),saved.a.comment);sidecarDelay.b=0;});
   await check('Out-of-order transcript version response ignored',async()=>{await click('tabTranscript');await wait('$("transcriptText").textContent==="Transcript v2"');versionDelay.v1=250;await evaluate('loadTranscript(currentBase,"v1"); void 0');await evaluate('loadTranscript(currentBase,"v2"); void 0');await delay(300);assert.equal(await evaluate('$("transcriptText").textContent'),'Transcript v2');versionDelay.v1=0;});
+  await check('Raw JSON view keeps every version selectable',async()=>{
+    await select('a');await wait('editorBase==="a"');await click('tabTranscript');
+    await wait('$("transcriptText").textContent==="Transcript v2"');
+    assert.deepEqual(await evaluate('[...$("versionSel").options].map(o=>o.value)'),['v2','v1','__raw_json__']);
+    await evaluate('$("versionSel").value="__raw_json__";$("versionSel").dispatchEvent(new Event("change"))');
+    await wait('$("transcriptText").textContent.includes("raw")');
+    assert.deepEqual(await evaluate('[...$("versionSel").options].map(o=>o.value)'),['v2','v1','__raw_json__']);
+    assert.equal(await evaluate('$("versionSel").value'),'__raw_json__');
+    await evaluate('$("versionSel").value="v1";$("versionSel").dispatchEvent(new Event("change"))');
+    await wait('$("transcriptText").textContent==="Transcript v1"');
+  });
   await check('Out-of-order render response ignored',async()=>{
     renderDelay[1]=250;
     await evaluate('$("optMinPause").value="1"; applyRenderOptions(); void 0');
