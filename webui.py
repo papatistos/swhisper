@@ -55,6 +55,7 @@ from sidecar import (
     parse_sidecar_file,
     sidecar_requests_reprocess,
 )
+from webui_run import preview_run, inspect_progress
 import transcript_stats
 
 from transcript_render import (
@@ -944,6 +945,11 @@ def api_put_sidecar(basename: str, body: Dict[str, str]) -> Dict[str, Any]:
     if errors:
         return JSONResponse(status_code=422, content={"errors": errors})
 
+    # Preserve keys the form cannot edit, including settings from newer versions.
+    # Read them from disk, never trust unknown keys supplied by the client.
+    existing = parse_sidecar_file(path) if os.path.isfile(path) else {}
+    clean = {**{k: v for k, v in existing.items() if k not in SIDECAR_PARAMS}, **clean}
+
     if not clean and not comment.strip():
         # Nothing left — remove the sidecar entirely
         if os.path.isfile(path):
@@ -1298,9 +1304,22 @@ def api_logs(base: Optional[str] = None, file: Optional[str] = None,
     return {"scope": "run", "versions": versions}
 
 
+@app.get("/api/run/preview")
+def api_run_preview(pipeline: str) -> Dict[str, Any]:
+    if pipeline not in PIPELINES:
+        raise HTTPException(400, "Unknown pipeline")
+    return preview_run(state.audio_dir(), pipeline,
+                       _tconfig.TranscriptionConfig(), _dconfig.DiarizationConfig())
+
+
 @app.post("/api/run")
 def api_run(body: Dict[str, str]) -> Dict[str, Any]:
-    state.start(body.get("pipeline", ""))
+    pipeline = body.get("pipeline", "")
+    if body.get("preview_token"):
+        preview = api_run_preview(pipeline)
+        if preview["token"] != body["preview_token"]:
+            raise HTTPException(409, "Folder or settings changed. Review a new run preview before starting.")
+    state.start(pipeline)
     return api_run_status()
 
 
@@ -1313,14 +1332,20 @@ def api_run_stop() -> Dict[str, Any]:
 @app.get("/api/run/status")
 def api_run_status() -> Dict[str, Any]:
     with state.lock:
-        return {
+        status = {
             "running": state.running(),
             "pipeline": state.pipeline,
             "started_at": state.started_at,
             "finished_at": state.finished_at,
             "returncode": state.returncode,
-            "log_length": len(state.log_lines),
+            "stop_requested": state.stop_requested,
+            "run_id": state.run_id,
+            "audio_dir": state.run_audio_dir,
         }
+        lines = state._read_complete_lines(state.run_log_path) if state.run_log_path else list(state.log_lines)
+    status["log_length"] = len(lines)
+    status["progress"] = inspect_progress(lines, status["pipeline"])
+    return status
 
 
 @app.get("/api/run/log")
