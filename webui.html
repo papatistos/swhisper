@@ -305,9 +305,72 @@ let logOffset = 0;
 let wasRunning = false;
 let savedAudioPaths = new Set();
 let changingDir = false;
+let editorBase = null, savedForm = null, saving = false, editorLoading = false;
+let editorSeq = 0, folderSeq = 0, filesSeq = 0, transcriptSeq = 0, logSeq = 0, logListSeq = 0;
+let connected = false, lastStatus = null, runBusy = false, pollBusy = false, activeRunId = null;
+let pendingPreview = null, dirtyChoice = null, initialized = false;
+const escapeHTML = value => String(value).replace(/[&<>"']/g, c => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"}[c]));
+
+function formValues() {
+  const values = { _comment: ($("commentField") || { value: "" }).value };
+  document.querySelectorAll("#editor [data-key]").forEach(el => {
+    const raw = el.dataset.originalValue === el.value ? el.dataset.originalRaw : el.value;
+    if (raw.trim() !== "") values[el.dataset.key] = raw.trim();
+  });
+  return values;
+}
+function formDirty() {
+  return !!editorBase && savedForm !== null && JSON.stringify(formValues()) !== savedForm;
+}
+function updateSaveState() {
+  $("saveBtn").disabled = saving || editorLoading || !formDirty();
+  $("saveBtn").textContent = saving ? "Saving…" : "Save";
+  if (!saving && !editorLoading && editorBase) setMsg(formDirty() ? "Unsaved changes" : "All changes saved.", "");
+}
+function restoreSavedForm() {
+  if (savedForm === null) return;
+  const values = JSON.parse(savedForm);
+  $("commentField").value = values._comment || "";
+  document.querySelectorAll("#editor [data-key]").forEach(el => {
+    const value = values[el.dataset.key] || "";
+    el.value = value === el.dataset.originalRaw ? el.dataset.originalValue : value;
+    el.classList.toggle("set", el.value.trim() !== "");
+  });
+  updateSaveState();
+}
+async function resolveUnsaved() {
+  if (saving) return false;
+  if (!formDirty()) return true;
+  if (dirtyChoice) return false;
+  $("dirtyText").textContent = `Save changes to ${editorBase} before continuing?`;
+  const choice = await new Promise(resolve => {
+    dirtyChoice = resolve;
+    $("dirtyDialog").showModal();
+  });
+  if (choice === "save") return saveSidecar();
+  if (choice === "discard") { restoreSavedForm(); return true; }
+  return false;
+}
+function finishDirtyDialog(choice) {
+  const resolve = dirtyChoice;
+  dirtyChoice = null;
+  $("dirtyDialog").close();
+  if (resolve) resolve(choice);
+}
+function updateRunControls() {
+  const running = !!(lastStatus && lastStatus.running);
+  $("startBtn").disabled = !connected || !initialized || running || runBusy || changingDir || saving || editorLoading;
+  $("stopBtn").disabled = !connected || !running || runBusy;
+  for (const id of ["pipelineSel", "dirBtn", "dirInput", "dirMenuBtn"]) {
+    $(id).disabled = !connected || running || runBusy || changingDir;
+  }
+}
+function reportError(error) { setMsg(error.message, "err"); }
+function handle(action) { return (...args) => Promise.resolve().then(() => action(...args)).catch(reportError); }
+
 
 async function api(path, opts) {
-  const res = await fetch(path, opts);
+  const res = await fetch(path, { ...opts, signal: opts?.signal || AbortSignal.timeout(15000) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok && res.status !== 422) throw new Error(data.detail || res.statusText);
   return { status: res.status, data };
@@ -340,19 +403,23 @@ async function loadMeta() {
   savedAudioPaths = new Set(paths);
   renderDirMenu(paths);
   const sel = $("pipelineSel");
+  const previous = sel.value;
   sel.innerHTML = "";
   for (const p of META.pipelines) {
     const o = document.createElement("option");
     o.value = p.id; o.textContent = p.label;
     sel.appendChild(o);
   }
+  if ([...sel.options].some(o => o.value === previous)) sel.value = previous;
 }
 
 async function changeDir() {
-  if (changingDir) return;
+  if (changingDir || runBusy || lastStatus?.running) return;
   const path = $("dirInput").value.trim();
-  if (!path) return;
+  if (!path || path === META?.audio_dir) return;
+  if (!await resolveUnsaved()) { $("dirInput").value = META?.audio_dir || ""; return; }
   changingDir = true;
+  updateRunControls();
   try {
     const { data } = await api("/api/audio-dir", {
       method: "POST",
@@ -360,7 +427,10 @@ async function changeDir() {
       body: JSON.stringify({ path }),
     });
     $("dirInput").value = data.audio_dir;
-    currentBase = null;
+    folderSeq++; editorSeq++; transcriptSeq++; renderSeq++; logSeq++; logListSeq++;
+    currentBase = editorBase = savedForm = null;
+    editorLoading = false;
+    $("editor").inert = false;
     $("editor").innerHTML = '<div class="placeholder">Select an audio file.</div>';
     $("transcriptText").innerHTML = '<div class="placeholder">Select an audio file to view its transcript.</div>';
     $("versionSel").innerHTML = "";
@@ -374,8 +444,8 @@ async function changeDir() {
     showTab("settings");
     await loadMeta();
     await loadFiles();
-  } catch (e) { alert(e.message); }
-  finally { changingDir = false; }
+  } catch (e) { reportError(e); $("dirInput").value = META?.audio_dir || ""; }
+  finally { changingDir = false; updateRunControls(); }
 }
 
 function changeDirIfSavedPath() {
@@ -497,7 +567,15 @@ function inputFor(key, spec, value) {
       o.value = v; o.textContent = label;
       el.appendChild(o);
     }
-    el.value = value !== undefined ? String(value).toLowerCase() : "";
+    const raw = value !== undefined ? String(value).toLowerCase() : "";
+    const normalized = ["1", "yes", "on"].includes(raw) ? "true" : ["0", "no", "off"].includes(raw) ? "false" : raw;
+    if (normalized && !["true", "false"].includes(normalized)) {
+      const invalid = document.createElement("option");
+      invalid.value = raw; invalid.textContent = `Invalid value: ${raw}`; el.appendChild(invalid);
+    }
+    el.value = normalized;
+    el.dataset.originalValue = normalized;
+    el.dataset.originalRaw = raw;
   } else if (key === "SWHISPER_OUTPUT_PREAMBLE" || key === "SWHISPER_INITIAL_PROMPT") {
     el = document.createElement("textarea");
     el.rows = 2;
@@ -510,21 +588,48 @@ function inputFor(key, spec, value) {
     el.value = value !== undefined ? value : "";
   }
   el.dataset.key = key;
+  el.id = `setting-${key}`;
   el.title = spec.help || key;
   const mark = () => el.classList.toggle("set", el.value.trim() !== "");
   el.addEventListener("input", mark);
+  el.addEventListener("input", updateSaveState);
+  el.addEventListener("change", updateSaveState);
   mark();
   return el;
 }
 
-async function selectFile(base) {
+async function selectFile(base, force = false) {
+  if (changingDir || saving) return false;
+  if (!force && base === editorBase && base === currentBase) return true;
+  if (!force && !await resolveUnsaved()) return false;
+  const seq = ++editorSeq, folder = folderSeq;
+  transcriptSeq++; renderSeq++; logSeq++; logListSeq++;
   currentBase = base;
-  showTab(currentTab);  // reload whichever tab is active for the new file, don't jump to Settings
-  document.querySelectorAll("#files .file").forEach(d =>
-    d.classList.toggle("sel", d.dataset.base === base));
-  const { data } = await api(`/api/sidecar/${encodeURIComponent(base)}`);
+  editorBase = savedForm = null;
+  editorLoading = true;
+  $("editor").inert = true;
+  $("editor").textContent = "Loading settings…";
+  $("deleteBtn").disabled = true;
+  updateSaveState(); updateRunControls();
+  showTab(currentTab);
+  document.querySelectorAll("#files .file").forEach(d => {
+    d.classList.toggle("sel", d.dataset.base === base);
+    d.querySelector(".fileSelect")?.setAttribute("aria-pressed", String(d.dataset.base === base));
+    if (d.querySelector(".fileSelect")) d.querySelector(".fileSelect").tabIndex = d.dataset.base === base ? 0 : -1;
+  });
+  let data;
+  try { ({ data } = await api(`/api/sidecar/${encodeURIComponent(base)}`)); }
+  catch (e) {
+    if (seq === editorSeq && folder === folderSeq) {
+      $("editor").textContent = "Could not load settings. Select the file to retry.";
+      editorLoading = false; $("editor").inert = false;
+      updateSaveState(); updateRunControls(); reportError(e);
+    }
+    return false;
+  }
+  if (seq !== editorSeq || folder !== folderSeq || base !== currentBase) return false;
   const editor = $("editor");
-  editor.innerHTML = `<h2 style="margin:0 0 12px;font-size:1.05rem">${base}</h2>`;
+  editor.innerHTML = `<h2 style="margin:0 0 12px;font-size:1.05rem">${escapeHTML(base)}</h2>`;
 
   const commentBox = document.createElement("div");
   commentBox.id = "commentBox";
@@ -535,6 +640,8 @@ async function selectFile(base) {
   commentEl.placeholder = "Free-text notes about this file (stored in the sidecar as comment lines, ignored by the pipeline — editing this never triggers reprocessing).";
   commentEl.title = "Free-text notes, not read by any script.";
   commentEl.value = data.comment || "";
+  commentEl.setAttribute("aria-label", "Comments about this file");
+  commentEl.addEventListener("input", updateSaveState);
   commentBox.appendChild(commentEl);
   editor.appendChild(commentBox);
 
@@ -549,6 +656,7 @@ async function selectFile(base) {
       const label = document.createElement("label");
       label.innerHTML = `${key.replace("SWHISPER_", "")}<span class="stage">${spec.stage}</span>`;
       label.title = `${spec.help || ""}\n\n(${key})`;
+      label.htmlFor = `setting-${key}`;
       row.appendChild(label);
       row.appendChild(inputFor(key, spec, data.values[key]));
       g.appendChild(row);
@@ -558,25 +666,37 @@ async function selectFile(base) {
   if (data.unknown && Object.keys(data.unknown).length) {
     const warn = document.createElement("div");
     warn.className = "group";
-    warn.innerHTML = `<h3>Unrecognized keys in sidecar (kept out of the form, will be dropped on save)</h3>
-      <div style="color:var(--muted);font-size:0.8rem">${Object.entries(data.unknown).map(([k, v]) => `${k}=${v}`).join("<br>")}</div>`;
+    warn.innerHTML = `<h3>Additional settings (preserved when saving)</h3>
+      <div style="color:var(--muted);font-size:0.8rem">${Object.entries(data.unknown).map(([k, v]) => `${escapeHTML(k)}=${escapeHTML(v)}`).join("<br>")}</div>`;
     editor.appendChild(warn);
   }
-  $("editorBar").style.display = "";
+  editorBase = base;
+  savedForm = JSON.stringify(formValues());
+  editorLoading = false;
+  editor.inert = false;
+  $("editorBar").style.display = currentTab === "settings" ? "" : "none";
   $("deleteBtn").disabled = !data.exists;
+  updateSaveState(); updateRunControls();
   setMsg(data.exists ? "Sidecar file exists — blue fields are per-file overrides." : "No sidecar yet — fill in any field and save.", "");
+  return true;
 }
 
 function setMsg(text, cls) {
   const m = $("editorMsg");
   m.textContent = text;
   m.className = "msg " + (cls || "");
+  $("uiNotice").hidden = cls !== "err";
+  if (cls === "err") $("uiNotice").textContent = text;
 }
 
 /* ---------- transcript view ---------- */
 
 function showTab(tab) {
   currentTab = tab;
+  for (const [id, name] of [["tabSettings", "settings"], ["tabTranscript", "transcript"], ["tabLogs", "logs"]]) {
+    $(id).setAttribute("aria-selected", String(name === tab));
+    $(id).tabIndex = name === tab ? 0 : -1;
+  }
   $("tabSettings").classList.toggle("active", tab === "settings");
   $("tabTranscript").classList.toggle("active", tab === "transcript");
   $("tabLogs").classList.toggle("active", tab === "logs");
@@ -585,7 +705,7 @@ function showTab(tab) {
   $("logsView").style.display = tab === "logs" ? "" : "none";
   $("editorBar").style.display = (tab === "settings" && currentBase) ? "" : "none";
   if (tab === "transcript" && currentBase) loadTranscript(currentBase);
-  if (tab === "logs") loadLogList();
+  if (tab === "logs") handle(loadLogList)();
 }
 
 function fmtTimestamp(ts) {
