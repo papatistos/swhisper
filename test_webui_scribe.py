@@ -19,6 +19,26 @@ class ScribeWebTests(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
+    def test_artifacts_are_readable_without_exposing_arbitrary_files(self):
+        from fastapi.testclient import TestClient
+        work = Path(webui.api_run_preview('scribe')['files'][0]['work_dir'])
+        work.mkdir(parents=True)
+        result = work / 'whisper-json-output' / 'audio.json'
+        result.parent.mkdir()
+        result.write_text('{"text":"simulated transcript"}')
+        (work / 'secret.env').write_text('must not be served')
+        (work / 'escape.txt').symlink_to(self.root / 'a.wav')
+        with TestClient(webui.app) as client:
+            listing = client.get('/api/scribe/artifacts')
+            self.assertEqual(listing.status_code, 200)
+            files = listing.json()['files']
+            self.assertEqual(len(files), 1)
+            self.assertIn('audio.json', files[0]['path'])
+            fetched = client.get('/api/scribe/artifact', params={'path': files[0]['path']})
+            self.assertEqual(fetched.json()['text'], 'simulated transcript')
+            for path in ('../a.wav', 'a.wav', str(result), str((work / 'secret.env').relative_to(self.root)), str((work / 'escape.txt').relative_to(self.root))):
+                self.assertIn(client.get('/api/scribe/artifact', params={'path': path}).status_code, (400, 404))
+
     def test_batch_stops_before_changed_or_redirected_input(self):
         import json
         import webui_scribe

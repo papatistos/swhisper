@@ -1541,6 +1541,29 @@ def api_logs(base: Optional[str] = None, file: Optional[str] = None,
     return {"scope": "run", "versions": versions}
 
 
+@app.get('/api/scribe/artifacts')
+def api_scribe_artifacts():
+    audio = Path(state.audio_dir()).resolve()
+    root = audio / 'scribe-webui'
+    files = []
+    if root.is_dir() and root.resolve() == root:
+        for path in sorted(root.rglob('*')):
+            relative = path.relative_to(root)
+            if (path.is_file() and path.resolve() == path
+                    and not any(part.startswith('.') for part in relative.parts)
+                    and path.suffix.lower() in {'.json', '.txt', '.rtf', '.tsv', '.srt', '.vtt', '.log', '.csv'}):
+                files.append({'path': str(path.relative_to(audio)), 'size': path.stat().st_size})
+    return {'files': files}
+
+
+@app.get('/api/scribe/artifact')
+def api_scribe_artifact(path: str):
+    allowed = {item['path'] for item in api_scribe_artifacts()['files']}
+    if path not in allowed:
+        raise HTTPException(404, 'Scribe artifact not found')
+    return FileResponse(Path(state.audio_dir()).resolve() / path)
+
+
 @app.get("/api/run/preview")
 def api_run_preview(pipeline: str, selected: str = '', language: str = 'Swedish (verbatim)') -> Dict[str, Any]:
     if pipeline not in PIPELINES:
