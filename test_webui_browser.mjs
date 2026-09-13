@@ -21,9 +21,9 @@ const server = http.createServer(async (req,res) => {
   let body = ''; for await (const chunk of req) body += chunk;
   const data = body ? JSON.parse(body) : {};
   const send = (value, code=200) => {res.writeHead(code, {'Content-Type':'application/json'});res.end(JSON.stringify(value));};
-  if (u.pathname === '/') {res.writeHead(200, {'Content-Type':'text/html'});res.end(html);return;}
-  if (u.pathname === '/webui.css') {res.writeHead(200, {'Content-Type':'text/css'});res.end(css);return;}
-  if (u.pathname === '/webui.js') {res.writeHead(200, {'Content-Type':'text/javascript'});res.end(js);return;}
+  if (u.pathname === '/') {res.writeHead(200, {'Content-Type':'text/html','Cache-Control':'no-store'});res.end(html);return;}
+  if (u.pathname === '/webui.css') {res.writeHead(200, {'Content-Type':'text/css','Cache-Control':'no-store'});res.end(css);return;}
+  if (u.pathname === '/webui.js') {res.writeHead(200, {'Content-Type':'text/javascript','Cache-Control':'no-store'});res.end(js);return;}
   if (u.pathname === '/api/meta') return send(meta());
   if (u.pathname === '/api/files') return send({files:['a','b','<unsafe>'].map(base=>({base,transcribed:base!=='<unsafe>',diarized:base!=='<unsafe>',has_transcript:base!=='<unsafe>',has_logs:true,will_reprocess:base==='b',mtime:base==='b'?20:10}))});
   if (u.pathname === '/api/run/status') return offline ? send({detail:'Offline'},503) : send(status);
