@@ -99,54 +99,82 @@ def preview_run(audio_dir, pipeline, tc, dc):
     return result
 
 
+class ProgressTracker:
+    """Incremental reader of a run's log.
+
+    A run's log only grows, so re-reading it from the start on every poll costs
+    more with every minute the run lasts. The tracker keeps the state the scan
+    produced and consumes each line exactly once.
+    """
+
+    def __init__(self, pipeline=None):
+        self.pipeline = pipeline
+        self.stage = 'Starting'
+        self.detail = 'Preparing models and files'
+        self.current = None
+        self.index = None
+        self.total = None
+        self.completed = {'Transcription': set(), 'Diarization': set()}
+        self.errors = []
+        self.line_count = 0
+
+    def feed(self, lines):
+        """Only count explicit success records, not inferred success from exit 0."""
+        for raw in lines:
+            self.line_count += 1
+            line = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', raw).strip()
+            match = re.search(r'Audio file (\d+)/(\d+): (.+)', line)
+            if match:
+                self.index, self.total, self.current = int(match[1]), int(match[2]), match[3]
+                self.stage = 'Diarization + transcription' if self.pipeline == 'transcribe5' else 'Transcription'
+                self.detail = 'Preparing audio'
+            match = re.search(r'Processing \((\d+)/(\d+)\): (.+)', line)
+            if match:
+                self.index, self.total, self.current = int(match[1]), int(match[2]), match[3]
+                self.stage = 'Diarization + transcription' if self.pipeline == 'transcribe5' else 'Transcription'
+                self.detail = 'Processing audio'
+            if 'Launching diarization pipeline' in line:
+                self.stage, self.current, self.index, self.total = 'Diarization', None, None, None
+                self.detail = 'Preparing diarization'
+            if 'DIARIZATION LOG FOR:' in line:
+                self.stage = 'Diarization'
+                self.current = line.split('DIARIZATION LOG FOR:', 1)[1].strip()
+                self.detail = 'Loading file'
+            step = re.search(r'Step \d+: (.+)', line)
+            if step:
+                self.detail = step[1]
+            elif 'Loading Whisper model' in line:
+                self.detail = 'Loading Whisper model'
+            elif '🔄 Transcribing...' in line:
+                self.detail = 'Transcribing audio'
+            match = re.search(r'Processing file (\d+) of (\d+)', line)
+            if match:
+                self.index, self.total = int(match[1]), int(match[2])
+            match = re.search(r'Skipping file (\d+) of (\d+): (.+)', line)
+            if match:
+                self.stage, self.current = 'Diarization', match[3]
+                self.index, self.total = int(match[1]), int(match[2])
+                self.detail = 'Skipping existing output'
+            if re.search(r'✅ Saved \d+ segments', line) and self.current:
+                self.completed['Transcription'].add(self.current)
+                self.detail = 'Transcription saved'
+            if 'Completion marker created:' in line and self.current:
+                self.completed['Diarization'].add(self.current)
+                self.detail = 'Diarization saved'
+            if (('❌' in line and 'No new audio files' not in line) or
+                    'ERROR:' in line or re.search(r'^Failed: [1-9]\d*$', line) or
+                    line.startswith('Traceback (most recent call last)')):
+                self.errors.append(line)
+        return self
+
+    def snapshot(self):
+        return dict(stage=self.stage, detail=self.detail, current_file=self.current,
+                    file_index=self.index, total_files=self.total,
+                    completed={k: len(v) for k, v in self.completed.items()},
+                    error_count=len(self.errors),
+                    last_error=self.errors[-1] if self.errors else None)
+
+
 def inspect_progress(lines, pipeline):
-    """Only count explicit success records, not inferred success from exit 0."""
-    stage, current, index, total = 'Starting', None, None, None
-    detail = 'Preparing models and files'
-    completed = {'Transcription': set(), 'Diarization': set()}
-    errors = []
-    for raw in lines:
-        line = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', raw).strip()
-        match = re.search(r'Audio file (\d+)/(\d+): (.+)', line)
-        if match:
-            index, total, current = int(match[1]), int(match[2]), match[3]
-            stage = 'Diarization + transcription' if pipeline == 'transcribe5' else 'Transcription'
-            detail = 'Preparing audio'
-        match = re.search(r'Processing \((\d+)/(\d+)\): (.+)', line)
-        if match:
-            index, total, current = int(match[1]), int(match[2]), match[3]
-            stage = 'Diarization + transcription' if pipeline == 'transcribe5' else 'Transcription'
-            detail = 'Processing audio'
-        if 'Launching diarization pipeline' in line:
-            stage, current, index, total = 'Diarization', None, None, None
-            detail = 'Preparing diarization'
-        if 'DIARIZATION LOG FOR:' in line:
-            stage, current = 'Diarization', line.split('DIARIZATION LOG FOR:', 1)[1].strip()
-            detail = 'Loading file'
-        step = re.search(r'Step \d+: (.+)', line)
-        if step:
-            detail = step[1]
-        elif 'Loading Whisper model' in line:
-            detail = 'Loading Whisper model'
-        elif '🔄 Transcribing...' in line:
-            detail = 'Transcribing audio'
-        match = re.search(r'Processing file (\d+) of (\d+)', line)
-        if match:
-            index, total = int(match[1]), int(match[2])
-        match = re.search(r'Skipping file (\d+) of (\d+): (.+)', line)
-        if match:
-            stage, current, index, total = 'Diarization', match[3], int(match[1]), int(match[2])
-            detail = 'Skipping existing output'
-        if re.search(r'✅ Saved \d+ segments', line) and current:
-            completed['Transcription'].add(current)
-            detail = 'Transcription saved'
-        if 'Completion marker created:' in line and current:
-            completed['Diarization'].add(current)
-            detail = 'Diarization saved'
-        if (('❌' in line and 'No new audio files' not in line) or
-                'ERROR:' in line or re.search(r'^Failed: [1-9]\d*$', line) or
-                line.startswith('Traceback (most recent call last)')):
-            errors.append(line)
-    return dict(stage=stage, detail=detail, current_file=current, file_index=index, total_files=total,
-                completed={k: len(v) for k, v in completed.items()},
-                error_count=len(errors), last_error=errors[-1] if errors else None)
+    """Scan a whole log at once. Prefer ProgressTracker for a live run."""
+    return ProgressTracker(pipeline).feed(lines).snapshot()
