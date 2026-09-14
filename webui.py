@@ -804,6 +804,31 @@ def _transcript_dirs(dirs: Dict[str, str]) -> List[str]:
     ]
 
 
+def _scribe_transcript_dirs(dirs: Dict[str, str], base: str):
+    """Associate staged audio exports with their recorded source identity."""
+    audio = Path(dirs["audio"]).resolve()
+    root = audio / "scribe-webui"
+    if not root.is_dir() or root.resolve() != root:
+        return []
+    sources = []
+    for work in sorted(root.iterdir()):
+        state_path = work / "scribe-state.json"
+        txt_dir = work / "transcripts" / "txt"
+        if (not work.is_dir() or work.resolve() != work
+                or state_path.resolve() != state_path or txt_dir.resolve() != txt_dir):
+            continue
+        try:
+            saved = json.loads(state_path.read_text(encoding="utf-8"))
+            identity = saved["identity"]
+            source = Path(identity["source"])
+            if source.parent != audio or source.stem != base:
+                continue
+            sources.append((str(txt_dir), "audio", "Scribe"))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return sources
+
+
 def _transcript_versions(dirs: Dict[str, str], base: str) -> List[Dict[str, Any]]:
     """All TXT transcript versions for *base*, newest (by mtime) first.
 
@@ -811,7 +836,9 @@ def _transcript_versions(dirs: Dict[str, str], base: str) -> List[Dict[str, Any]
     is accepted as an untimestamped fallback.
     """
     versions: List[Dict[str, Any]] = []
-    for txt_dir in _transcript_dirs(dirs):
+    sources = [(directory, base, None) for directory in _transcript_dirs(dirs)]
+    sources.extend(_scribe_transcript_dirs(dirs, base))
+    for txt_dir, export_base, pipeline in sources:
         try:
             names = os.listdir(txt_dir)
         except OSError:
@@ -820,16 +847,18 @@ def _transcript_versions(dirs: Dict[str, str], base: str) -> List[Dict[str, Any]
             if not name.endswith(".txt"):
                 continue
             stem = name[:-4]
-            if stem == base:
+            if stem == export_base:
                 ts = None
-            elif stem.startswith(base + "_"):
-                m = _TRANSCRIPT_TS_RE.match(stem[len(base):])
+            elif stem.startswith(export_base + "_"):
+                m = _TRANSCRIPT_TS_RE.match(stem[len(export_base):])
                 if not m:
                     continue
                 ts = m.group(1)
             else:
                 continue
             path = os.path.join(txt_dir, name)
+            if pipeline and Path(path).resolve() != Path(path):
+                continue
             try:
                 st = os.stat(path)
             except OSError:
@@ -842,6 +871,7 @@ def _transcript_versions(dirs: Dict[str, str], base: str) -> List[Dict[str, Any]
                 "timestamp": ts,
                 "mtime": st.st_mtime,
                 "size": st.st_size,
+                "pipeline": pipeline,
             })
     versions.sort(key=lambda v: v["mtime"], reverse=True)
     return versions
