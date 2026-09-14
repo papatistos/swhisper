@@ -21,6 +21,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from run_scope import keep_selected, describe as describe_scope
+
 import warnings
 
 warnings.filterwarnings(
@@ -786,6 +788,14 @@ def main(config: DiarizationConfig = None):
         # Find JSON files to process
         try:
             json_files = [f for f in os.listdir(config.final_json_input_dir) if f.endswith('.json')]
+            # A run may be restricted to a selection (SWHISPER_ONLY_FILES).
+            selected = keep_selected(json_files)
+            if len(selected) != len(json_files):
+                print(f"  {describe_scope()}")
+                if not selected:
+                    print(f"None of the selected files have transcription JSON in '{config.final_json_input_dir}'.")
+                    sys.exit(1)
+            json_files = selected
             if not json_files:
                 print(f"No .json files found in '{config.final_json_input_dir}'. Please run transcription first.")
                 sys.exit(1)

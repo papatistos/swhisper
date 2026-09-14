@@ -13,6 +13,7 @@ ENABLE_EARLY_FORMAT_SUMMARY = False
 
 from .config import TranscriptionConfig
 from sidecar import sidecar_requests_reprocess, STAGE_TRANSCRIBE
+from run_scope import keep_selected, describe as describe_scope
 
 
 class AudioConverter:
@@ -127,7 +128,11 @@ class FileManager:
                     # if sum(1 for char in f if char.isalpha()) >= 4:
                     audio_files.append(f)
             
-            return audio_files
+            # A run may be restricted to a selection (SWHISPER_ONLY_FILES).
+            selected = keep_selected(audio_files)
+            if len(selected) != len(audio_files):
+                print(f"  {describe_scope()}")
+            return selected
             
         except FileNotFoundError:
             print(f"Error: The directory '{audio_dir}' was not found.")
