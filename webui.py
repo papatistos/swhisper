@@ -139,6 +139,10 @@ PIPELINES: Dict[str, Dict[str, str]] = {
         "script": "diarize4.py",
         "label": "Diarization only (existing whisper JSON)",
     },
+    "scribe": {
+        "script": "webui_scribe.py",
+        "label": "Scribe remote upload + local diarization",
+    },
 }
 
 # Display grouping for the sidecar form (unlisted keys land in "Other")
@@ -161,6 +165,7 @@ class AppState:
         self.pid: Optional[int] = None
         self.progress = ProgressTracker()
         self.progress_offset = 0
+        self.scribe_plan = None
 
     # -- configuration ------------------------------------------------------
 
@@ -427,7 +432,7 @@ class AppState:
         elif finish:
             self._finish_run(finish[0], finish[1], offline=True)
 
-    def start(self, pipeline: str, only: Optional[List[str]] = None) -> None:
+    def start(self, pipeline: str, only: Optional[List[str]] = None, plan=None) -> None:
         if pipeline not in PIPELINES:
             raise HTTPException(400, f"Unknown pipeline '{pipeline}'")
         with self.lock:
@@ -450,6 +455,9 @@ class AppState:
                 except OSError:
                     pass
 
+            if pipeline == 'scribe' and not plan:
+                raise HTTPException(400, 'Scribe requires a reviewed plan')
+            self.scribe_plan = plan if pipeline == 'scribe' else None
             started_at = time.time()
             run_id = uuid.uuid4().hex
             ts = datetime.fromtimestamp(started_at).strftime("%Y%m%d-%H%M%S")
@@ -468,7 +476,7 @@ class AppState:
                 log_file.write(header + "\n")
                 log_file.flush()
                 process = subprocess.Popen(
-                    [sys.executable, "-u", str(script)],
+                    [sys.executable, "-u", str(script)] + ([json.dumps(plan)] if pipeline == "scribe" else []),
                     cwd=str(PROJECT_ROOT),
                     stdin=subprocess.DEVNULL,
                     stdout=log_file,
@@ -583,6 +591,10 @@ class AppState:
                 "audio_dir": audio_dir,
             }
             started_at = self.started_at
+        if self.scribe_plan:
+            entry['scribe'] = dict(language=self.scribe_plan['language'],
+                                   files=[r['file'] for r in self.scribe_plan['files']],
+                                   work_dirs=[r['work_dir'] for r in self.scribe_plan['files']])
         entry["files_produced"] = self._collect_new_files(audio_dir, started_at)
         entry["file_count"] = len(entry["files_produced"])
         history_path = os.path.join(audio_dir, HISTORY_FILENAME)
@@ -1435,14 +1447,47 @@ def _validated_selection(audio_dir: str, only) -> Optional[set]:
     return chosen
 
 
+@app.get('/api/scribe/artifacts')
+def api_scribe_artifacts():
+    audio = Path(state.audio_dir()).resolve()
+    root = audio / 'scribe-webui'
+    files = []
+    if root.is_dir() and root.resolve() == root:
+        for path in sorted(root.rglob('*')):
+            relative = path.relative_to(root)
+            if (path.is_file() and path.resolve() == path
+                    and not any(part.startswith('.') for part in relative.parts)
+                    and path.suffix.lower() in {'.json', '.txt', '.rtf', '.tsv', '.srt', '.vtt', '.log', '.csv'}):
+                files.append({'path': str(path.relative_to(audio)), 'size': path.stat().st_size})
+    return {'files': files}
+
+
+@app.get('/api/scribe/artifact')
+def api_scribe_artifact(path: str):
+    allowed = {item['path'] for item in api_scribe_artifacts()['files']}
+    if path not in allowed:
+        raise HTTPException(404, 'Scribe artifact not found')
+    return FileResponse(Path(state.audio_dir()).resolve() / path)
+
+
 @app.get("/api/run/preview")
-def api_run_preview(pipeline: str, only: Optional[List[str]] = Query(None)) -> Dict[str, Any]:
+def api_run_preview(pipeline: str, only: Optional[List[str]] = Query(None),
+                    selected: str = '', language: str = 'Swedish (verbatim)') -> Dict[str, Any]:
     if pipeline not in PIPELINES:
         raise HTTPException(400, "Unknown pipeline")
-    audio_dir = state.audio_dir()
-    selection = _validated_selection(audio_dir, only)
-    preview = preview_run(audio_dir, pipeline, _tconfig.TranscriptionConfig(),
-                          _dconfig.DiarizationConfig(), selection)
+    # Scribe carries its own single-recording selection and language; the local
+    # pipelines take a set of basenames from the ticked files in the list.
+    if pipeline == 'scribe':
+        from webui_scribe import preview_scribe
+        try:
+            preview = preview_scribe(state.audio_dir(), selected, language)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(400, str(exc)) from None
+    else:
+        audio_dir = state.audio_dir()
+        preview = preview_run(audio_dir, pipeline, _tconfig.TranscriptionConfig(),
+                              _dconfig.DiarizationConfig(),
+                              _validated_selection(audio_dir, only))
     _, revision = env_snapshot(GLOBAL_ENV_PATH)
     preview['token'] = hashlib.sha256((preview['token'] + revision).encode()).hexdigest()
     return preview
@@ -1451,6 +1496,19 @@ def api_run_preview(pipeline: str, only: Optional[List[str]] = Query(None)) -> D
 @app.post("/api/run")
 def api_run(body: Dict[str, Any]) -> Dict[str, Any]:
     pipeline = body.get("pipeline", "")
+    if pipeline == 'scribe':
+        if body.get('remote_upload') is not True or not body.get('preview_token'):
+            raise HTTPException(400, 'Scribe requires a reviewed preview and explicit remote upload consent.')
+        selected, language = body.get('selected', ''), body.get('language', 'Swedish (verbatim)')
+        if not isinstance(selected, str) or not isinstance(language, str):
+            raise HTTPException(400, 'Invalid Scribe selection or language')
+        preview = api_run_preview(pipeline, selected=selected, language=language)
+        if preview['token'] != body['preview_token']:
+            raise HTTPException(409, 'Folder or settings changed. Review a new run preview before starting.')
+        if not preview['files']:
+            raise HTTPException(400, 'No recordings selected')
+        state.start(pipeline, plan=preview)
+        return api_run_status()
     only = body.get("only")
     if only is not None and not isinstance(only, list):
         raise HTTPException(422, "Selected files must be a list of names")

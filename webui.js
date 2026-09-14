@@ -78,7 +78,8 @@ function updateRunControls() {
   const chosen = runScope().length;
   $("startBtn").textContent = chosen ? `Run ${chosen} selected…` : "Run folder…";
   $("clearRunSelection").hidden = !chosen;
-  $("startBtn").disabled = !connected || !initialized || running || runBusy || changingDir || saving || editorLoading;
+  const scribeGate = $("pipelineSel").value === "scribe" && !scribeSelectionReady();
+  $("startBtn").disabled = !connected || !initialized || running || runBusy || changingDir || saving || editorLoading || scribeGate;
   $("stopBtn").disabled = !connected || !running || runBusy;
   for (const id of ["pipelineSel", "dirBtn", "dirInput", "dirMenuBtn"]) {
     $(id).disabled = !connected || running || runBusy || changingDir;
@@ -442,9 +443,19 @@ function renderSettings(data, base, scope) {
   filterSettings(); updateSaveState(); updateRunControls();
 }
 function filterSettings() {
+  const scribe = $("pipelineSel").value === "scribe";
+  $("scribeControls").hidden = !scribe;
   const onlyDiarize = editorScope === "file" && $("pipelineSel").value === "diarize4" && !$("showOtherSettings")?.checked;
   document.querySelectorAll("#editor .row").forEach(row => {row.hidden = onlyDiarize && row.dataset.stage === "transcribe";});
   document.querySelectorAll("#editor details.group").forEach(group => {group.hidden = ![...group.querySelectorAll(".row")].some(row=>!row.hidden);});
+  if (scribe) document.querySelectorAll("#editor details.group").forEach(group => {group.hidden = true;});
+}
+function scribeSelectionReady() {
+  return $("scribeScope").value !== "selected" || Object.values(FILES_BY_BASE).some(file => file.base === currentBase);
+}
+function updateScribeGate() {
+  if ($("pipelineSel").value !== "scribe" || pendingPreview?.pipeline !== "scribe") return;
+  $("startBtn").disabled = !scribeSelectionReady();
 }
 async function openGlobalSettings() {
   if (changingDir || !await resolveUnsaved()) return;
@@ -490,6 +501,7 @@ async function selectFile(base, force = false) {
   $("editor").textContent = "Loading settings…";
   $("deleteBtn").disabled = true;
   updateSaveState(); updateRunControls();
+  updateScribeGate();
   showTab(currentTab);
   document.querySelectorAll("#files .file").forEach(d => {
     d.classList.toggle("sel", d.dataset.base === base);
@@ -904,6 +916,7 @@ async function saveSidecar() {
     savedForm = JSON.stringify(values);
     $("deleteBtn").disabled = !data.exists;
     handle(loadFiles)();
+    updateScribeGate();
     return true;
   } catch (e) {
     $("deleteBtn").disabled = deleteDisabled;
@@ -969,11 +982,27 @@ async function startRun() {
   runBusy = true; updateRunControls();
   try {
     const pipeline = $("pipelineSel").value;
-    const chosen = runScope();
-    const query = chosen.map(b => `&only=${encodeURIComponent(b)}`).join("");
-    const { data } = await api(`/api/run/preview?pipeline=${encodeURIComponent(pipeline)}${query}`);
+    const scribe = pipeline === "scribe";
+    // Scribe carries its own single-recording scope; the local pipelines use
+    // the files ticked in the list.
+    const selected = scribe && $("scribeScope").value === "selected" ? (currentBase || "") : "";
+    if (scribe && $("scribeScope").value === "selected" && !selected) {
+      $("runStatus").textContent = "Select a recording, or choose the explicit folder scope.";
+      return;
+    }
+    const query = new URLSearchParams({ pipeline });
+    if (scribe) { query.set("selected", selected); query.set("language", $("scribeLanguage").value); }
+    else for (const base of runScope()) query.append("only", base);
+    const { data } = await api(`/api/run/preview?${query}`);
     pendingPreview = data;
-    $("previewFolder").textContent = `${META.pipelines.find(p => p.id === pipeline).label} · ${data.audio_dir}`
+    const label = META.pipelines.find(p => p.id === pipeline).label;
+    $("previewTitle").textContent = scribe ? "Scribe remote upload preview" : "Run folder preview";
+    $("previewConsent").hidden = !scribe;
+    $("consentRow").hidden = !scribe;
+    $("scribeConsent").checked = false;
+    $("previewStart").textContent = scribe ? "Upload to Scribe and run" : "Run folder";
+    $("previewFolder").textContent = `${label} · ${data.audio_dir}`
+      + (scribe && selected ? ` · ${selected}` : "")
       + (data.only ? ` · ${data.only.length} selected file(s)` : "");
     const counts = {};
     for (const row of data.files) counts[row.action] = (counts[row.action] || 0) + 1;
@@ -1000,6 +1029,7 @@ async function startRun() {
     $("previewSkippedTable").querySelector("tbody").replaceChildren(
       ...skipped.map(row => rowFor([row.file, row.stage, row.reason])));
     $("previewStart").disabled = !data.files.some(row => ["process", "reprocess"].includes(row.action));
+    updateScribeGate();
     $("previewDialog").showModal();
   } catch (e) { $("runStatus").textContent = e.message; }
   finally { runBusy = false; updateRunControls(); }
@@ -1009,10 +1039,18 @@ async function launchPreview() {
   runBusy = true; updateRunControls();
   $("previewStart").disabled = true; $("previewCancel").disabled = true;
   try {
+    const body = { pipeline: pendingPreview.pipeline, preview_token: pendingPreview.token };
+    if (pendingPreview.pipeline === "scribe") {
+      if (!$("scribeConsent").checked) { $("previewSummary").textContent = "Consent to the remote upload first, or cancel."; return; }
+      body.remote_upload = true;
+      body.selected = pendingPreview.selected || "";
+      body.language = pendingPreview.language;
+    } else if (pendingPreview.only) {
+      body.only = pendingPreview.only;
+    }
     const { data } = await api("/api/run", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pipeline: pendingPreview.pipeline, preview_token: pendingPreview.token,
-                             ...(pendingPreview.only ? { only: pendingPreview.only } : {}) }),
+      body: JSON.stringify(body),
     });
     lastStatus = data;
     logOffset = 0; activeRunId = data.run_id;

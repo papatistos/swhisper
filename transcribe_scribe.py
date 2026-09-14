@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""Single-recording SUNET transcription prototype with local diarization."""
+
+import argparse
+import fcntl
+import getpass
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+from scribe_api import ScribeClient, ScribeError, atomic_json, normalize_result
+
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def prepare_audio(source, wav_path):
+    """Match local pipeline input: 16 kHz, mono PCM; never modify the source."""
+    temporary = wav_path.with_suffix(".tmp.wav")
+    try:
+        subprocess.run([
+            "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+            "-i", str(source), "-vn", "-ar", "16000", "-ac", "1",
+            "-c:a", "pcm_s16le", str(temporary)
+        ], check=True, capture_output=True)
+    except FileNotFoundError:
+        raise ScribeError("ffmpeg is required to prepare the audio.") from None
+    except subprocess.CalledProcessError:
+        raise ScribeError("ffmpeg could not prepare the audio; check the source file.") from None
+    os.replace(temporary, wav_path)
+
+
+def local_diarization(source, work_dir, json_name):
+    # Imports delayed until after transcription. No local Whisper model is loaded.
+    from diarize import DiarizationConfig
+    from diarize4 import ensure_pyannote_v4, COMMUNITY_PIPELINE_ID, resolve_pyannote_token
+    from sidecar import apply_sidecar_to_diarization_config
+
+    # Legacy path environment variables must not redirect this isolated run.
+    class PrototypeConfig(DiarizationConfig):
+        @property
+        def audio_dir(self):
+            return str(work_dir)
+
+        @property
+        def json_input_dir(self):
+            return "whisper-json-output"
+
+        @property
+        def audio_subdir(self):
+            return ""
+
+    config = PrototypeConfig()
+    config, _ = apply_sidecar_to_diarization_config(config, str(source.parent), source.stem)
+    # Enforce the prototype's scope AFTER applying the original file's sidecar.
+    config.pipeline_model = COMMUNITY_PIPELINE_ID
+    config.use_precision_service = False
+    config.backfill_missing_turns = False
+    config.backfill_enable_sensevoice = False
+    config.whisper_timestamp_offset = 0.0
+    config.output_dir = str(work_dir / "transcripts")
+    config.log_dir = str(work_dir / "transcripts" / "logs")
+    config.diarization_cache_dir = str(work_dir / ".diarization_cache")
+    config.enable_parameter_testing = False
+    config.force_reprocess = True  # Repeat local processing when settings change; remote result is reused.
+    config.hugging_face_token = resolve_pyannote_token(config.hugging_face_token)
+    ensure_pyannote_v4()
+    for directory in config.get_output_subdirs().values():
+        Path(directory).mkdir(parents=True, exist_ok=True)
+    spec = importlib.util.spec_from_file_location(
+        "scribe_local_diarize", Path(__file__).with_name("diarize.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    print("Local community-1 diarization; backfill off; timestamp offset 0 seconds.", flush=True)
+    if not module.process_file(config, json_name, 1, 1):
+        raise ScribeError("Local diarization failed. Remote transcription remains saved for reuse.")
+
+
+def run(args):
+    source = args.audio.expanduser().resolve()
+    if not source.is_file():
+        raise ScribeError("Audio source does not exist or is not a file.")
+    work_dir = (args.work_dir or source.parent / "scribe-prototype" / source.stem).expanduser().resolve()
+    work_dir.mkdir(parents=True, exist_ok=True)
+    # The directory belongs to one recording/settings combination. Never mix runs.
+    with (work_dir / ".lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ScribeError("Another prototype run is using this work directory.") from None
+        run_locked(args, source, work_dir)
+
+
+def run_locked(args, source, work_dir):
+    identity = {"source": str(source), "sha256": sha256(source), "language": args.language,
+                "base_url": args.base_url.rstrip("/"), "adapter_version": 1,
+                "audio_format": "pcm_s16le/16000/mono"}
+    state_path = work_dir / "scribe-state.json"
+    wav_path = work_dir / "audio.wav"
+    output_path = work_dir / "whisper-json-output" / "audio.json"
+    if state_path.exists():
+        state = json.loads(state_path.read_text())
+        if state.get("identity") != identity:
+            raise ScribeError("Recording or remote settings changed. Choose a new --work-dir to preserve the old run.")
+    else:
+        if any(p.name != ".lock" for p in work_dir.iterdir()):
+            raise ScribeError("Work directory is not empty and has no prototype state. Choose a new directory.")
+        state = {"identity": identity}
+        atomic_json(state_path, state)
+    if args.job_id:
+        if state.get("job_id") and state["job_id"] != args.job_id:
+            raise ScribeError("The saved job differs from --job-id; choose a new work directory.")
+        state["job_id"] = args.job_id
+        state["adopted_job"] = True
+        atomic_json(state_path, state)
+
+    if not state.get("wav_sha256"):
+        prepare_audio(source, wav_path)
+        state["wav_sha256"] = sha256(wav_path)
+        atomic_json(state_path, state)
+    elif not wav_path.exists() or sha256(wav_path) != state["wav_sha256"]:
+        raise ScribeError("Staged audio changed or is missing. Choose a new work directory.")
+
+    if output_path.exists():
+        if sha256(output_path) != state.get("output_sha256"):
+            raise ScribeError("Normalized output changed or is incomplete; refusing to reuse it.")
+        print(f"Reusing saved Scribe transcription: {output_path}", flush=True)
+    else:
+        token = (os.getenv("SUNET_SCRIBE_API_KEY", "").strip()
+                 or os.getenv("SWHISPER_SCRIBE_TOKEN", "").strip())
+        if args.auth == "env" and not token and sys.stdin.isatty():
+            token = getpass.getpass("SUNET API key or bearer token (hidden): ").strip()
+        password = (os.getenv("SUNET_SCRIBE_ENCRYPT_PWD", "").strip()
+                    or os.getenv("SWHISPER_SCRIBE_PASSWORD", "").strip())
+        if not password and sys.stdin.isatty():
+            password = getpass.getpass("Scribe encryption password (hidden): ")
+        provider = None
+        if args.auth == "browseros":
+            if args.base_url.rstrip("/") != "https://scribe.sunet.se":
+                raise ScribeError("BrowserOS authentication is restricted to https://scribe.sunet.se.")
+            from scribe_browser_auth import BrowserTokenProvider
+            provider = BrowserTokenProvider(interactive=sys.stdin.isatty())
+        try:
+            client = ScribeClient(token, password, args.base_url, token_provider=provider,
+                                  poll_interval=args.poll_interval, wait_seconds=args.wait_seconds)
+            transcript, words = client.transcribe(wav_path, state, state_path, args.language)
+        finally:
+            if provider:
+                provider.close()
+        # Outside whisper-json-output so diarize.py never treats raw data as input.
+        atomic_json(work_dir / "scribe-transcript.json", transcript)
+        atomic_json(work_dir / "scribe-words.json", words)
+        result = normalize_result(transcript, words, language="sv")
+        result["scribe"] = {
+            "job_id": state["job_id"], "requested_language": args.language,
+            "source_sha256": identity["sha256"], "audio_sha256": state["wav_sha256"],
+            "base_url": identity["base_url"], "adapter_version": 1,
+            "speaker_labels_used": False, "backfill_enabled": False,
+            "timestamp_offset": 0.0, "adopted_job": state.get("adopted_job", False),
+        }
+        atomic_json(output_path, result)
+        state["output_sha256"] = sha256(output_path)
+        atomic_json(state_path, state)
+        print(f"Saved timed transcription: {output_path}", flush=True)
+    if not args.transcription_only:
+        local_diarization(source, work_dir, output_path.name)
+    print(f"Prototype results: {work_dir}", flush=True)
+
+
+def main(argv=None):
+    from path_settings import get_path_settings
+    get_path_settings()  # Load .swhisper.env before constructing local config objects.
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("audio", type=Path, help="One recording to upload to SUNET")
+    parser.add_argument("--work-dir", type=Path, help="Isolated run directory; reused on restart")
+    parser.add_argument("--transcription-only", action="store_true", help="Save JSON without local diarization")
+    parser.add_argument("--language", choices=["Swedish (verbatim)", "Swedish"],
+                        default="Swedish (verbatim)", help="Scribe language selector")
+    parser.add_argument("--auth", choices=["browseros", "env"], default="browseros",
+                        help="Get tokens from BrowserOS Neo (default), or use an environment token")
+    parser.add_argument("--job-id", help="Adopt an existing job for this exact audio and language; verify these in Scribe")
+    parser.add_argument("--base-url", default="https://scribe.sunet.se", help="Scribe HTTPS origin")
+    parser.add_argument("--poll-interval", type=float, default=10)
+    parser.add_argument("--wait-seconds", type=float, default=86400)
+    args = parser.parse_args(argv)
+    try:
+        run(args)
+    except (ScribeError, OSError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("Stopped locally. Any remote job continues; rerun the same command to resume.", file=sys.stderr)
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -47,6 +47,17 @@
       <span class="status" id="runStatus" role="status">Idle</span>
       <span id="connectionStatus" role="status">Connecting…</span>
       <span id="progressStatus"></span>
+      <div id="scribeControls" hidden>
+        <select id="scribeScope" aria-label="Scribe recordings scope">
+          <option value="selected">Selected recording only</option>
+          <option value="folder">Every recording in the folder</option>
+        </select>
+        <select id="scribeLanguage" aria-label="Scribe language">
+          <option value="Swedish (verbatim)">Swedish (verbatim)</option>
+          <option value="Swedish">Swedish</option>
+        </select>
+        <span id="scribeNotice" role="note">Scribe uploads the recordings to scribe.sunet.se for remote transcription. Local Whisper model, language, decoding, VAD, chunking, force-reprocessing and file-limit settings do not apply.</span>
+      </div>
     </div>
     <div id="uiNotice" role="alert" hidden></div>
     <div id="folderNotice" role="alert" hidden><span id="folderNoticeText"></span>
@@ -155,8 +166,10 @@
   </div>
 </dialog>
 <dialog id="previewDialog" aria-labelledby="previewTitle">
-  <h2 id="previewTitle">Run folder preview</h2>
+  <h2 id="previewTitle"></h2>
   <p id="previewFolder"></p>
+  <p id="previewConsent" hidden>Scribe uploads the listed recordings to scribe.sunet.se and transcribes them there. Confirm only if remote processing is permitted.</p>
+  <label id="consentRow" hidden><input type="checkbox" id="scribeConsent"> I consent to uploading these recordings to Scribe</label>
   <p id="previewSummary" role="status"></p>
   <ul id="previewNotes"></ul>
   <table id="previewTable"><thead><tr><th>File</th><th>Stage</th><th>Action</th><th>Reason</th></tr></thead><tbody></tbody></table>
