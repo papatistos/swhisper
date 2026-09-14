@@ -5,6 +5,7 @@ audio folder is always explicit and never read from module state.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -67,6 +68,40 @@ def _transcript_dirs(dirs: Dict[str, str]) -> List[str]:
     ]
 
 
+def _scribe_txt_dirs(dirs: Dict[str, str]) -> List[tuple]:
+    """Every staged Scribe export as ``(txt_dir, source_basename)``.
+
+    A Scribe run writes ``audio.txt`` inside its own work folder, so the
+    recording it belongs to is only recoverable from the identity it recorded.
+    """
+    audio = Path(dirs["audio"]).resolve()
+    root = audio / "scribe-webui"
+    if not root.is_dir() or root.resolve() != root:
+        return []
+    found: List[tuple] = []
+    for work in sorted(root.iterdir()):
+        state_path = work / "scribe-state.json"
+        txt_dir = work / "transcripts" / "txt"
+        if (not work.is_dir() or work.resolve() != work
+                or state_path.resolve() != state_path or txt_dir.resolve() != txt_dir):
+            continue
+        try:
+            saved = json.loads(state_path.read_text(encoding="utf-8"))
+            source = Path(saved["identity"]["source"])
+            if source.parent != audio:
+                continue
+            found.append((str(txt_dir), source.stem))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return found
+
+
+def _scribe_transcript_dirs(dirs: Dict[str, str], base: str) -> List[tuple]:
+    """Associate staged audio exports with their recorded source identity."""
+    return [(txt_dir, "audio", "Scribe") for txt_dir, stem in _scribe_txt_dirs(dirs)
+            if stem == base]
+
+
 def _transcript_versions(dirs: Dict[str, str], base: str) -> List[Dict[str, Any]]:
     """All TXT transcript versions for *base*, newest (by mtime) first.
 
@@ -74,7 +109,9 @@ def _transcript_versions(dirs: Dict[str, str], base: str) -> List[Dict[str, Any]
     is accepted as an untimestamped fallback.
     """
     versions: List[Dict[str, Any]] = []
-    for txt_dir in _transcript_dirs(dirs):
+    sources = [(directory, base, None) for directory in _transcript_dirs(dirs)]
+    sources.extend(_scribe_transcript_dirs(dirs, base))
+    for txt_dir, export_base, pipeline in sources:
         try:
             names = os.listdir(txt_dir)
         except OSError:
@@ -83,16 +120,18 @@ def _transcript_versions(dirs: Dict[str, str], base: str) -> List[Dict[str, Any]
             if not name.endswith(".txt"):
                 continue
             stem = name[:-4]
-            if stem == base:
+            if stem == export_base:
                 ts = None
-            elif stem.startswith(base + "_"):
-                m = _TRANSCRIPT_TS_RE.match(stem[len(base):])
+            elif stem.startswith(export_base + "_"):
+                m = _TRANSCRIPT_TS_RE.match(stem[len(export_base):])
                 if not m:
                     continue
                 ts = m.group(1)
             else:
                 continue
             path = os.path.join(txt_dir, name)
+            if pipeline and Path(path).resolve() != Path(path):
+                continue
             try:
                 st = os.stat(path)
             except OSError:
@@ -105,6 +144,7 @@ def _transcript_versions(dirs: Dict[str, str], base: str) -> List[Dict[str, Any]
                 "timestamp": ts,
                 "mtime": st.st_mtime,
                 "size": st.st_size,
+                "pipeline": pipeline,
             })
     versions.sort(key=lambda v: v["mtime"], reverse=True)
     return versions
@@ -140,7 +180,13 @@ def _stems_with_versions(directories, suffix, patterns, skip=None):
 
 def transcript_bases(dirs: Dict[str, str]) -> set:
     """Basenames that have at least one TXT transcript version."""
-    return _stems_with_versions(_transcript_dirs(dirs), ".txt", [_TRANSCRIPT_STEM_RE])
+    found = _stems_with_versions(_transcript_dirs(dirs), ".txt", [_TRANSCRIPT_STEM_RE])
+    # A Scribe export is named after its work folder, so the recording it
+    # belongs to comes from the identity, not from the filename.
+    for txt_dir, stem in _scribe_txt_dirs(dirs):
+        if "audio" in _stems_with_versions([txt_dir], ".txt", [_TRANSCRIPT_STEM_RE]):
+            found.add(stem)
+    return found
 
 
 def log_bases(dirs: Dict[str, str]) -> set:

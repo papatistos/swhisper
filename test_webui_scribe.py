@@ -1,4 +1,5 @@
 """Scribe WebUI tests use temporary recordings and simulated external services."""
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -38,6 +39,55 @@ class ScribeWebTests(unittest.TestCase):
             self.assertEqual(fetched.json()['text'], 'simulated transcript')
             for path in ('../a.wav', 'a.wav', str(result), str((work / 'secret.env').relative_to(self.root)), str((work / 'escape.txt').relative_to(self.root))):
                 self.assertIn(client.get('/api/scribe/artifact', params={'path': path}).status_code, (400, 404))
+
+    def scribe_transcript(self, key, source='a.wav'):
+        work = self.root / 'scribe-webui' / key
+        txt = work / 'transcripts/txt/audio_20260914-030512.txt'
+        txt.parent.mkdir(parents=True)
+        txt.write_text('Scribe transcript for ' + source)
+        (work / 'scribe-state.json').write_text(json.dumps({
+            'identity': {'source': str(self.root / source)}}))
+        return txt
+
+    def test_scribe_transcripts_join_original_recording_versions(self):
+        from fastapi.testclient import TestClient
+        txt = self.scribe_transcript('first')
+        self.scribe_transcript('second-language')
+        self.scribe_transcript('other-recording', 'b.wav')
+        legacy = Path(self.state.dirs()['output']) / 'txt/a_20260913-120000.txt'
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text('Local transcript')
+        diarized = txt.parent.parent / 'json/audio_20260914-030512_diarized.json'
+        diarized.parent.mkdir()
+        diarized.write_text(json.dumps({'segments': [
+            {'start': 0, 'end': 1, 'speaker': 'S01', 'text': 'Hello'}]}))
+        version = str(txt.relative_to(self.root))
+        with TestClient(webui.app, base_url="http://127.0.0.1:8722") as client:
+            response = client.get('/api/transcript/a', params={'version': version})
+            self.assertEqual(response.status_code, 200, response.text)
+            data = response.json()
+            self.assertEqual(len(data['versions']), 3)
+            self.assertEqual(data['content'], 'Scribe transcript for a.wav')
+            self.assertTrue(data['can_render'])
+            self.assertEqual(sum(v['pipeline'] == 'Scribe' for v in data['versions']), 2)
+            rendered = client.post('/api/render/a', json={'version': version})
+            self.assertEqual(rendered.status_code, 200, rendered.text)
+            self.assertIn('Hello', rendered.json()['content'])
+            self.assertEqual(client.get('/api/transcript/b', params={'version': version}).status_code, 400)
+            local = client.get('/api/transcript/a', params={'version': str(legacy.relative_to(self.root))})
+            self.assertEqual(local.json()['content'], 'Local transcript')
+
+    def test_scribe_discovery_ignores_invalid_state_and_symlinks(self):
+        txt = self.scribe_transcript('valid')
+        invalid = self.scribe_transcript('invalid')
+        (invalid.parents[2] / 'scribe-state.json').write_text('{broken')
+        escaped = self.scribe_transcript('escaped')
+        escaped.unlink()
+        escaped.symlink_to(txt)
+        (self.root / 'scribe-webui/linked').symlink_to(txt.parents[2], target_is_directory=True)
+        self.scribe_transcript('outside', '../a.wav')
+        versions = webui._transcript_versions(self.state.dirs(), 'a')
+        self.assertEqual([v['id'] for v in versions], [str(txt.relative_to(self.root))])
 
     def test_batch_stops_before_changed_or_redirected_input(self):
         import json

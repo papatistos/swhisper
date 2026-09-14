@@ -579,7 +579,7 @@ function fillVersionSel(txtVersions, hasRawJson, selectedId) {
   for (const v of txtVersions) {
     const o = document.createElement("option");
     o.value = v.id;
-    o.textContent = v.timestamp ? fmtTimestamp(v.timestamp) : v.filename;
+    o.textContent = (v.timestamp ? fmtTimestamp(v.timestamp) : v.filename) + (v.pipeline ? ` · ${v.pipeline}` : "");
     sel.appendChild(o);
   }
   if (hasRawJson) {

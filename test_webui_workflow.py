@@ -194,6 +194,19 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual({b for b in bases if b in fast_t}, {"a", "b"})
         self.assertEqual({b for b in bases if b in fast_l}, {"a", "b"})
 
+        # A Scribe export is named after its work folder, so the index has to
+        # resolve it through the recorded identity exactly as the scan does.
+        import json
+        work = self.root / "scribe-webui" / "run1"
+        (work / "transcripts" / "txt").mkdir(parents=True)
+        (work / "transcripts" / "txt" / "audio_20260914-030512.txt").write_text("t")
+        (work / "scribe-state.json").write_text(
+            json.dumps({"identity": {"source": str(self.root.resolve() / "c d.wav")}}))
+        fast_t = wf.transcript_bases(dirs)
+        self.assertEqual({b for b in bases if b in fast_t},
+                         {b for b in bases if wf._transcript_versions(dirs, b)})
+        self.assertIn("c d", fast_t)
+
     def test_run_preview_and_launch_honour_a_selection(self):
         from fastapi.testclient import TestClient
         for name in ["a.wav", "b.wav", "c.wav"]:
