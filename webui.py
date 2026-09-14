@@ -799,6 +799,35 @@ def api_save_global_settings(body: Dict[str, Any]):
         return _global_form()
 
 
+@app.post("/api/audio-dir/pick")
+def api_pick_audio_dir() -> Dict[str, Any]:
+    """Open a native macOS folder dialog in the server process and return the choice.
+
+    The dialog appears on the machine running this server; the browser cannot
+    provide absolute filesystem paths. The current audio directory is unchanged.
+    """
+    if sys.platform != "darwin":
+        raise HTTPException(501, "The folder dialog is only available on macOS")
+    if state.running():
+        raise HTTPException(409, "Cannot pick a directory while a run is in progress")
+    script = ('tell application "System Events" to activate\n'
+              'set chosen to choose folder with prompt "Choose an audio directory"\n'
+              'return POSIX path of chosen')
+    try:
+        result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(500, "The folder dialog timed out") from None
+    if result.returncode != 0:
+        message = (result.stderr or "").strip()
+        if "-128" in message or "User canceled" in message:
+            raise HTTPException(400, "Folder selection canceled")
+        raise HTTPException(500, f"Folder dialog failed: {message or 'unknown osascript error'}")
+    path = str(normalize_path_value(result.stdout.strip()))
+    if not os.path.isdir(path):
+        raise HTTPException(400, f"Not a directory: {path}")
+    return {"path": path}
+
+
 @app.post("/api/audio-dir")
 def api_set_audio_dir(body: Dict[str, str]) -> Dict[str, Any]:
     raw_path = body.get("path") or ""
