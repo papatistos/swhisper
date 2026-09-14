@@ -257,6 +257,7 @@
       <div id="dirMenu" role="listbox" hidden></div>
     </div>
     <button id="dirBtn" title="Switch to this audio directory">Change</button>
+    <button id="dirBrowse" title="Choose a folder in the macOS dialog (on the machine running this server)">Browse…</button>
   </div>
   <button id="historyBtn" title="Show run history">🗂 History</button>
   <button id="fontMinus" title="Smaller text">A−</button>
@@ -473,7 +474,7 @@ function updateRunControls() {
   const scribeGate = $("pipelineSel").value === "scribe" && !scribeSelectionReady();
   $("startBtn").disabled = !connected || !initialized || running || runBusy || changingDir || saving || editorLoading || scribeGate;
   $("stopBtn").disabled = !connected || !running || runBusy;
-  for (const id of ["pipelineSel", "dirBtn", "dirInput", "dirMenuBtn"]) {
+  for (const id of ["pipelineSel", "dirBtn", "dirInput", "dirMenuBtn", "dirBrowse"]) {
     $(id).disabled = !connected || running || runBusy || changingDir;
   }
   if (editorScope === "global") $("saveBtn").disabled = saving || editorLoading || !formDirty() || running;
@@ -565,6 +566,25 @@ async function changeDir() {
 function changeDirIfSavedPath() {
   const path = $("dirInput").value.trim();
   if (path && savedAudioPaths.has(path) && (!META || path !== META.audio_dir)) changeDir();
+}
+
+async function browseAudioDir() {
+  if (changingDir || runBusy || lastStatus?.running) return;
+  changingDir = true;
+  updateRunControls();
+  try {
+    const { data } = await api("/api/audio-dir/pick", { method: "POST" });
+    if (!data?.path) return;
+    $("dirInput").value = data.path;
+    changingDir = false;  // changeDir owns the busy flag once it takes over.
+    if (data.path !== META?.audio_dir && await resolveUnsaved()) return changeDir();
+    $("dirInput").value = META?.audio_dir || data.path;
+  } catch (e) {
+    if (!/canceled/i.test(e.message || "")) reportError(e);
+  } finally {
+    changingDir = false;
+    updateRunControls();
+  }
 }
 
 function renderDirMenu(paths) {
@@ -1510,6 +1530,7 @@ $("clearLogBtn").onclick = () => { $("log").textContent = ""; };
 $("clearConsoleBtn").onclick = () => { $("consoleLog").textContent = ""; };
 $("consoleToggle").onclick = () => setConsoleCollapsed(!$("consolePanel").classList.contains("collapsed"));
 $("dirBtn").onclick = handle(changeDir);
+$("dirBrowse").onclick = handle(browseAudioDir);
 $("dirMenuBtn").onclick = event => { event.stopPropagation(); toggleDirMenu(); };
 document.addEventListener("click", event => {
   if (!$("dirCombo").contains(event.target)) closeDirMenu();
