@@ -57,7 +57,7 @@ from sidecar import (
     parse_sidecar_file,
     sidecar_requests_reprocess,
 )
-from webui_run import preview_run, inspect_progress
+from webui_run import preview_run, ProgressTracker
 from env_settings import env_snapshot, parse_env, update_env
 from webui_schema import (
     GLOBAL_EXTRAS,
@@ -152,6 +152,8 @@ class AppState:
         self.run_log_path: Optional[str] = None
         self.run_id: Optional[str] = None
         self.pid: Optional[int] = None
+        self.progress = ProgressTracker()
+        self.progress_offset = 0
 
     # -- configuration ------------------------------------------------------
 
@@ -259,18 +261,43 @@ class AppState:
 
     @staticmethod
     def _read_complete_lines(path: Optional[str]) -> List[str]:
+        return AppState._read_lines_from(path, 0)[0]
+
+    @staticmethod
+    def _read_lines_from(path: Optional[str], offset: int) -> Tuple[List[str], int]:
+        """Complete lines written after byte *offset*, and the next byte offset.
+
+        Reading by byte offset keeps a poll proportional to what the run wrote
+        since the previous poll, not to everything it has written so far.
+        """
         if not path:
-            return []
+            return [], 0
         try:
-            content = Path(path).read_text(encoding="utf-8", errors="replace")
+            size = os.path.getsize(path)
         except OSError:
-            return []
-        lines = content.splitlines()
+            return [], offset
+        # A new run writes a new file; a truncated one restarts from the top.
+        offset = 0 if offset > size or offset < 0 else offset
+        if offset == size:
+            return [], offset
+        try:
+            with open(path, "rb") as handle:
+                handle.seek(max(0, offset - 1))
+                previous = handle.read(1) if offset else b""
+                chunk = handle.read()
+        except OSError:
+            return [], offset
+        # A CRLF split across two reads must not produce a blank line.
+        if previous == b"\r" and chunk.startswith(b"\n"):
+            chunk = chunk[1:]
+            offset += 1
         # Do not return a line while the child is still in the middle of
         # writing it.  Otherwise the next poll would append that line twice.
-        if content and not content.endswith(("\n", "\r")) and lines:
-            lines.pop()
-        return lines
+        cut = max(chunk.rfind(b"\n"), chunk.rfind(b"\r")) + 1
+        if not cut:
+            return [], offset
+        text = chunk[:cut].decode("utf-8", errors="replace")
+        return text.splitlines(), offset + cut
 
     def _append_log_line_locked(self, line: str) -> None:
         self.log_lines.append(line)
@@ -312,6 +339,8 @@ class AppState:
         self.run_log_path = candidate
         self.run_id = str(metadata.get("run_id") or "") or None
         self.log_lines = self._read_complete_lines(self.run_log_path)
+        self.progress = ProgressTracker(self.pipeline)
+        self.progress_offset = 0
         return bool(self.run_id and self.pipeline)
 
     def running(self) -> bool:
@@ -320,14 +349,25 @@ class AppState:
         return self.pid is not None and self._pid_exists(self.pid)
 
     def log_since(self, offset: int = 0) -> Dict[str, Any]:
+        """Console lines after byte *offset*, with the offset to send back."""
         with self.lock:
             path = self.run_log_path
-            fallback = list(self.log_lines)
-        lines = self._read_complete_lines(path) if path else fallback
-        if not lines and fallback and not path:
-            lines = fallback
-        offset = max(0, min(offset, len(lines)))
-        return {"lines": lines[offset:], "next": len(lines)}
+        if not path:
+            return {"lines": [], "next": 0}
+        lines, next_offset = self._read_lines_from(path, offset)
+        return {"lines": lines, "next": next_offset}
+
+    def progress_snapshot(self) -> Tuple[Dict[str, Any], int]:
+        """Advance the tracker over newly written lines and report its state."""
+        with self.lock:
+            path, offset = self.run_log_path, self.progress_offset
+            tracker = self.progress
+            if path:
+                lines, self.progress_offset = self._read_lines_from(path, offset)
+                if self.progress_offset < offset:   # log replaced under us
+                    tracker = self.progress = ProgressTracker(self.pipeline)
+                tracker.feed(lines)
+            return tracker.snapshot(), tracker.line_count
 
     def attach_existing_run(self) -> None:
         """Adopt the active child recorded by a previous web UI instance."""
@@ -436,6 +476,8 @@ class AppState:
             self.run_log_path = run_log_path
             self.run_id = run_id
             self.log_lines = [header]
+            self.progress = ProgressTracker(pipeline)
+            self.progress_offset = 0
             self._write_active_metadata_locked()
             threading.Thread(
                 target=self._watch_process,
@@ -1254,9 +1296,7 @@ def api_run_status() -> Dict[str, Any]:
             "run_id": state.run_id,
             "audio_dir": state.run_audio_dir,
         }
-        lines = state._read_complete_lines(state.run_log_path) if state.run_log_path else list(state.log_lines)
-    status["log_length"] = len(lines)
-    status["progress"] = inspect_progress(lines, status["pipeline"])
+    status["progress"], status["log_length"] = state.progress_snapshot()
     return status
 
 

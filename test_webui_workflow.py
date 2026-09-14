@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import webui
 from sidecar import parse_sidecar_file
-from webui_run import preview_run, inspect_progress
+from webui_run import preview_run, inspect_progress, ProgressTracker
 
 
 class WorkflowTests(unittest.TestCase):
@@ -141,6 +141,38 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(status['progress']['error_count'], 1)
         self.assertEqual(status['progress']['current_file'], 'a.wav')
         self.assertFalse(status['running'])
+
+    def test_log_reads_only_what_was_appended(self):
+        log = self.write('run.log', '')
+        read, offset = webui.AppState._read_lines_from(str(log), 0)
+        self.assertEqual((read, offset), ([], 0))
+        log.write_bytes(b'first\nhalf')
+        read, offset = webui.AppState._read_lines_from(str(log), offset)
+        self.assertEqual(read, ['first'])          # the half line is withheld
+        log.write_bytes(b'first\nhalf line\n')
+        read, offset = webui.AppState._read_lines_from(str(log), offset)
+        self.assertEqual(read, ['half line'])      # and never repeated
+        self.assertEqual(webui.AppState._read_lines_from(str(log), offset), ([], offset))
+
+    def test_log_survives_split_newlines_and_replacement(self):
+        log = self.write('run.log', '')
+        log.write_bytes(b'one\r')
+        read, offset = webui.AppState._read_lines_from(str(log), 0)
+        self.assertEqual(read, ['one'])
+        log.write_bytes(b'one\r\ntwo\n')          # CRLF split across two reads
+        self.assertEqual(webui.AppState._read_lines_from(str(log), offset)[0], ['two'])
+        log.write_bytes(b'short\n')                # a new run replaces the file
+        self.assertEqual(webui.AppState._read_lines_from(str(log), 99)[0], ['short'])
+
+    def test_incremental_progress_matches_a_full_scan(self):
+        lines = ['📦 Audio file 1/2: a.wav', '✅ Saved 30 segments, 500 characters',
+                 '🎯 DIARIZATION LOG FOR: a.wav', '📄 Completion marker created: a.ok',
+                 'ERROR: something broke']
+        tracker = ProgressTracker('transcribe4')
+        for line in lines:
+            tracker.feed([line])
+        self.assertEqual(tracker.snapshot(), inspect_progress(lines, 'transcribe4'))
+        self.assertEqual(tracker.line_count, len(lines))
 
     def test_diarization_first_current_step(self):
         progress = inspect_progress(['🎵 Processing (1/3): a.wav',
