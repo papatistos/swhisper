@@ -110,6 +110,44 @@ def _transcript_versions(dirs: Dict[str, str], base: str) -> List[Dict[str, Any]
     return versions
 
 
+# Inverses of the per-file version scans above. Listing each directory once
+# and testing set membership replaces two directory listings per audio file.
+_TRANSCRIPT_STEM_RE = re.compile(r"^(.*)_(\d{8}-\d{6})$")
+_LOG_STEM_RES = [
+    re.compile(r"^(.*)_(\d{8}-\d{6})$"),
+    re.compile(r"^(.*)_(\d{4}-\d{2}-\d{2} \d{6})$"),
+]
+
+
+def _stems_with_versions(directories, suffix, patterns, skip=None):
+    found = set()
+    for directory in directories:
+        try:
+            names = os.listdir(directory)
+        except OSError:
+            continue
+        for name in names:
+            if not name.endswith(suffix) or (skip and skip in name):
+                continue
+            stem = name[:-len(suffix)]
+            found.add(stem)                      # an untimestamped <base>
+            for pattern in patterns:
+                match = pattern.match(stem)
+                if match:
+                    found.add(match.group(1))    # <base>_<timestamp>
+    return found
+
+
+def transcript_bases(dirs: Dict[str, str]) -> set:
+    """Basenames that have at least one TXT transcript version."""
+    return _stems_with_versions(_transcript_dirs(dirs), ".txt", [_TRANSCRIPT_STEM_RE])
+
+
+def log_bases(dirs: Dict[str, str]) -> set:
+    """Basenames that have at least one per-file pipeline log."""
+    return _stems_with_versions(_log_dirs(dirs), ".log", _LOG_STEM_RES, skip="_silence_gaps")
+
+
 def _log_dirs(dirs: Dict[str, str]) -> List[str]:
     """Directories that may contain .log files for the current audio dir."""
     return [

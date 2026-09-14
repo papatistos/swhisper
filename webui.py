@@ -73,9 +73,11 @@ from webui_files import (
     _diarized_json_for,
     _log_versions,
     _read_comment,
+    log_bases,
     _safe_base,
     _transcript_versions,
     _write_sidecar,
+    transcript_bases,
 )
 import transcript_stats
 
@@ -755,6 +757,8 @@ def api_files() -> Dict[str, Any]:
                 audio_mtimes[base] = max(audio_mtimes.get(base, 0), os.path.getmtime(os.path.join(dirs['audio'], name)))
             except FileNotFoundError:
                 pass
+    has_transcript = transcript_bases(dirs)
+    has_logs = log_bases(dirs)
     for base in _basenames(dirs["audio"]):
         json_path = os.path.join(dirs["json"], f"{base}.json")
         ok_path = os.path.join(dirs["output"], f"{base}.ok")
@@ -776,8 +780,8 @@ def api_files() -> Dict[str, Any]:
             "sidecar": bool(sidecar_path) and bool(parse_sidecar_file(sidecar_path)) if sidecar_path else False,
             "comment": has_comment,
             "will_reprocess": redo_t or redo_d,
-            "has_transcript": bool(_transcript_versions(dirs, base)),
-            "has_logs": bool(_log_versions(dirs, base)),
+            "has_transcript": base in has_transcript,
+            "has_logs": base in has_logs,
             "mtime": audio_mtimes.get(base, 0),
         })
     return {"files": files}

@@ -174,6 +174,25 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(tracker.snapshot(), inspect_progress(lines, 'transcribe4'))
         self.assertEqual(tracker.line_count, len(lines))
 
+    def test_indexed_lookups_match_the_per_file_scan(self):
+        import webui_files as wf
+        dirs = self.state.dirs()
+        for name in ["a.wav", "b.wav", "c d.wav"]:
+            self.write(name)
+        for name in ["transcripts/txt/a.txt", "transcripts/txt/b_20260913-120000.txt",
+                     "transcripts/logs/a_20260913-120000.log",
+                     "transcripts/logs/b_2026-09-13 120000.log",
+                     "transcripts/logs/a_silence_gaps.log"]:
+            self.write(name, "x")
+        bases = wf._basenames(dirs["audio"])
+        fast_t, fast_l = wf.transcript_bases(dirs), wf.log_bases(dirs)
+        self.assertEqual({b for b in bases if b in fast_t},
+                         {b for b in bases if wf._transcript_versions(dirs, b)})
+        self.assertEqual({b for b in bases if b in fast_l},
+                         {b for b in bases if wf._log_versions(dirs, b)})
+        self.assertEqual({b for b in bases if b in fast_t}, {"a", "b"})
+        self.assertEqual({b for b in bases if b in fast_l}, {"a", "b"})
+
     def test_diarization_first_current_step(self):
         progress = inspect_progress(['🎵 Processing (1/3): a.wav',
                                      '🎤 Step 4: Transcribing chunks with speaker-guided VAD...'], 'transcribe5')
