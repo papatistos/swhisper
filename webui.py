@@ -855,7 +855,14 @@ def api_files() -> Dict[str, Any]:
             "mtime": audio_mtimes.get(base, 0),
             "duration": durations.get(base),
         })
-    return {"files": files, "durations_pending": pending}
+    # Transcription writes SWHISPER_JSON_DIR but diarization reads JSON_INPUT_DIR.
+    # When they differ, a file stays at "Awaiting diarization" with no clue why.
+    diar_input = _dconfig.DiarizationConfig().json_input_dir
+    json_output = os.getenv("SWHISPER_JSON_DIR", "whisper-json-output")
+    note = (f"Transcription writes {json_output}, diarization reads {diar_input}. "
+            "New transcription output is not picked up automatically."
+            if diar_input != json_output else None)
+    return {"files": files, "durations_pending": pending, "note": note}
 
 
 @app.get("/api/sidecar/{basename}")

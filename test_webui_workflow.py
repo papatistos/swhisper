@@ -261,6 +261,16 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(len(kept_history), webui.MAX_HISTORY_ENTRIES)
         self.assertIn(str(webui.MAX_HISTORY_ENTRIES + 39), kept_history[-1])
 
+    def test_file_list_warns_when_the_json_folders_differ(self):
+        from fastapi.testclient import TestClient
+        self.write("a.wav")
+        with TestClient(webui.app, base_url="http://127.0.0.1:8722") as client:
+            self.assertIsNone(client.get("/api/files").json()["note"])
+            with patch.dict(os.environ, {"JSON_INPUT_DIR": "other-json"}):
+                note = client.get("/api/files").json()["note"]
+            self.assertIn("other-json", note)
+            self.assertIn("whisper-json-output", note)
+
     def test_diarization_first_current_step(self):
         progress = inspect_progress(['🎵 Processing (1/3): a.wav',
                                      '🎤 Step 4: Transcribing chunks with speaker-guided VAD...'], 'transcribe5')

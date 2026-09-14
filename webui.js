@@ -212,6 +212,8 @@ async function loadFiles() {
   const { data } = await api("/api/files");
   if (seq !== filesSeq || folder !== folderSeq) return;
   FILES_BY_BASE = Object.fromEntries(data.files.map(f => [f.base, f]));
+  $("fileNote").textContent = data.note || "";
+  $("fileNote").hidden = !data.note;
   renderFiles();
   // Durations are measured in the background; pick them up once they land.
   clearTimeout(durationTimer);
