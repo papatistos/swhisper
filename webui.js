@@ -557,6 +557,8 @@ function fillVersionSel(txtVersions, hasRawJson, selectedId) {
   }
   sel.value = selectedId;
   sel.disabled = false;
+  // The raw JSON view has no TXT file on disk to reveal.
+  $("transcriptReveal").disabled = selectedId === RAW_JSON_VERSION;
 }
 
 
@@ -766,6 +768,7 @@ async function loadTranscript(base, version) {
     if (hasRawJson) { loadTranscript(base, RAW_JSON_VERSION); return; }
     sel.innerHTML = "";
     sel.disabled = true;
+    $("transcriptReveal").disabled = true;
     text.innerHTML = '<div class="placeholder">No transcript yet — run a pipeline first.</div>';
     msg.textContent = /no transcript/i.test(e.message) ? "" : e.message;
   }
@@ -1120,6 +1123,30 @@ $("tabLogs").onclick = () => showTab("logs");
 $("logSel").onchange = handle(async () => { currentLogSel = $("logSel").value; await loadLogContent(); });
 $("versionSel").onchange = () => { if (currentBase) loadTranscript(currentBase, $("versionSel").value); };
 $("transcriptReload").onclick = () => { if (currentBase) loadTranscript(currentBase); };
+$("transcriptCopy").onclick = handle(async () => {
+  const text = $("transcriptText").textContent;
+  if (!text.trim()) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    $("transcriptMsg").textContent = "Copied the transcript shown here.";
+    $("transcriptMsg").className = "msg";
+  } catch (e) {
+    // Clipboard access needs a secure context; select the text instead.
+    getSelection().selectAllChildren($("transcriptText"));
+    $("transcriptMsg").textContent = "Selected the transcript — press Cmd/Ctrl+C to copy.";
+    $("transcriptMsg").className = "msg";
+  }
+});
+$("transcriptReveal").onclick = handle(async () => {
+  const version = $("versionSel").value;
+  if (!version || version === RAW_JSON_VERSION) return;
+  const { data } = await api("/api/reveal", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: version }),
+  });
+  $("transcriptMsg").textContent = `Revealed ${data.revealed}`;
+  $("transcriptMsg").className = "msg";
+});
 for (const id of ["optStats", "optPreamble", "optDisfluencies", "optPauses", "optBreaks"]) {
   $(id).onchange = applyRenderOptions;
 }

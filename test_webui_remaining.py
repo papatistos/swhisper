@@ -137,6 +137,20 @@ class RemainingTests(unittest.TestCase):
         after=self.client.get('/api/run/preview',params={'pipeline':'transcribe4'}).json()['token']
         self.assertNotEqual(before,after)
 
+    def test_reveal_stays_inside_the_audio_folder(self):
+        self.transcript()
+        calls = []
+        with patch("subprocess.Popen", lambda command, **kw: calls.append(command)):
+            ok = self.client.post("/api/reveal",
+                                  json={"path": "transcripts/txt/a_20260913-120000.txt"})
+            self.assertEqual(ok.status_code, 200, ok.text)
+            self.assertEqual(len(calls), 1)
+            self.assertIn("a_20260913-120000.txt", calls[0][-1])
+            for bad in ["../../etc/passwd", "/etc/passwd", "missing.txt"]:
+                response = self.client.post("/api/reveal", json={"path": bad})
+                self.assertIn(response.status_code, (400, 404), bad)
+            self.assertEqual(len(calls), 1)   # nothing else was launched
+
     def test_rejects_foreign_host_and_cross_origin_requests(self):
         self.assertEqual(self.client.get("/api/run/status").status_code, 200)
         # DNS rebinding: a name that resolves to 127.0.0.1 but is not local.

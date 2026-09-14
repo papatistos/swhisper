@@ -1218,6 +1218,33 @@ def api_json_transcript(basename: str) -> Dict[str, Any]:
     }
 
 
+@app.post("/api/reveal")
+def api_reveal(body: Dict[str, str]) -> Dict[str, Any]:
+    """Show a produced file in the desktop file manager.
+
+    The path must resolve inside the audio folder, and the command is a fixed
+    argument vector, so nothing the browser sends reaches a shell.
+    """
+    dirs = state.dirs()
+    root = os.path.realpath(dirs["audio"])
+    target = os.path.realpath(os.path.join(root, body.get("path") or ""))
+    if target != root and os.path.commonpath([target, root]) != root:
+        raise HTTPException(400, "That path is outside the audio folder")
+    if not os.path.exists(target):
+        raise HTTPException(404, "That file no longer exists")
+    if sys.platform == "darwin":
+        command = ["open", "-R", target]
+    elif sys.platform.startswith("win"):
+        command = ["explorer", f"/select,{target}"]
+    else:
+        command = ["xdg-open", os.path.dirname(target)]
+    try:
+        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as exc:
+        raise HTTPException(500, f"Could not open the file manager: {exc}")
+    return {"revealed": os.path.relpath(target, root)}
+
+
 @app.get("/api/logs")
 def api_logs(base: Optional[str] = None, file: Optional[str] = None,
              offset: int = 0) -> Dict[str, Any]:
