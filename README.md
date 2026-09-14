@@ -158,7 +158,13 @@ pip install fastapi uvicorn   # one-time
 python webui.py               # then open http://127.0.0.1:8722
 ```
 
-It shows your audio files with per-file status (transcribed / diarized / per-file settings / will-reprocess), edits the `.swhisper` sidecar files through a grouped form (empty fields = global settings, shown as placeholders), and starts/stops `transcribe4.py`, `transcribe5.py`, or `diarize4.py` runs with live log output. The server binds to localhost only. `--audio-dir` overrides `SWHISPER_AUDIO_DIR` for the session.
+It shows your audio files with per-file status (transcribed / diarized / per-file settings / will-reprocess) and recording length, edits the `.swhisper` sidecar files through a grouped form (empty fields = global settings, shown as placeholders), and starts/stops `transcribe4.py`, `transcribe5.py`, or `diarize4.py` runs with live log output. `--audio-dir` overrides `SWHISPER_AUDIO_DIR` for the session.
+
+- **Run a selection.** Tick files in the list to run only those; the button changes from "Run folder…" to "Run N selected…". The preview before launching lists what will run and puts already-finished files behind a disclosure. Internally this sets `SWHISPER_ONLY_FILES`, a newline separated list of basenames that both pipeline stages honour, so the same restriction works from a shell.
+- **Name the speakers.** "Speakers…" in the transcript view maps `SPEAKER_00` and friends to real names, stored in `speaker-names.json` in the audio folder. Names are applied when the transcript is re-rendered from the diarized JSON, so they appear in the view, the timestamped review list and exports, and never rewrite a transcript the pipeline produced.
+- **Theme.** The interface follows the operating system's light or dark setting.
+
+The server binds to localhost only and additionally refuses requests whose `Host` is not a loopback name and cross-origin requests, which closes DNS rebinding and stops another page in your browser from driving the API.
 
 ### Quick start
 
