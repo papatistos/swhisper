@@ -295,6 +295,16 @@ try {
     await evaluate('$("dirInput").value="/mock/other"; $("dirBtn").click()');await wait('META.audio_dir==="/mock/other" && !changingDir');
     await delay(300);assert.equal(await evaluate('editorBase'),null);assert.equal(await evaluate('$("saveBtn").disabled'),true);sidecarDelay.a=0;
   });
+  await check('Light and dark themes both render',async()=>{
+    await select('a');await wait('editorBase==="a"');
+    for (const scheme of ['dark','light']) {
+      await cdp('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:scheme}]});
+      await delay(150);
+      const shot=await cdp('Page.captureScreenshot',{format:'png'});
+      await fs.writeFile(`/private/tmp/swhisper-theme-${scheme}.png`,Buffer.from(shot.data,'base64'));
+    }
+    await cdp('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:'dark'}]});
+  });
   await check('Clean page has no unload warning',async()=>{
     assert.equal(await evaluate('(()=>{const e=new Event("beforeunload",{cancelable:true});window.dispatchEvent(e);return e.defaultPrevented})()'),false);
   });
