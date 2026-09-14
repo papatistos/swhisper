@@ -57,6 +57,12 @@ main { flex: 1; display: flex; min-height: 0; }
 #files .file:hover { background: var(--panel2); }
 #files .file.sel { background: var(--panel2); border-left: 3px solid var(--accent); padding-left: 11px; }
 #files .name { font-weight: 600; word-break: break-all; }
+#files .file { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 10px; align-items: start; }
+#files .badges { grid-column: 2; }
+#files .runPick { display: flex; align-items: center; padding-top: 2px; cursor: pointer; }
+#files .runPick input { width: 20px; height: 20px; }
+.visuallyHidden { position: absolute; width: 1px; height: 1px; overflow: hidden;
+                  clip-path: inset(50%); white-space: nowrap; }
 #files .fileSelect { display: block; width: 100%; text-align: left; padding: 0;
                      border: 0; background: transparent; white-space: normal; }
 .badges { margin-top: 4px; display: flex; gap: 6px; flex-wrap: wrap; }

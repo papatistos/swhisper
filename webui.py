@@ -58,6 +58,7 @@ from sidecar import (
     sidecar_requests_reprocess,
 )
 from webui_run import preview_run, ProgressTracker
+from run_scope import ENV_VAR as ONLY_FILES_ENV
 from env_settings import env_snapshot, parse_env, update_env
 from webui_schema import (
     GLOBAL_EXTRAS,
@@ -91,7 +92,7 @@ from transcript_render import (
 )
 
 try:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, HTTPException, Query
     from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
     import uvicorn
 except ImportError:  # pragma: no cover
@@ -422,7 +423,7 @@ class AppState:
         elif finish:
             self._finish_run(finish[0], finish[1], offline=True)
 
-    def start(self, pipeline: str) -> None:
+    def start(self, pipeline: str, only: Optional[List[str]] = None) -> None:
         if pipeline not in PIPELINES:
             raise HTTPException(400, f"Unknown pipeline '{pipeline}'")
         with self.lock:
@@ -454,6 +455,11 @@ class AppState:
                 run_dir, f"ui-run-{ts}-{pipeline}-{run_id[:6]}.log")
             header = f"▶ Started {PIPELINES[pipeline]['script']} — audio dir: {audio_dir}"
             env = dict(os.environ, PYTHONUNBUFFERED="1", SWHISPER_AUDIO_DIR=audio_dir)
+            if only:
+                env[ONLY_FILES_ENV] = "\n".join(only)
+                header += f" — {len(only)} selected file(s)"
+            else:
+                env.pop(ONLY_FILES_ENV, None)
             with open(run_log_path, "w", encoding="utf-8", buffering=1) as log_file:
                 log_file.write(header + "\n")
                 log_file.flush()
@@ -1285,25 +1291,51 @@ def api_logs(base: Optional[str] = None, file: Optional[str] = None,
     return {"scope": "run", "versions": versions}
 
 
+def _validated_selection(audio_dir: str, only) -> Optional[set]:
+    """Selected basenames, each checked against the audio folder.
+
+    An empty list means nothing was selected, which is not the same as no
+    restriction at all, so it is rejected rather than silently running everything.
+    """
+    if only is None:
+        return None
+    if not only:
+        raise HTTPException(400, "Select at least one file, or run the whole folder")
+    known = set(_basenames(audio_dir))
+    chosen = {_safe_base(audio_dir, str(name)) for name in only}
+    missing = sorted(chosen - known)
+    if missing:
+        raise HTTPException(400, f"Not in this folder: {', '.join(missing[:5])}")
+    return chosen
+
+
 @app.get("/api/run/preview")
-def api_run_preview(pipeline: str) -> Dict[str, Any]:
+def api_run_preview(pipeline: str, only: Optional[List[str]] = Query(None)) -> Dict[str, Any]:
     if pipeline not in PIPELINES:
         raise HTTPException(400, "Unknown pipeline")
-    preview = preview_run(state.audio_dir(), pipeline,
-                          _tconfig.TranscriptionConfig(), _dconfig.DiarizationConfig())
+    audio_dir = state.audio_dir()
+    selection = _validated_selection(audio_dir, only)
+    preview = preview_run(audio_dir, pipeline, _tconfig.TranscriptionConfig(),
+                          _dconfig.DiarizationConfig(), selection)
     _, revision = env_snapshot(GLOBAL_ENV_PATH)
     preview['token'] = hashlib.sha256((preview['token'] + revision).encode()).hexdigest()
     return preview
 
 
 @app.post("/api/run")
-def api_run(body: Dict[str, str]) -> Dict[str, Any]:
+def api_run(body: Dict[str, Any]) -> Dict[str, Any]:
     pipeline = body.get("pipeline", "")
+    only = body.get("only")
+    if only is not None and not isinstance(only, list):
+        raise HTTPException(422, "Selected files must be a list of names")
+    # An empty list is an empty selection, never "run everything".
+    if isinstance(only, list) and not only:
+        raise HTTPException(400, "Select at least one file, or run the whole folder")
     if body.get("preview_token"):
-        preview = api_run_preview(pipeline)
+        preview = api_run_preview(pipeline, only)
         if preview["token"] != body["preview_token"]:
-            raise HTTPException(409, "Folder or settings changed. Review a new run preview before starting.")
-    state.start(pipeline)
+            raise HTTPException(409, "Folder, selection or settings changed. Review a new run preview before starting.")
+    state.start(pipeline, sorted(_validated_selection(state.audio_dir(), only) or []) or None)
     return api_run_status()
 
 

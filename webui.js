@@ -9,6 +9,7 @@ let currentLogSel = null;
 let logOffset = 0;
 let wasRunning = false;
 let savedAudioPaths = new Set();
+let runSelection = new Set();   // files ticked for a selective run
 let changingDir = false;
 let editorBase = null, savedForm = null, saving = false, editorLoading = false;
 let editorSeq = 0, folderSeq = 0, filesSeq = 0, transcriptSeq = 0, logSeq = 0, logListSeq = 0;
@@ -65,8 +66,17 @@ function finishDirtyDialog(choice) {
   $("dirtyDialog").close();
   if (resolve) resolve(choice);
 }
+function runScope() {
+  // Only files still visible in the list can be part of the next run.
+  const known = Object.keys(FILES_BY_BASE);
+  for (const base of [...runSelection]) if (!known.includes(base)) runSelection.delete(base);
+  return [...runSelection];
+}
 function updateRunControls() {
   const running = !!(lastStatus && lastStatus.running);
+  const chosen = runScope().length;
+  $("startBtn").textContent = chosen ? `Run ${chosen} selected…` : "Run folder…";
+  $("clearRunSelection").hidden = !chosen;
   $("startBtn").disabled = !connected || !initialized || running || runBusy || changingDir || saving || editorLoading;
   $("stopBtn").disabled = !connected || !running || runBusy;
   for (const id of ["pipelineSel", "dirBtn", "dirInput", "dirMenuBtn"]) {
@@ -235,7 +245,16 @@ function renderFiles() {
     if (f.has_transcript) badges.push('<span class="badge tbadge" title="Open transcript">Transcript</span>');
     if (f.transcribed) badges.push('<span class="badge jbadge" title="View raw JSON transcript">JSON</span>');
     if (f.has_logs) badges.push('<span class="badge lbadge" title="Open logs">Logs</span>');
-    div.innerHTML = `<button class="name fileSelect">${escapeHTML(f.base)}</button><div class="badges">${badges.join("")}</div>`;
+    div.innerHTML = `<label class="runPick"><input type="checkbox"><span class="visuallyHidden">Include in run</span></label>` +
+      `<button class="name fileSelect">${escapeHTML(f.base)}</button><div class="badges">${badges.join("")}</div>`;
+    const pick = div.querySelector(".runPick input");
+    pick.checked = runSelection.has(f.base);
+    pick.setAttribute("aria-label", `Include ${f.base} in the next run`);
+    pick.onclick = ev => ev.stopPropagation();
+    pick.onchange = () => {
+      pick.checked ? runSelection.add(f.base) : runSelection.delete(f.base);
+      updateRunControls();
+    };
     const fileButton = div.querySelector(".fileSelect");
     fileButton.setAttribute("aria-pressed", String(f.base === currentBase));
     fileButton.setAttribute("aria-label", `Edit settings for ${f.base}`);
@@ -893,9 +912,12 @@ async function startRun() {
   runBusy = true; updateRunControls();
   try {
     const pipeline = $("pipelineSel").value;
-    const { data } = await api(`/api/run/preview?pipeline=${encodeURIComponent(pipeline)}`);
+    const chosen = runScope();
+    const query = chosen.map(b => `&only=${encodeURIComponent(b)}`).join("");
+    const { data } = await api(`/api/run/preview?pipeline=${encodeURIComponent(pipeline)}${query}`);
     pendingPreview = data;
-    $("previewFolder").textContent = `${META.pipelines.find(p => p.id === pipeline).label} · ${data.audio_dir}`;
+    $("previewFolder").textContent = `${META.pipelines.find(p => p.id === pipeline).label} · ${data.audio_dir}`
+      + (data.only ? ` · ${data.only.length} selected file(s)` : "");
     const counts = {};
     for (const row of data.files) counts[row.action] = (counts[row.action] || 0) + 1;
     $("previewSummary").textContent = data.files.length
@@ -921,7 +943,8 @@ async function launchPreview() {
   try {
     const { data } = await api("/api/run", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pipeline: pendingPreview.pipeline, preview_token: pendingPreview.token }),
+      body: JSON.stringify({ pipeline: pendingPreview.pipeline, preview_token: pendingPreview.token,
+                             ...(pendingPreview.only ? { only: pendingPreview.only } : {}) }),
     });
     lastStatus = data;
     logOffset = 0; activeRunId = data.run_id;
@@ -1085,6 +1108,7 @@ $("renderReset").onclick = () => {
 };
 $("renderSave").onclick = saveRenderedView;
 $("startBtn").onclick = startRun;
+$("clearRunSelection").onclick = () => { runSelection.clear(); renderFiles(); updateRunControls(); };
 $("stopBtn").onclick = stopRun;
 $("refreshBtn").onclick = handle(loadFiles);
 $("clearLogBtn").onclick = () => { $("log").textContent = ""; };

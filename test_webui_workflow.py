@@ -1,6 +1,7 @@
 """WebUI workflow tests: only temporary files, no models or real transcription."""
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -192,6 +193,50 @@ class WorkflowTests(unittest.TestCase):
                          {b for b in bases if wf._log_versions(dirs, b)})
         self.assertEqual({b for b in bases if b in fast_t}, {"a", "b"})
         self.assertEqual({b for b in bases if b in fast_l}, {"a", "b"})
+
+    def test_run_preview_and_launch_honour_a_selection(self):
+        from fastapi.testclient import TestClient
+        for name in ["a.wav", "b.wav", "c.wav"]:
+            self.write(name)
+        with TestClient(webui.app, base_url="http://127.0.0.1:8722") as client:
+            folder = client.get("/api/run/preview", params={"pipeline": "transcribe4"}).json()
+            chosen = client.get("/api/run/preview",
+                                params={"pipeline": "transcribe4", "only": ["a", "c"]}).json()
+            self.assertIsNone(folder["only"])
+            self.assertEqual(chosen["only"], ["a", "c"])
+            self.assertEqual({r["base"] for r in chosen["files"]}, {"a", "c"})
+            self.assertIn("restricted to 2", chosen["notes"][0])
+            # A selection is part of what the token commits to.
+            self.assertNotEqual(folder["token"], chosen["token"])
+            self.assertEqual(client.post("/api/run", json={"pipeline": "transcribe4",
+                                                          "only": ["a"],
+                                                          "preview_token": folder["token"]}).status_code, 409)
+            for bad in ([], ["missing"], ["../escape"]):
+                self.assertEqual(client.post("/api/run", json={"pipeline": "transcribe4",
+                                                              "only": bad}).status_code, 400, bad)
+            self.assertEqual(client.post("/api/run", json={"pipeline": "transcribe4",
+                                                          "only": "a"}).status_code, 422)
+
+    def test_selection_reaches_the_child_environment(self):
+        seen = {}
+
+        class FakeProcess:
+            pid = 4321
+            def poll(self):
+                return None
+
+        def fake_popen(args, **kwargs):
+            seen["only"] = kwargs["env"].get(webui.ONLY_FILES_ENV)
+            return FakeProcess()
+
+        self.write("a.wav")
+        with patch("subprocess.Popen", fake_popen), patch.object(threading, "Thread"):
+            self.state.start("transcribe4", ["a"])
+            self.assertEqual(seen["only"], "a")
+            self.state.process = None
+            self.state.pid = None
+            self.state.start("transcribe4", None)
+            self.assertIsNone(seen["only"])
 
     def test_diarization_first_current_step(self):
         progress = inspect_progress(['🎵 Processing (1/3): a.wav',

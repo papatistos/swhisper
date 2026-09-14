@@ -11,11 +11,14 @@ from sidecar import (SIDECAR_PARAMS, STAGE_DIARIZE, STAGE_TRANSCRIBE,
 FORMATS = {'.wav', '.m4a', '.mp3', '.mov', '.mp4', '.flac', '.aac', '.ogg'}
 
 
-def preview_run(audio_dir, pipeline, tc, dc):
+def preview_run(audio_dir, pipeline, tc, dc, only=None):
     """Mirror FileManager and diarize.process_file selection, without conversion.
 
     Stage two is conditional on stage one's outputs. Actual conversion/model
     failures cannot be predicted. Keep os.listdir order for FILE_LIMIT slicing.
+
+    *only* is a set of basenames the run is restricted to, or None for the
+    whole folder; it mirrors what SWHISPER_ONLY_FILES does inside the pipeline.
     """
     audio = Path(audio_dir)
     json_dir = audio / tc.json_dir
@@ -47,6 +50,8 @@ def preview_run(audio_dir, pipeline, tc, dc):
         for name in entries:
             if Path(name).suffix.lower() not in FORMATS:
                 continue
+            if only is not None and Path(name).stem not in only:
+                continue
             stamp(audio / name)
             base = Path(name).stem
             action, reason = decision(base, json_dir / (base + '.json'), STAGE_TRANSCRIBE, tc.force_reprocess)
@@ -65,6 +70,8 @@ def preview_run(audio_dir, pipeline, tc, dc):
         names = [p.stem for p in diar_json.iterdir() if p.name.endswith('.json')] if diar_json.is_dir() else []
         new_bases = {r['base'] for r in selected} if json_dir == diar_json else set()
         for base in sorted(set(names) | new_bases):
+            if only is not None and base not in only:
+                continue
             force = dc.force_reprocess
             sidecar = find_sidecar(str(audio), base)
             if sidecar:
@@ -83,7 +90,9 @@ def preview_run(audio_dir, pipeline, tc, dc):
                 reason += '; depends on transcription/conversion succeeding'
             rows.append(dict(file=base + '.json', base=base, stage='Diarization', action=action, reason=reason))
 
-    notes = ['This runs the folder. Selecting a file in the editor does not restrict the run.',
+    scope = (f'This run is restricted to {len(only)} selected file(s).' if only is not None else
+             'This runs the folder. Selecting a file in the editor does not restrict the run.')
+    notes = [scope,
              'Preview uses saved settings and current outputs. Conversion, model errors, and files changed during a run can affect the result.']
     if pipeline == 'transcribe5':
         notes.append('Diarization-first selects files using transcription JSON and transcription reprocessing rules; a diarization-only override does not select an already transcribed file.')
@@ -93,7 +102,8 @@ def preview_run(audio_dir, pipeline, tc, dc):
         notes.append(f'Transcription file limit: {tc.file_limit}. Selection follows the pipeline filesystem order.')
     if len({r['base'] for r in rows if r['stage'] != 'Diarization'}) < len([r for r in rows if r['stage'] != 'Diarization']):
         notes.append('Multiple audio files share a basename and therefore share outputs; the pipeline may process that basename more than once.')
-    result = dict(audio_dir=str(audio), pipeline=pipeline, files=rows, notes=notes)
+    result = dict(audio_dir=str(audio), pipeline=pipeline, files=rows, notes=notes,
+                  only=sorted(only) if only is not None else None)
     payload = json.dumps([result, evidence], sort_keys=True).encode()
     result['token'] = hashlib.sha256(payload).hexdigest()
     return result

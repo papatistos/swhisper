@@ -51,7 +51,7 @@ const server = http.createServer(async (req,res) => {
   }
   if (u.pathname === '/api/history') return send({entries:[]});
   if (u.pathname === '/api/audio-dir') {audioDir=data.path;return send({audio_dir:audioDir});}
-  if (u.pathname === '/api/run/preview') return send({audio_dir:audioDir,pipeline:'transcribe4',token:'preview-1',notes:['Folder scope'],files:[{file:'a.wav',stage:'Transcription',action:'process',reason:'No output'}]});
+  if (u.pathname === '/api/run/preview') {const only=u.searchParams.getAll('only');return send({audio_dir:audioDir,pipeline:'transcribe4',token:'preview-1',only:only.length?only:null,notes:['Folder scope'],files:[{file:'a.wav',stage:'Transcription',action:'process',reason:'No output'}]});}
   if (u.pathname === '/api/run' && req.method === 'POST') {launches.push(data);status={running:true,pipeline:'transcribe4',run_id:'run1',started_at:Date.now()/1000,audio_dir:audioDir,progress:{stage:'Transcription',current_file:'a.wav',file_index:1,total_files:2,completed:{Transcription:0}}};return send(status);}
   if (u.pathname === '/api/run/stop') {status={...status,running:false,stop_requested:true,returncode:0};return send(status);}
   if (u.pathname.startsWith('/api/sidecar/')) {
@@ -113,6 +113,22 @@ try {
     await evaluate('$("logSel").value="logs/a.log";$("logSel").dispatchEvent(new Event("change"))');
     await wait('$("log").textContent==="Log logs/a.log"');
     await click('tabTranscript');
+  });
+  await check('Selected files narrow the run and reach the launch call',async()=>{
+    assert.equal(await evaluate('$("startBtn").textContent'),'Run folder…');
+    assert.equal(await evaluate('$("clearRunSelection").hidden'),true);
+    await evaluate('document.querySelector(\'[data-base="b"] .runPick input\').click()');
+    await wait('$("startBtn").textContent==="Run 1 selected…"');
+    assert.equal(await evaluate('$("clearRunSelection").hidden'),false);
+    const before=launches.length;
+    await click('startBtn');await wait('$("previewDialog").open');
+    assert.match(await evaluate('$("previewFolder").textContent'),/1 selected file/);
+    await click('previewStart');
+    for(let i=0;i<200 && launches.length===before;i++) await delay(20);
+    assert.deepEqual(launches.at(-1).only,['b']);
+    await wait('lastStatus && lastStatus.running');await click('stopBtn');await wait('lastStatus && !lastStatus.running');
+    await click('clearRunSelection');await wait('$("startBtn").textContent==="Run folder…"');
+    assert.equal(await evaluate('document.querySelector(\'[data-base="b"] .runPick input\').checked'),false);
   });
   await check('Folder moved by another window is reported, not applied silently',async()=>{
     await select('a');await wait('editorBase==="a"');await input('keep me');
@@ -233,10 +249,11 @@ try {
     assert.equal(await evaluate('(()=>{const e=new Event("beforeunload",{cancelable:true});window.dispatchEvent(e);return e.defaultPrevented})()'),true);
   });
   await check('Save error is visible from Transcript tab',async()=>{
+    const n=launches.length;
     await click('tabTranscript');failSave=true;await click('startBtn');await wait('$("dirtyDialog").open');await click('dirtySave');
-    await wait('!saving && !$("uiNotice").hidden');assert.equal(await evaluate('currentTab'),'transcript');assert.equal(launches.length,0);failSave=false;
+    await wait('!saving && !$("uiNotice").hidden');assert.equal(await evaluate('currentTab'),'transcript');assert.equal(launches.length,n);failSave=false;
   });
-  await check('Run asks to save, then previews folder before launch',async()=>{await click('startBtn');await wait('$("dirtyDialog").open');await click('dirtySave');await wait('$("previewDialog").open');assert.equal(launches.length,0);assert.equal(saved.b.comment,'folder draft');assert.equal(await evaluate('$("previewTable").querySelectorAll("tbody tr").length'),1);const shot=await cdp('Page.captureScreenshot',{format:'png'});await fs.writeFile('/private/tmp/swhisper-run-preview.png',Buffer.from(shot.data,'base64'));await click('previewStart');await wait('lastStatus?.running && !runBusy');assert.equal(launches.at(-1).preview_token,'preview-1');assert.equal(await evaluate('$("dirMenuBtn").disabled'),true);});
+  await check('Run asks to save, then previews folder before launch',async()=>{const launchedBefore=launches.length;await click('startBtn');await wait('$("dirtyDialog").open');await click('dirtySave');await wait('$("previewDialog").open');assert.equal(launches.length,launchedBefore);assert.equal(saved.b.comment,'folder draft');assert.equal(await evaluate('$("previewTable").querySelectorAll("tbody tr").length'),1);const shot=await cdp('Page.captureScreenshot',{format:'png'});await fs.writeFile('/private/tmp/swhisper-run-preview.png',Buffer.from(shot.data,'base64'));await click('previewStart');await wait('lastStatus?.running && !runBusy');assert.equal(launches.at(-1).preview_token,'preview-1');assert.equal(await evaluate('$("dirMenuBtn").disabled'),true);});
   await check('Progress current file and stop outcome',async()=>{await evaluate('pollRun()');assert.match(await evaluate('$("progressStatus").textContent'),/a.wav.*file 1 of 2/);await click('stopBtn');await wait('lastStatus?.stop_requested && !runBusy');await evaluate('pollRun()');await wait('$("runStatus").textContent==="Stopped by you"');});
   await check('Disconnection disables launch and recovery restores it',async()=>{offline=true;await evaluate('pollRun()');await wait('!connected');assert.match(await evaluate('$("connectionStatus").textContent'),/Disconnected/);assert.equal(await evaluate('$("startBtn").disabled'),true);offline=false;await evaluate('pollRun()');await wait('connected');assert.equal(await evaluate('$("startBtn").disabled'),false);});
   await check('Exit zero with reported errors is not success',async()=>{status={...status,stop_requested:false,progress:{error_count:1,last_error:'Failed: 1',completed:{}}};await evaluate('pollRun()');await wait('$("runStatus").textContent.includes("reported errors")');});
