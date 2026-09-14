@@ -137,6 +137,24 @@ class RemainingTests(unittest.TestCase):
         after=self.client.get('/api/run/preview',params={'pipeline':'transcribe4'}).json()['token']
         self.assertNotEqual(before,after)
 
+    def test_speaker_names_rename_views_but_not_stored_transcripts(self):
+        original = self.transcript()
+        detected = self.client.get("/api/speakers/a").json()
+        self.assertEqual(detected["detected"], ["S01"])
+        for bad in [{"NOPE": "X"}, {"S01": "a\nb"}, {"S01": "x" * 61}, "nope"]:
+            self.assertEqual(self.client.put("/api/speakers/a", json={"names": bad}).status_code, 422, bad)
+        saved = self.client.put("/api/speakers/a", json={"names": {"S01": "Interviewer"}})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        rendered = self.client.post("/api/render/a", json={"options": {}}).json()
+        self.assertIn("Interviewer", rendered["content"])
+        self.assertNotIn("S01", rendered["content"])
+        self.assertEqual(rendered["timeline"][0]["speaker"], "Interviewer")
+        self.assertEqual(self.client.get("/api/timeline/a").json()["segments"][0]["speaker"], "Interviewer")
+        self.assertEqual(self.client.get("/api/transcript/a").json()["speaker_names"], {"S01": "Interviewer"})
+        # The file the pipeline wrote is never rewritten.
+        self.assertEqual(original.read_text(), "Original transcript")
+        self.assertEqual(self.client.put("/api/speakers/a", json={"names": {"S01": ""}}).json()["names"], {})
+
     def test_reveal_stays_inside_the_audio_folder(self):
         self.transcript()
         calls = []

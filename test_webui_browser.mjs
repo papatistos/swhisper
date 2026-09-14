@@ -13,6 +13,7 @@ let status = {running:false, pipeline:null, returncode:null, run_id:null, progre
 const saved = {a:{values:{SWHISPER_NUM_SPEAKERS:'2',SWHISPER_CONDITION_ON_PREVIOUS:'yes'},comment:'original'}, b:{values:{},comment:'B'}};
 const writes = [], launches = [], errors = [], exports = [];
 let globalValues={}, globalRevision="g1", exportExists=false;
+let speakerNames={};
 const meta = () => ({audio_dir:audioDir,audio_paths:['/mock/audio','/mock/other'],
   pipelines:[{id:'transcribe4',label:'Standard pipeline'},{id:'diarize4',label:'Diarization only'}],groups:[{name:'Speakers',keys:['SWHISPER_NUM_SPEAKERS','SWHISPER_CONDITION_ON_PREVIOUS']}],
   params:{SWHISPER_NUM_SPEAKERS:{type:'int',min:1,label:'Number of speakers',global:2,stage:'diarize',help:'Speaker count'},SWHISPER_CONDITION_ON_PREVIOUS:{type:'bool',global:true,stage:'transcribe',help:'Use previous text'}}});
@@ -61,11 +62,15 @@ const server = http.createServer(async (req,res) => {
     await delay(sidecarDelay[base] || 0);
     return send({exists:true,unknown:{FUTURE:'preserve'},...(saved[base]||{values:{},comment:''})});
   }
+  if (u.pathname.startsWith('/api/speakers/')) {
+    if (req.method==='PUT') {if(data.names.S01==='bad')return send({detail:'Two speakers cannot share that name'},422);speakerNames=Object.fromEntries(Object.entries(data.names).filter(([,v])=>v));}
+    return send({base:'a',detected:['S01','S02'],names:speakerNames});
+  }
   if (u.pathname.startsWith('/api/json-transcript/')) return send({base:'a',path:'whisper-json-output/a.json',content:'{"raw": true}'});
   if (u.pathname.startsWith('/api/transcript/')) {
     const version=u.searchParams.get('version')||'v2';
     await delay(versionDelay[version]||0);
-    return send({versions:[{id:'v2',filename:'new'},{id:'v1',filename:'old'}],selected:version,content:`Transcript ${version}`,can_render:true});
+    return send({versions:[{id:'v2',filename:'new'},{id:'v1',filename:'old'}],selected:version,content:`Transcript ${version}`,can_render:true,speaker_names:speakerNames});
   }
   send({detail:'Unknown fixture route'},404);
 });
@@ -113,6 +118,20 @@ try {
     await evaluate('$("logSel").value="logs/a.log";$("logSel").dispatchEvent(new Event("change"))');
     await wait('$("log").textContent==="Log logs/a.log"');
     await click('tabTranscript');
+  });
+  await check('Speakers can be named without touching the stored transcript',async()=>{
+    await select('a');await wait('editorBase==="a"');await click('tabTranscript');
+    await wait('$("transcriptText").textContent==="Transcript v2" && renderAvailable');
+    await click('renderSpeakers');await wait('$("speakerDialog").open');
+    assert.deepEqual(await evaluate('[...$("speakerRows").querySelectorAll("input")].map(i=>i.dataset.label)'),['S01','S02']);
+    await evaluate('$("speaker-S01").value="bad"');await click('speakerSave');
+    await wait('$("speakerMsg").textContent.includes("share")');
+    assert.equal(await evaluate('$("speakerDialog").open'),true);   // stays open on error
+    await evaluate('$("speaker-S01").value="Interviewer";$("speaker-S02").value="Christoph"');
+    await click('speakerSave');await wait('!$("speakerDialog").open');
+    assert.deepEqual(speakerNames,{S01:'Interviewer',S02:'Christoph'});
+    await wait('$("transcriptText").textContent.startsWith("Rendered")');
+    speakerNames={};
   });
   await check('Run preview separates what runs from what is skipped',async()=>{
     await click('startBtn');await wait('$("previewDialog").open');

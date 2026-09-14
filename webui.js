@@ -644,6 +644,44 @@ async function applyRenderOptions() {
   }
 }
 
+/* ---------- speaker names ---------- */
+
+let speakerContext = null;
+
+async function openSpeakerNames() {
+  if (!renderAvailable || !currentBase) return;
+  const base = currentBase, version = $("versionSel").value;
+  $("speakerMsg").textContent = "";
+  const { data } = await api(`/api/speakers/${encodeURIComponent(base)}?version=${encodeURIComponent(version)}`);
+  if (base !== currentBase) return;
+  speakerContext = { base, version };
+  $("speakerRows").replaceChildren(...data.detected.flatMap(label => {
+    const caption = document.createElement("label");
+    caption.textContent = label; caption.htmlFor = `speaker-${label}`;
+    const field = document.createElement("input");
+    field.type = "text"; field.id = `speaker-${label}`; field.dataset.label = label;
+    field.value = data.names[label] || ""; field.placeholder = label; field.maxLength = 60;
+    return [caption, field];
+  }));
+  $("speakerDialog").showModal();
+}
+
+async function saveSpeakerNames() {
+  if (!speakerContext) return;
+  const names = {};
+  for (const field of $("speakerRows").querySelectorAll("input")) names[field.dataset.label] = field.value;
+  try {
+    const { status, data } = await api(`/api/speakers/${encodeURIComponent(speakerContext.base)}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ names, version: speakerContext.version }),
+    });
+    // api() reports 422 rather than throwing, so validation errors land here.
+    if (status === 422) { $("speakerMsg").textContent = data.detail || "Check the names."; return; }
+  } catch (e) { $("speakerMsg").textContent = e.message; return; }
+  $("speakerDialog").close(); speakerContext = null;
+  await applyRenderOptions();
+}
+
 async function saveRenderedView() {
   if (!renderAvailable || !currentBase) return;
   exportContext = {base:currentBase, version:$("versionSel").value, options:renderOptions()};
@@ -761,6 +799,8 @@ async function loadTranscript(base, version) {
     renderBaseline = renderOptions();
     updateRenderBar(!!data.can_render);
     loadAudioReview(base, data.selected);
+    // The stored TXT carries the original labels, so re-render to show names.
+    if (data.can_render && Object.keys(data.speaker_names || {}).length) applyRenderOptions();
   } catch (e) {
     if (!valid()) return;
     delete txtVersionsByBase[base];
@@ -1157,6 +1197,10 @@ $("renderReset").onclick = () => {
   if (currentBase) loadTranscript(currentBase, $("versionSel").value);
 };
 $("renderSave").onclick = saveRenderedView;
+$("renderSpeakers").onclick = handle(openSpeakerNames);
+$("speakerSave").onclick = handle(saveSpeakerNames);
+$("speakerCancel").onclick = () => { $("speakerDialog").close(); speakerContext = null; };
+$("speakerDialog").addEventListener("cancel", () => { speakerContext = null; });
 $("startBtn").onclick = startRun;
 $("clearRunSelection").onclick = () => { runSelection.clear(); renderFiles(); updateRunControls(); };
 $("stopBtn").onclick = stopRun;

@@ -81,6 +81,7 @@
         <label title="Hide pauses shorter than this. 0 shows every pause the run recorded.">
           hide under <input type="number" id="optMinPause" value="0" min="0" max="60" step="0.1"> s</label>
         <span class="rspacer"></span>
+        <button id="renderSpeakers" title="Give each speaker a name">Speakers…</button>
         <button id="renderReset" title="Back to the view the pipeline produced">Reset</button>
         <button id="renderSave" title="Export a copy of this view">Export…</button>
       </div>
@@ -133,6 +134,14 @@
   <p id="exportPaths" role="status"></p>
   <label id="overwriteLabel" hidden><input id="exportOverwrite" type="checkbox"> Replace the existing export files listed above</label>
   <div class="dialogActions"><button id="exportCancel" autofocus>Cancel</button><button id="exportPreview">Check destination</button><button id="exportConfirm" class="primary" disabled>Export copy</button></div>
+</dialog>
+
+<dialog id="speakerDialog" aria-labelledby="speakerTitle">
+  <h2 id="speakerTitle">Speaker names</h2>
+  <p class="settingsNote">Names are shown in the transcript view, the timestamped review list and exports. Transcripts the pipeline produced are left unchanged. Leave a name empty to keep the original label.</p>
+  <div id="speakerRows"></div>
+  <p id="speakerMsg" role="status"></p>
+  <div class="dialogActions"><button id="speakerCancel" autofocus>Cancel</button><button id="speakerSave" class="primary">Save names</button></div>
 </dialog>
 
 <dialog id="dirtyDialog" aria-labelledby="dirtyTitle" aria-describedby="dirtyText">
