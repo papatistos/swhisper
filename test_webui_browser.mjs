@@ -25,7 +25,7 @@ const server = http.createServer(async (req,res) => {
   if (u.pathname === '/webui.css') {res.writeHead(200, {'Content-Type':'text/css','Cache-Control':'no-store'});res.end(css);return;}
   if (u.pathname === '/webui.js') {res.writeHead(200, {'Content-Type':'text/javascript','Cache-Control':'no-store'});res.end(js);return;}
   if (u.pathname === '/api/meta') return send(meta());
-  if (u.pathname === '/api/files') return send({files:['a','b','<unsafe>'].map(base=>({base,transcribed:base!=='<unsafe>',diarized:base!=='<unsafe>',has_transcript:base!=='<unsafe>',has_logs:true,will_reprocess:base==='b',mtime:base==='b'?20:10}))});
+  if (u.pathname === '/api/files') return send({files:['a','b','<unsafe>'].map(base=>({base,transcribed:base!=='<unsafe>',diarized:base!=='<unsafe>',has_transcript:base!=='<unsafe>',has_logs:true,will_reprocess:base==='b',mtime:base==='b'?20:10,duration:base==='a'?3202:base==='b'?95:null}))});
   if (u.pathname === '/api/run/status') return offline ? send({detail:'Offline'},503) : send({...status, folder:serverFolder??audioDir});
   if (u.pathname === '/api/logs') {
     const file = u.searchParams.get('file');
@@ -113,6 +113,11 @@ try {
     await evaluate('$("logSel").value="logs/a.log";$("logSel").dispatchEvent(new Event("change"))');
     await wait('$("log").textContent==="Log logs/a.log"');
     await click('tabTranscript');
+  });
+  await check('Recording length is shown for files that have one',async()=>{
+    assert.equal(await evaluate('[...document.querySelectorAll(\'[data-base="a"] .badge\')].map(b=>b.textContent).includes("53 min")'),true);
+    assert.equal(await evaluate('[...document.querySelectorAll(\'[data-base="b"] .badge\')].map(b=>b.textContent).includes("1 min")'),true);
+    assert.equal(await evaluate('[...document.querySelectorAll(\'[data-base="<unsafe>"] .badge\')].some(b=>/min|h /.test(b.textContent))'),false);
   });
   await check('Selected files narrow the run and reach the launch call',async()=>{
     assert.equal(await evaluate('$("startBtn").textContent'),'Run folder…');

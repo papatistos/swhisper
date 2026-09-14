@@ -10,6 +10,7 @@ let logOffset = 0;
 let wasRunning = false;
 let savedAudioPaths = new Set();
 let runSelection = new Set();   // files ticked for a selective run
+let durationTimer = null;
 let changingDir = false;
 let editorBase = null, savedForm = null, saving = false, editorLoading = false;
 let editorSeq = 0, folderSeq = 0, filesSeq = 0, transcriptSeq = 0, logSeq = 0, logListSeq = 0;
@@ -212,8 +213,18 @@ async function loadFiles() {
   if (seq !== filesSeq || folder !== folderSeq) return;
   FILES_BY_BASE = Object.fromEntries(data.files.map(f => [f.base, f]));
   renderFiles();
+  // Durations are measured in the background; pick them up once they land.
+  clearTimeout(durationTimer);
+  if (data.durations_pending) durationTimer = setTimeout(handle(loadFiles), 3000);
 }
 
+function fmtDuration(seconds) {
+  const total = Math.round(seconds);
+  const hours = Math.floor(total / 3600), minutes = Math.floor(total % 3600 / 60);
+  return hours ? `${hours} h ${String(minutes).padStart(2, "0")} min`
+       : minutes ? `${minutes} min`
+       : `${total} s`;
+}
 function renderFiles() {
   const box = $("files");
   box.innerHTML = "";
@@ -240,6 +251,7 @@ function renderFiles() {
     const badges = [];
     const primary = f.will_reprocess ? "Needs reprocessing" : f.has_transcript ? "Transcript ready" : f.transcribed ? "Awaiting diarization" : "Not transcribed";
     badges.push(`<span class="badge ${f.will_reprocess ? "on-warn" : f.has_transcript ? "on-ok" : ""}">${primary}</span>`);
+    if (f.duration) badges.push(`<span class="badge" title="Recording length">${escapeHTML(fmtDuration(f.duration))}</span>`);
     if (f.sidecar) badges.push('<span class="badge on-info">overrides</span>');
     if (f.comment) badges.push('<span class="badge">comment</span>');
     if (f.has_transcript) badges.push('<span class="badge tbadge" title="Open transcript">Transcript</span>');

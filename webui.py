@@ -59,6 +59,7 @@ from sidecar import (
 )
 from webui_run import preview_run, ProgressTracker
 from run_scope import ENV_VAR as ONLY_FILES_ENV
+import webui_durations
 from env_settings import env_snapshot, parse_env, update_env
 from webui_schema import (
     GLOBAL_EXTRAS,
@@ -782,15 +783,24 @@ def api_files() -> Dict[str, Any]:
     dirs = state.dirs()
     files = []
     audio_mtimes = {}
-    for name in os.listdir(dirs['audio']):
+    audio_paths: Dict[str, str] = {}
+    for name in sorted(os.listdir(dirs['audio'])):
         base, ext = os.path.splitext(name)
         if ext.lower() in AUDIO_EXTENSIONS:
+            path = os.path.join(dirs['audio'], name)
+            # Prefer the WAV, matching the file the audio endpoint serves.
+            if base not in audio_paths or ext.lower() == '.wav':
+                audio_paths[base] = path
             try:
-                audio_mtimes[base] = max(audio_mtimes.get(base, 0), os.path.getmtime(os.path.join(dirs['audio'], name)))
+                audio_mtimes[base] = max(audio_mtimes.get(base, 0), os.path.getmtime(path))
             except FileNotFoundError:
                 pass
     has_transcript = transcript_bases(dirs)
     has_logs = log_bases(dirs)
+    # Durations come from a cache so listing a folder never waits on ffprobe.
+    cache_dir = os.path.join(dirs["audio"], UI_RUN_LOG_DIR)
+    durations = webui_durations.known(cache_dir, audio_paths)
+    pending = webui_durations.warm(cache_dir, audio_paths)
     for base in _basenames(dirs["audio"]):
         json_path = os.path.join(dirs["json"], f"{base}.json")
         ok_path = os.path.join(dirs["output"], f"{base}.ok")
@@ -815,8 +825,9 @@ def api_files() -> Dict[str, Any]:
             "has_transcript": base in has_transcript,
             "has_logs": base in has_logs,
             "mtime": audio_mtimes.get(base, 0),
+            "duration": durations.get(base),
         })
-    return {"files": files}
+    return {"files": files, "durations_pending": pending}
 
 
 @app.get("/api/sidecar/{basename}")
