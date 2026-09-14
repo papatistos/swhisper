@@ -238,6 +238,29 @@ class WorkflowTests(unittest.TestCase):
             self.state.start("transcribe4", None)
             self.assertIsNone(seen["only"])
 
+    def test_old_run_logs_and_history_are_pruned(self):
+        run_dir = self.root / webui.UI_RUN_LOG_DIR
+        run_dir.mkdir(parents=True, exist_ok=True)
+        for index in range(webui.MAX_RUN_LOGS + 12):
+            path = run_dir / f"ui-run-20260913-1200{index:02d}-transcribe4-{index:06d}.log"
+            path.write_text("x")
+            os.utime(path, (index, index))
+        keep = run_dir / "ui-run-20260913-120000-transcribe4-keepme.log"
+        keep.write_text("active")
+        os.utime(keep, (0, 0))          # oldest, but it is the current run
+        history = self.root / webui.HISTORY_FILENAME
+        history.write_text("".join(f'{{"n": {i}}}\n' for i in range(webui.MAX_HISTORY_ENTRIES + 40)))
+        self.state.run_log_path = str(keep)
+        self.state._prune_old_runs(str(self.root))
+        remaining = sorted(p.name for p in run_dir.glob("ui-run-*.log"))
+        # The newest MAX_RUN_LOGS survive, plus the active run's own log, which
+        # is the oldest here and would otherwise have been deleted underneath it.
+        self.assertEqual(len(remaining), webui.MAX_RUN_LOGS + 1)
+        self.assertIn(keep.name, remaining)
+        kept_history = history.read_text().splitlines()
+        self.assertEqual(len(kept_history), webui.MAX_HISTORY_ENTRIES)
+        self.assertIn(str(webui.MAX_HISTORY_ENTRIES + 39), kept_history[-1])
+
     def test_diarization_first_current_step(self):
         progress = inspect_progress(['🎵 Processing (1/3): a.wav',
                                      '🎤 Step 4: Transcribing chunks with speaker-guided VAD...'], 'transcribe5')

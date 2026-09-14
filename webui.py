@@ -123,6 +123,8 @@ GLOBAL_ENV_PATH = PROJECT_ROOT / '.swhisper.env'
 HISTORY_FILENAME = "swhisper_run_history.jsonl"
 UI_RUN_LOG_DIR = "logs"  # persisted console output of runs started from this UI
 ACTIVE_RUN_FILENAME = "ui-run-active.json"
+MAX_RUN_LOGS = 50           # persisted console logs kept per audio folder
+MAX_HISTORY_ENTRIES = 500   # run history lines kept per audio folder
 
 PIPELINES: Dict[str, Dict[str, str]] = {
     "transcribe4": {
@@ -589,6 +591,31 @@ class AppState:
         with self.lock:
             self._append_log_line_locked(
                 f"🗂 Run recorded in {HISTORY_FILENAME} ({entry['file_count']} file(s) produced/updated)")
+        self._prune_old_runs(audio_dir)
+
+    def _prune_old_runs(self, audio_dir: str) -> None:
+        """Keep the run logs and history bounded; neither had any limit before."""
+        keep = os.path.realpath(self.run_log_path) if self.run_log_path else None
+        run_dir = os.path.join(audio_dir, UI_RUN_LOG_DIR)
+        try:
+            logs = [os.path.join(run_dir, name) for name in os.listdir(run_dir)
+                    if name.startswith("ui-run-") and name.endswith(".log")]
+            logs.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+            for path in logs[MAX_RUN_LOGS:]:
+                if os.path.realpath(path) != keep:
+                    os.remove(path)
+        except OSError:
+            pass
+        history_path = os.path.join(audio_dir, HISTORY_FILENAME)
+        try:
+            with open(history_path, encoding="utf-8") as handle:
+                lines = handle.readlines()
+            if len(lines) > MAX_HISTORY_ENTRIES:
+                temporary = f"{history_path}.{os.getpid()}.tmp"
+                Path(temporary).write_text("".join(lines[-MAX_HISTORY_ENTRIES:]), encoding="utf-8")
+                os.replace(temporary, history_path)
+        except OSError:
+            pass
 
 
 state = AppState()
