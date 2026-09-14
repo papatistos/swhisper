@@ -586,6 +586,32 @@ class AppState:
 state = AppState()
 app = FastAPI(title="swhisper web UI")
 
+# The server has no authentication because it binds to the loopback address.
+# That only holds if requests really come from this machine, so refuse a Host
+# header pointing somewhere else (DNS rebinding) and refuse a cross-origin
+# request (a page you have open firing bodyless POSTs at the API).
+LOCAL_HOSTNAMES = {"127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0"}
+
+
+def _hostname(value: str) -> str:
+    value = value.strip().lower()
+    if value.startswith("["):                 # bracketed IPv6 literal
+        return value.partition("]")[0] + "]"
+    return value.rpartition(":")[0] if value.count(":") == 1 else value
+
+
+@app.middleware("http")
+async def restrict_to_local_requests(request, call_next):
+    host = _hostname(request.headers.get("host", ""))
+    if host and host not in LOCAL_HOSTNAMES:
+        return JSONResponse(status_code=403, content={"detail": f"Refusing request for host {host}"})
+    origin = request.headers.get("origin")
+    if origin:
+        scheme, _, rest = origin.partition("://")
+        if scheme not in ("http", "https") or _hostname(rest) not in LOCAL_HOSTNAMES:
+            return JSONResponse(status_code=403, content={"detail": "Refusing cross-origin request"})
+    return await call_next(request)
+
 
 @app.on_event("startup")
 async def _attach_active_run() -> None:

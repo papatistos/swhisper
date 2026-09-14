@@ -24,7 +24,7 @@ class RemainingTests(unittest.TestCase):
         for key in list(os.environ):
             if key.startswith('SWHISPER_') or key == 'JSON_INPUT_DIR': os.environ.pop(key)
         p = patch.object(path_settings, '_load_env_file', lambda: None);p.start();self.addCleanup(p.stop)
-        self.client = TestClient(webui.app)
+        self.client = TestClient(webui.app, base_url="http://127.0.0.1:8722")
         self.addCleanup(self.client.close)
 
     def write(self, name, text=''):
@@ -136,6 +136,17 @@ class RemainingTests(unittest.TestCase):
         self.write('.env','SWHISPER_MODEL=different-model\n')
         after=self.client.get('/api/run/preview',params={'pipeline':'transcribe4'}).json()['token']
         self.assertNotEqual(before,after)
+
+    def test_rejects_foreign_host_and_cross_origin_requests(self):
+        self.assertEqual(self.client.get("/api/run/status").status_code, 200)
+        # DNS rebinding: a name that resolves to 127.0.0.1 but is not local.
+        rebound = self.client.get("/api/run/status", headers={"Host": "attacker.example"})
+        self.assertEqual(rebound.status_code, 403)
+        # A bodyless POST is CORS-simple, so the Origin check is what stops it.
+        foreign = self.client.post("/api/run/stop", headers={"Origin": "https://attacker.example"})
+        self.assertEqual(foreign.status_code, 403)
+        same = self.client.post("/api/run/stop", headers={"Origin": "http://127.0.0.1:8722"})
+        self.assertEqual(same.status_code, 409)   # reaches the handler: no run
 
     def test_timeline_and_audio_range(self):
         self.transcript();timeline=self.client.get('/api/timeline/a')

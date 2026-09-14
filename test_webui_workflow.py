@@ -203,7 +203,7 @@ class WorkflowTests(unittest.TestCase):
     def test_http_routes_without_model_processes(self):
         from fastapi.testclient import TestClient
         self.write('a.wav')
-        with TestClient(webui.app) as client:
+        with TestClient(webui.app, base_url="http://127.0.0.1:8722") as client:
             preview = client.get('/api/run/preview', params={'pipeline': 'transcribe4'})
             self.assertEqual(preview.status_code, 200)
             self.assertIn('token', preview.json())
