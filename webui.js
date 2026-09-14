@@ -14,7 +14,7 @@ let durationTimer = null;
 let changingDir = false;
 let editorBase = null, savedForm = null, saving = false, editorLoading = false;
 let editorSeq = 0, folderSeq = 0, filesSeq = 0, transcriptSeq = 0, logSeq = 0, logListSeq = 0;
-let connected = false, lastStatus = null, runBusy = false, pollBusy = false, activeRunId = null;
+let connected = false, lastStatus = null, runBusy = false, pollBusy = false, activeRunId = null, statusSeq = 0;
 let editorScope = "file", editorMeta = null, globalRevision = null, timelineSeq = 0, exportContext = null, exportPlan = null, exporting = false;
 let pendingPreview = null, dirtyChoice = null, initialized = false, pollTimer = null;
 const escapeHTML = value => String(value).replace(/[&<>"']/g, c => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"}[c]));
@@ -1052,7 +1052,7 @@ async function launchPreview() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    lastStatus = data;
+    lastStatus = data; statusSeq++;
     logOffset = 0; activeRunId = data.run_id;
     $("consoleLog").textContent = "";
     setConsoleCollapsed(false);
@@ -1066,7 +1066,7 @@ async function stopRun() {
   runBusy = true; updateRunControls();
   try {
     const { data } = await api("/api/run/stop", { method: "POST" });
-    lastStatus = data; $("runStatus").textContent = "Stopping…";
+    lastStatus = data; statusSeq++; $("runStatus").textContent = "Stopping…";
     pollLoop();
   } catch (e) { $("runStatus").textContent = e.message; }
   finally { runBusy = false; updateRunControls(); }
@@ -1085,7 +1085,11 @@ async function pollRun() {
   pollBusy = true;
   try {
     if (!initialized) { await loadMeta(); await loadFiles(); initialized = true; }
+    const seq = ++statusSeq;
     const st = (await api("/api/run/status")).data;
+    // Starting or stopping a run applies its own authoritative status. A poll
+    // that was already in flight must not overwrite it with the older state.
+    if (seq !== statusSeq) { connected = true; return; }
     if (activeRunId !== st.run_id) {
       activeRunId = st.run_id; logOffset = 0; $("consoleLog").textContent = "";
     }
