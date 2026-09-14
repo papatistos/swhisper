@@ -15,7 +15,7 @@ import os
 import subprocess
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 CACHE_FILENAME = "durations.json"
 # Formats libsndfile reads directly; everything else needs ffprobe.
