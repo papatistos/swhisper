@@ -961,12 +961,7 @@ async function pollRun() {
     }
     const { data } = await api(`/api/logs?file=live&offset=${logOffset}`);
     if (data.next !== undefined) logOffset = data.next;
-    if (data.lines?.length) {
-      const log = $("consoleLog");
-      const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
-      log.textContent += data.lines.join("\n") + "\n";
-      if (atBottom) log.scrollTop = log.scrollHeight;
-    }
+    if (data.lines?.length) appendConsole(data.lines);
     connected = true; lastStatus = st;
     $("connectionStatus").textContent = "Connected";
     $("runDot").className = "dot" + (st.running ? " run" : (st.returncode || st.progress?.error_count ? " err" : ""));
@@ -993,6 +988,17 @@ async function pollRun() {
 }
 
 /* ---------- console panel ---------- */
+
+
+const CONSOLE_MAX_CHUNKS = 2000;   // bounds a long run console in the DOM
+
+function appendConsole(lines) {
+  const log = $("consoleLog");
+  const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+  log.appendChild(document.createTextNode(lines.join("\n") + "\n"));
+  while (log.childNodes.length > CONSOLE_MAX_CHUNKS) log.removeChild(log.firstChild);
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
 
 function setConsoleCollapsed(collapsed) {
   $("consolePanel").classList.toggle("collapsed", collapsed);
