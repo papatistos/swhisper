@@ -51,7 +51,7 @@ const server = http.createServer(async (req,res) => {
   }
   if (u.pathname === '/api/history') return send({entries:[]});
   if (u.pathname === '/api/audio-dir') {audioDir=data.path;return send({audio_dir:audioDir});}
-  if (u.pathname === '/api/run/preview') {const only=u.searchParams.getAll('only');return send({audio_dir:audioDir,pipeline:'transcribe4',token:'preview-1',only:only.length?only:null,notes:['Folder scope'],files:[{file:'a.wav',stage:'Transcription',action:'process',reason:'No output'}]});}
+  if (u.pathname === '/api/run/preview') {const only=u.searchParams.getAll('only');return send({audio_dir:audioDir,pipeline:'transcribe4',token:'preview-1',only:only.length?only:null,notes:['Folder scope'],files:[{file:'a.wav',stage:'Transcription',action:'process',reason:'No output'},{file:'b.wav',stage:'Transcription',action:'skip',reason:'Existing output'},{file:'c.wav',stage:'Transcription',action:'skip',reason:'Existing output'}]});}
   if (u.pathname === '/api/run' && req.method === 'POST') {launches.push(data);status={running:true,pipeline:'transcribe4',run_id:'run1',started_at:Date.now()/1000,audio_dir:audioDir,progress:{stage:'Transcription',current_file:'a.wav',file_index:1,total_files:2,completed:{Transcription:0}}};return send(status);}
   if (u.pathname === '/api/run/stop') {status={...status,running:false,stop_requested:true,returncode:0};return send(status);}
   if (u.pathname.startsWith('/api/sidecar/')) {
@@ -113,6 +113,15 @@ try {
     await evaluate('$("logSel").value="logs/a.log";$("logSel").dispatchEvent(new Event("change"))');
     await wait('$("log").textContent==="Log logs/a.log"');
     await click('tabTranscript');
+  });
+  await check('Run preview separates what runs from what is skipped',async()=>{
+    await click('startBtn');await wait('$("previewDialog").open');
+    assert.equal(await evaluate('$("previewTable").querySelectorAll("tbody tr").length'),1);
+    assert.equal(await evaluate('$("previewSkipped").hidden'),false);
+    assert.equal(await evaluate('$("previewSkipped").open'),false);
+    assert.match(await evaluate('$("previewSkippedSummary").textContent'),/2 already up to date/);
+    assert.equal(await evaluate('$("previewSkippedTable").querySelectorAll("tbody tr").length'),2);
+    await click('previewCancel');await wait('!$("previewDialog").open');
   });
   await check('Recording length is shown for files that have one',async()=>{
     assert.equal(await evaluate('[...document.querySelectorAll(\'[data-base="a"] .badge\')].map(b=>b.textContent).includes("53 min")'),true);

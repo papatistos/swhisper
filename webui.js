@@ -936,13 +936,24 @@ async function startRun() {
       ? Object.entries(counts).map(([action, count]) => `${count} ${action === "blocked" ? "blocked" : `to ${action}`}`).join(" · ") + ". Counts are per stage."
       : "No eligible inputs found.";
     $("previewNotes").replaceChildren(...data.notes.map(note => { const li = document.createElement("li"); li.textContent = note; return li; }));
-    $("previewTable").querySelector("tbody").replaceChildren(...data.files.map(row => {
+    // What will run is the decision; skipped files are reference, not noise.
+    const rowFor = values => {
       const tr = document.createElement("tr");
-      for (const value of [row.file, row.stage, row.action, row.reason]) {
+      for (const value of values) {
         const td = document.createElement("td"); td.textContent = value; tr.appendChild(td);
       }
       return tr;
-    }));
+    };
+    const active = data.files.filter(row => row.action !== "skip");
+    const skipped = data.files.filter(row => row.action === "skip");
+    $("previewTable").querySelector("tbody").replaceChildren(
+      ...active.map(row => rowFor([row.file, row.stage, row.action, row.reason])));
+    $("previewTable").hidden = !active.length;
+    $("previewSkipped").hidden = !skipped.length;
+    $("previewSkipped").open = false;
+    $("previewSkippedSummary").textContent = `${skipped.length} already up to date, not part of this run`;
+    $("previewSkippedTable").querySelector("tbody").replaceChildren(
+      ...skipped.map(row => rowFor([row.file, row.stage, row.reason])));
     $("previewStart").disabled = !data.files.some(row => ["process", "reprocess"].includes(row.action));
     $("previewDialog").showModal();
   } catch (e) { $("runStatus").textContent = e.message; }
