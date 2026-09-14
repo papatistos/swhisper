@@ -80,7 +80,7 @@ try {
   socket.onmessage=event=>{const msg=JSON.parse(event.data);if(msg.id){const c=calls.get(msg.id);calls.delete(msg.id);msg.error?c.reject(msg.error):c.resolve(msg.result);}else if(msg.method==='Runtime.exceptionThrown')errors.push(msg.params.exceptionDetails);};
   const cdp=(method,params={})=>new Promise((resolve,reject)=>{const id=++sequence;calls.set(id,{resolve,reject});socket.send(JSON.stringify({id,method,params}));});
   const evaluate=async expression=>{const r=await cdp('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
-  const wait=async(expression)=>{for(let i=0;i<150;i++){if(await evaluate(expression))return;await delay(20);}throw Error('Timed out: '+expression);};
+  const wait=async(expression)=>{for(let i=0;i<400;i++){if(await evaluate(expression))return;await delay(20);}throw Error('Timed out: '+expression);};
   const click=async id=>evaluate(`document.getElementById(${JSON.stringify(id)}).click()`);
   const select=async base=>evaluate(`document.querySelector('[data-base="${base}"] .fileSelect').click()`);
   const input=async value=>evaluate(`document.getElementById('commentField').value=${JSON.stringify(value)};document.getElementById('commentField').dispatchEvent(new Event('input',{bubbles:true}))`);

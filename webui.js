@@ -14,7 +14,7 @@ let editorBase = null, savedForm = null, saving = false, editorLoading = false;
 let editorSeq = 0, folderSeq = 0, filesSeq = 0, transcriptSeq = 0, logSeq = 0, logListSeq = 0;
 let connected = false, lastStatus = null, runBusy = false, pollBusy = false, activeRunId = null;
 let editorScope = "file", editorMeta = null, globalRevision = null, timelineSeq = 0, exportContext = null, exportPlan = null, exporting = false;
-let pendingPreview = null, dirtyChoice = null, initialized = false;
+let pendingPreview = null, dirtyChoice = null, initialized = false, pollTimer = null;
 const escapeHTML = value => String(value).replace(/[&<>"']/g, c => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"}[c]));
 
 function formValues() {
@@ -928,7 +928,7 @@ async function launchPreview() {
     $("consoleLog").textContent = "";
     setConsoleCollapsed(false);
     $("previewDialog").close(); pendingPreview = null;
-    await pollRun();
+    await pollLoop();   // re-poll now and switch to the running cadence
   } catch (e) { $("previewSummary").textContent = e.message + " Close this preview and try again."; }
   finally { runBusy = false; $("previewCancel").disabled = false; updateRunControls(); }
 }
@@ -938,6 +938,7 @@ async function stopRun() {
   try {
     const { data } = await api("/api/run/stop", { method: "POST" });
     lastStatus = data; $("runStatus").textContent = "Stopping…";
+    pollLoop();
   } catch (e) { $("runStatus").textContent = e.message; }
   finally { runBusy = false; updateRunControls(); }
 }
@@ -1166,5 +1167,16 @@ try{const width=Number(localStorage.getItem("swhisper_sidebar_width"));if(width)
 initFontSize();
 initConsole();
 initConsoleResize();
-pollRun();
-setInterval(pollRun, 1000);
+function pollDelay() {
+  if (document.visibilityState === "hidden") return 20000;
+  return lastStatus?.running ? 1000 : 2500;
+}
+async function pollLoop() {
+  clearTimeout(pollTimer);
+  await pollRun();
+  pollTimer = setTimeout(pollLoop, pollDelay());
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") pollLoop();
+});
+pollLoop();
