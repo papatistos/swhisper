@@ -964,6 +964,15 @@ async function pollRun() {
     if (data.next !== undefined) logOffset = data.next;
     if (data.lines?.length) appendConsole(data.lines);
     connected = true; lastStatus = st;
+    // The folder is server-wide, so another tab can move it under this one.
+    // Say so rather than silently answering for a different folder, and let
+    // the reload happen on demand so unsaved edits are not discarded.
+    if (st.folder && META && st.folder !== META.audio_dir && !changingDir) {
+      $("folderNoticeText").textContent = `Another window switched the audio folder to ${st.folder}. This window still shows ${META.audio_dir}.`;
+      $("folderNotice").hidden = false;
+    } else if (!changingDir) {
+      $("folderNotice").hidden = true;
+    }
     $("connectionStatus").textContent = "Connected";
     $("runDot").className = "dot" + (st.running ? " run" : (st.returncode || st.progress?.error_count ? " err" : ""));
     $("runStatus").textContent = statusText(st);
@@ -1090,6 +1099,12 @@ $("dirInput").addEventListener("focus", closeDirMenu);
 $("dirInput").addEventListener("input", changeDirIfSavedPath);
 $("dirInput").addEventListener("change", changeDirIfSavedPath);
 $("dirInput").addEventListener("keydown", e => { if (e.key === "Enter") changeDir(); });
+$("folderNoticeReload").onclick = handle(async () => {
+  if (!lastStatus?.folder) return;   // changeDir runs the unsaved-edit guard
+  $("dirInput").value = lastStatus.folder;
+  $("folderNotice").hidden = true;
+  await changeDir();
+});
 $("historyBtn").onclick = handle(showHistory);
 $("historyClose").onclick = () => $("historyPanel").close();
 

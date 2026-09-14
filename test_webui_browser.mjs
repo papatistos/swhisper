@@ -8,7 +8,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 const html = await fs.readFile(new URL('./webui.html', import.meta.url), 'utf8');
 const css = await fs.readFile(new URL('./webui.css', import.meta.url), 'utf8');
 const js = await fs.readFile(new URL('./webui.js', import.meta.url), 'utf8');
-let audioDir = '/mock/audio', offline = false, failSave = false, sidecarDelay = {}, versionDelay = {}, renderDelay = {}, logDelay = {};
+let audioDir = '/mock/audio', serverFolder = null, offline = false, failSave = false, sidecarDelay = {}, versionDelay = {}, renderDelay = {}, logDelay = {};
 let status = {running:false, pipeline:null, returncode:null, run_id:null, progress:{completed:{}}};
 const saved = {a:{values:{SWHISPER_NUM_SPEAKERS:'2',SWHISPER_CONDITION_ON_PREVIOUS:'yes'},comment:'original'}, b:{values:{},comment:'B'}};
 const writes = [], launches = [], errors = [], exports = [];
@@ -26,7 +26,7 @@ const server = http.createServer(async (req,res) => {
   if (u.pathname === '/webui.js') {res.writeHead(200, {'Content-Type':'text/javascript','Cache-Control':'no-store'});res.end(js);return;}
   if (u.pathname === '/api/meta') return send(meta());
   if (u.pathname === '/api/files') return send({files:['a','b','<unsafe>'].map(base=>({base,transcribed:base!=='<unsafe>',diarized:base!=='<unsafe>',has_transcript:base!=='<unsafe>',has_logs:true,will_reprocess:base==='b',mtime:base==='b'?20:10}))});
-  if (u.pathname === '/api/run/status') return offline ? send({detail:'Offline'},503) : send(status);
+  if (u.pathname === '/api/run/status') return offline ? send({detail:'Offline'},503) : send({...status, folder:serverFolder??audioDir});
   if (u.pathname === '/api/logs') {
     const file = u.searchParams.get('file');
     await delay(logDelay[file] || 0);
@@ -113,6 +113,19 @@ try {
     await evaluate('$("logSel").value="logs/a.log";$("logSel").dispatchEvent(new Event("change"))');
     await wait('$("log").textContent==="Log logs/a.log"');
     await click('tabTranscript');
+  });
+  await check('Folder moved by another window is reported, not applied silently',async()=>{
+    await select('a');await wait('editorBase==="a"');await input('keep me');
+    serverFolder='/mock/elsewhere';
+    await wait('!$("folderNotice").hidden');
+    assert.match(await evaluate('$("folderNoticeText").textContent'),/\/mock\/elsewhere/);
+    assert.equal(await evaluate('$("commentField").value'),'keep me');   // edits survive
+    assert.equal(await evaluate('META.audio_dir'),'/mock/audio');
+    await click('folderNoticeReload');await wait('$("dirtyDialog").open');await click('dirtyDiscard');
+    await wait('META.audio_dir==="/mock/elsewhere"');
+    await wait('$("folderNotice").hidden');
+    serverFolder=null;audioDir='/mock/audio';
+    await evaluate('$("dirInput").value="/mock/audio";changeDir()');await wait('META.audio_dir==="/mock/audio"');
   });
   await check('Raw JSON view keeps every version selectable',async()=>{
     await select('a');await wait('editorBase==="a"');await click('tabTranscript');

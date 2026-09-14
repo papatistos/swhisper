@@ -1327,6 +1327,12 @@ def api_run_status() -> Dict[str, Any]:
             "audio_dir": state.run_audio_dir,
         }
     status["progress"], status["log_length"] = state.progress_snapshot()
+    # The audio folder is server-wide state. Report it on every poll so a tab
+    # notices when another tab (or another client) moved the server.
+    try:
+        status["folder"] = state.audio_dir()
+    except HTTPException:
+        status["folder"] = None
     return status
 
 

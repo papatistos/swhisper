@@ -39,6 +39,9 @@ button.primary:disabled { background: var(--badge); color: var(--muted); border-
 #connectionStatus, #progressStatus { font-size: .8rem; }
 #progressStatus { flex-basis: 100%; color: var(--muted); }
 #uiNotice { padding: 8px 16px; color: var(--err); background: var(--panel); }
+#folderNotice { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+                padding: 8px 16px; color: var(--warn); background: var(--panel);
+                border-bottom: 1px solid var(--border); font-size: .8rem; }
 dialog { color: var(--text); background: var(--panel); border: 1px solid var(--border);
          border-radius: 10px; max-width: min(56rem, 92vw); max-height: 85vh; overflow: auto; }
 dialog::backdrop { background: rgba(0,0,0,.65); }
