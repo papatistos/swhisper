@@ -114,7 +114,7 @@ PARAM_GROUPS: List[Dict[str, Any]] = [
         "SWHISPER_SPEAKER_CHANGE_PENALTY", "SWHISPER_TEMPORAL_CONSTRAINTS",
         "SWHISPER_USE_EXCLUSIVE_DIARIZATION"]},
     {"name": "Alignment & silence", "keys": [
-        "SWHISPER_WHISPER_TIMESTAMP_OFFSET", "SWHISPER_SMOOTHING_ENABLED",
+        "SWHISPER_WHISPER_TIMESTAMP_OFFSET", "SWHISPER_SCRIBE_TIMESTAMP_OFFSET", "SWHISPER_SMOOTHING_ENABLED",
         "SWHISPER_MIN_SPEAKER_WORDS", "SWHISPER_PRESERVE_MARKERS",
         "SWHISPER_MIN_SILENCE_DURATION", "SWHISPER_INCLUDE_SILENCE",
         "SWHISPER_LOG_SILENCE", "SWHISPER_SILENCE_LINEBREAK"]},
@@ -128,6 +128,7 @@ PARAM_GROUPS: List[Dict[str, Any]] = [
 
 # Mouseover help texts for the sidecar form
 PARAM_HELP: Dict[str, str] = {
+    "SWHISPER_SCRIBE_TIMESTAMP_OFFSET": "Scribe only: shift returned word and segment timestamps locally. Default 0 seconds; does not run model alignment.",
     "SWHISPER_NUM_SPEAKERS": "Exact number of speakers for this file — sets both min and max. Tip from the README: specifying 1–2 more speakers than actually present often works better.",
     "SWHISPER_MIN_SPEAKERS": "Lower bound for the number of speakers pyannote may detect (default 1).",
     "SWHISPER_MAX_SPEAKERS": "Upper bound for the number of speakers. The README recommends 1–2 more than the real number; post-processing often removes the excess.",
@@ -146,7 +147,7 @@ PARAM_HELP: Dict[str, str] = {
     "SWHISPER_CONDITION_ON_PREVIOUS": "Feed the previous transcript window as context. More consistent style, but errors and hallucinations can propagate.",
     "SWHISPER_DETECT_DISFLUENCIES": "Mark sounds that could not be transcribed as [*] disfluency markers.",
     "SWHISPER_SEED": "Random seed for reproducibility (default 1234).",
-    "SWHISPER_REFINE_PRECISION": "Precision (in seconds) for refining word timestamps (default 0.5).",
+    "SWHISPER_REFINE_PRECISION": "Allowed refinement around Whisper segment boundaries in seconds (default 0.5), not guaranteed timestamp accuracy. Its effect depends on Trust timestamps.",
     "SWHISPER_MIN_WORD_DURATION": "Minimum duration a word may get in the timestamps (default 0.02 s).",
     "SWHISPER_TRUST_TIMESTAMPS": "Trust Whisper's own segment timestamps instead of recomputing them (default false).",
     "SWHISPER_SUPPRESS_TOKENS": "Comma-separated token ids Whisper must not produce (default 50364).",

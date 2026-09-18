@@ -16,7 +16,7 @@ let globalValues={}, globalRevision="g1", exportExists=false;
 let speakerNames={};
 const meta = () => ({audio_dir:audioDir,audio_paths:['/mock/audio','/mock/other'],
   pipelines:[{id:'transcribe4',label:'Standard pipeline'},{id:'diarize4',label:'Diarization only'},{id:'scribe',label:'SUNET Scribe + local diarization'}],groups:[{name:'Speakers',keys:['SWHISPER_NUM_SPEAKERS','SWHISPER_CONDITION_ON_PREVIOUS']}],
-  params:{SWHISPER_NUM_SPEAKERS:{type:'int',min:1,label:'Number of speakers',global:2,stage:'diarize',help:'Speaker count'},SWHISPER_CONDITION_ON_PREVIOUS:{type:'bool',global:true,stage:'transcribe',help:'Use previous text'}}});
+  params:{SWHISPER_NUM_SPEAKERS:{type:'int',min:1,label:'Number of speakers',global:2,stage:'diarize',help:'Speaker count',scribe:{supported:true,description:'Local speaker count'}},SWHISPER_CONDITION_ON_PREVIOUS:{type:'bool',global:true,stage:'transcribe',help:'Use previous text',scribe:{supported:true,description:'Local Whisper backfill only'}}}});
 const server = http.createServer(async (req,res) => {
   const u = new URL(req.url, 'http://localhost');
   let body = ''; for await (const chunk of req) body += chunk;
@@ -322,11 +322,14 @@ try {
     assert.equal(await evaluate('$("scribeControls")?.hidden'),false);
     assert.equal(await evaluate('$("scribeLanguage").value'),'Swedish (verbatim)');
     assert.equal(await evaluate('$("scribeScope").value'),'selected');
-    assert.match(await evaluate('$("scribeNotice").textContent'),/Local Whisper.*do not apply/);
+    assert.match(await evaluate('$("scribeNotice").textContent'),/Local Whisper backfill/);
     await evaluate('currentBase=null;updateRunControls()');
     assert.equal(await evaluate('$("startBtn").disabled'),true,'Selected scope without a recording must not start');
     await select('a');await wait('editorBase==="a"');
     assert.equal(await evaluate('$("startBtn").disabled'),false);
+    assert.equal(await evaluate('$("setting-SWHISPER_NUM_SPEAKERS").closest(".row").hidden'),false);
+    assert.equal(await evaluate('$("setting-SWHISPER_CONDITION_ON_PREVIOUS").disabled'),false);
+    assert.match(await evaluate('$("setting-SWHISPER_CONDITION_ON_PREVIOUS").closest(".row").querySelector(".scribeHelp").textContent'),/backfill only/);
   });
   assert.deepEqual(errors,[],'No uncaught browser errors');
   console.log('All browser workflow checks passed.');

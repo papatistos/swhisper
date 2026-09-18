@@ -62,6 +62,7 @@ from run_scope import ENV_VAR as ONLY_FILES_ENV
 import webui_durations
 import webui_speakers
 from env_settings import env_snapshot, parse_env, update_env
+from scribe_processing import capability as scribe_capability
 from webui_schema import (
     GLOBAL_EXTRAS,
     PARAM_GROUPS,
@@ -735,6 +736,7 @@ def api_meta() -> Dict[str, Any]:
             "help": PARAM_HELP.get(key, p.note),
             "type": _TYPE_BY_PARSER.get(p.parse.__name__, "str"),
             "global": defaults.get(key),
+            "scribe": scribe_capability(key),
             **parameter_ui(key),
         }
         for key, p in SIDECAR_PARAMS.items()
@@ -754,7 +756,7 @@ def _global_form():
     objs = {'transcription': _tconfig.TranscriptionConfig(), 'whisper': _tconfig.WhisperSettings(),
             'diarization': _dconfig.DiarizationConfig()}
     for key, (target, attr, kind, label) in GLOBAL_EXTRAS.items():
-        params[key] = dict(type=kind, stage='diarize' if target == 'diarization' else 'transcribe',
+        params[key] = dict(scribe=scribe_capability(key), type=kind, stage='diarize' if target == 'diarization' else 'transcribe',
                            help='Used by future runs. Per-file overrides take precedence where supported.',
                            **{**parameter_ui(key), 'label': label, 'global': getattr(objs[target], attr)})
     text, revision = env_snapshot(GLOBAL_ENV_PATH)

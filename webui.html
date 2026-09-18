@@ -57,7 +57,7 @@
           <option value="Swedish (verbatim)">Swedish (verbatim)</option>
           <option value="Swedish">Swedish</option>
         </select>
-        <span id="scribeNotice" role="note">Scribe uploads the recordings to scribe.sunet.se for remote transcription. Local Whisper model, language, decoding, VAD, chunking, force-reprocessing and file-limit settings do not apply.</span>
+        <span id="scribeNotice" role="note">Scribe uploads the recordings to scribe.sunet.se for remote transcription. Local Whisper backfill and optional SenseVoice use your saved settings. Prompt and decoding controls apply to backfill only, not SUNET. Scribe reuses remote results and repeats local processing; local file-limit and force-transcription settings do not apply.</span>
       </div>
     </div>
     <div id="uiNotice" role="alert" hidden></div>

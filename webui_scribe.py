@@ -9,12 +9,26 @@ LANGUAGES = ('Swedish (verbatim)', 'Swedish')
 NOTES = [
     'Scribe may upload the listed recordings to https://scribe.sunet.se. Confirm only if remote processing is permitted.',
     'BrowserOS Neo must be logged into Scribe. The server environment must supply the encryption password. Noninteractive authentication failures appear in the run log.',
-    'Local Whisper model, language, decoding, VAD, chunking, force-reprocessing and file-limit settings do not apply. Use the Scribe language and scope controls.',
-    'Local community-1 diarization and exports use saved speaker and export settings. Precision, backfill, SenseVoice, parameter testing and timestamp correction are disabled.',
+    'SUNET controls the initial transcription. Whisper decoding and prompt settings affect local backfill only; language, task and VAD are fixed for recovery. Use Scribe language and scope controls for remote processing.',
+    'Local community-1 diarization, Whisper backfill and exports use saved settings. SenseVoice is optional for backfill snippets only. Scribe timestamp offset defaults to zero. Precision and parameter testing remain unavailable.',
     'Each start resumes validated remote transcription but repeats local diarization and exports. Uncertain uploads or queue requests are never automatically replayed.',
     'Stop cancels local waiting and processing only. Remote jobs continue. Start with the same selection and language to resume.',
     'Original recordings and local results are preserved. Scribe output, state and cache stay in scribe-webui.',
 ]
+
+
+def local_settings(source, work):
+    # Load only the config module, avoiding diarize/__init__ and model imports.
+    import importlib.util
+    import sys
+    from scribe_processing import configure, effective_settings
+    name = 'scribe_preview_config'
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name('diarize') / 'config.py')
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    config = configure(module.DiarizationConfig(), source, work)
+    return effective_settings(config)
 
 
 def preview_scribe(audio_dir, selected='', language=LANGUAGES[0]):
@@ -43,9 +57,11 @@ def preview_scribe(audio_dir, selected='', language=LANGUAGES[0]):
                 else:
                     evidence.append((str(path), None))
             fingerprint = hashlib.sha256(json.dumps(evidence).encode()).hexdigest()
-            rows.append(dict(file=source.name, base=source.stem, work_dir=str(work), fingerprint=fingerprint,
+            settings = local_settings(source, work)
+            recovery = f"local Whisper backfill {settings['backfill_model']}" if settings['backfill_missing_turns'] else "backfill off"
+            rows.append(dict(local_settings=settings, file=source.name, base=source.stem, work_dir=str(work), fingerprint=fingerprint,
                              stage='Scribe + local diarization', action='process',
-                             reason=f'Resume or upload; local exports in {work / "transcripts"}'))
+                             reason=f'Resume or upload; {recovery}; SenseVoice {"on" if settings["backfill_enable_sensevoice"] else "off"}; offset {settings["whisper_timestamp_offset"]:g}s; local exports in {work / "transcripts"}'))
     result = dict(audio_dir=str(audio), pipeline='scribe', language=language, selected=selected,
                   files=rows, notes=NOTES)
     result['token'] = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()

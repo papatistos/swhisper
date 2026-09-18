@@ -397,6 +397,8 @@ function inputFor(key, spec, value) {
   const help = document.createElement("div"); help.className = "fieldHelp"; help.id = `help-${key}`;
   help.textContent = `${spec.help || ""}${spec.type !== "bool" && editorScope !== "global" ? ` Global: ${globalVal || "not set"}.` : ""}`;
   box.appendChild(help);
+  const scribeHelp = document.createElement("div"); scribeHelp.className = "fieldHelp scribeHelp";
+  scribeHelp.textContent = spec.scribe?.description || "Not available for Scribe."; scribeHelp.hidden = true; box.appendChild(scribeHelp);
   const error = document.createElement("div"); error.className = "fieldError"; error.id = `error-${key}`; box.appendChild(error);
   const change = () => {
     if (el.type === "checkbox") { el.value = String(el.checked); el.indeterminate = false; el.setCustomValidity(""); }
@@ -431,7 +433,7 @@ function renderSettings(data, base, scope) {
   }
   const common = ["SWHISPER_LANGUAGE", "SWHISPER_NUM_SPEAKERS", "SWHISPER_MIN_SPEAKERS", "SWHISPER_MAX_SPEAKERS", "SWHISPER_INITIAL_PROMPT", "SWHISPER_FORCE_REPROCESS", "SWHISPER_DIARIZE_FORCE_REPROCESS"];
   const groups = [{name:"Common settings",keys:common.filter(k=>editorMeta.params[k])}, ...editorMeta.groups.map(g=>({...g,keys:g.keys.filter(k=>!common.includes(k))}))];
-  if (scope === "file") {
+  {
     const note = document.createElement("label"); note.className = "settingsNote";
     note.innerHTML = '<input id="showOtherSettings" type="checkbox"> Show settings for other pipelines'; editor.appendChild(note);
     note.querySelector("input").onchange = filterSettings;
@@ -467,7 +469,17 @@ function filterSettings() {
   const onlyDiarize = editorScope === "file" && $("pipelineSel").value === "diarize4" && !$("showOtherSettings")?.checked;
   document.querySelectorAll("#editor .row").forEach(row => {row.hidden = onlyDiarize && row.dataset.stage === "transcribe";});
   document.querySelectorAll("#editor details.group").forEach(group => {group.hidden = ![...group.querySelectorAll(".row")].some(row=>!row.hidden);});
-  if (scribe) document.querySelectorAll("#editor details.group").forEach(group => {group.hidden = true;});
+  document.querySelectorAll("#editor .row").forEach(row => {
+    const control = row.querySelector("[data-key]");
+    const key = control.dataset.key;
+    const supported = editorMeta.params[key]?.scribe?.supported === true;
+    if (scribe) row.hidden = !supported && !$("showOtherSettings")?.checked;
+    else if (key === "SWHISPER_SCRIBE_TIMESTAMP_OFFSET") row.hidden = true;
+    control.disabled = scribe && !supported;
+    row.querySelectorAll(".resetSetting").forEach(button => {button.disabled = (scribe && !supported) || button.hidden;});
+    row.querySelectorAll(".scribeHelp").forEach(help => {help.hidden = !scribe;});
+  });
+  document.querySelectorAll("#editor details.group").forEach(group => {group.hidden = ![...group.querySelectorAll(".row")].some(row=>!row.hidden);});
 }
 function scribeSelectionReady() {
   return $("scribeScope").value !== "selected" || Object.values(FILES_BY_BASE).some(file => file.base === currentBase);
