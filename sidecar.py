@@ -162,6 +162,7 @@ def _params() -> List[SidecarParam]:
         P("SWHISPER_USE_EXCLUSIVE_DIARIZATION", TARGET_DIARIZATION, "use_exclusive_speaker_diarization", _parse_bool, STAGE_DIARIZE),
 
         # --- Diarization: alignment / post-processing ---
+        P("SWHISPER_SCRIBE_TIMESTAMP_OFFSET", TARGET_DIARIZATION, "scribe_timestamp_offset", _parse_float, STAGE_DIARIZE),
         P("SWHISPER_WHISPER_TIMESTAMP_OFFSET", TARGET_DIARIZATION, "whisper_timestamp_offset", _parse_float, STAGE_DIARIZE),
         P("SWHISPER_SMOOTHING_ENABLED", TARGET_DIARIZATION, "smoothing_enabled", _parse_bool, STAGE_DIARIZE),
         P("SWHISPER_MIN_SPEAKER_WORDS", TARGET_DIARIZATION, "min_speaker_words", _parse_int, STAGE_DIARIZE),

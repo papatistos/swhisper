@@ -142,7 +142,7 @@ def create_completion_marker(config: DiarizationConfig, base_filename: str,
         f.write(completion_content)
 
 
-def process_file(config: DiarizationConfig, json_file: str, processed_files: int, total_files: int) -> bool:
+def process_file(config: DiarizationConfig, json_file: str, processed_files: int, total_files: int, *, apply_sidecar: bool = True) -> bool:
     """
     Process a single audio file through the diarization pipeline.
     
@@ -158,9 +158,10 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
 
     # Apply per-file sidecar overrides (returns a per-file clone; the shared
     # config object is left untouched for the remaining files).
-    config, sidecar_path = apply_sidecar_to_diarization_config(
-        config, config.final_audio_dir, base_filename
-    )
+    if apply_sidecar:
+        config, sidecar_path = apply_sidecar_to_diarization_config(
+            config, config.final_audio_dir, base_filename
+        )
 
     # Check for completion marker file (.ok)
     completion_marker = os.path.join(config.final_output_dir, f"{base_filename}.ok")
@@ -183,6 +184,12 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
     log_timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
     subdirs = config.get_output_subdirs()
     log_file_path = os.path.join(subdirs['logs'], f"{base_filename}_{log_timestamp}.log")
+    # Preserve prior Scribe exports even when two local reruns start in one second.
+    if getattr(config, 'processing_metadata', None):
+        while os.path.exists(log_file_path):
+            time.sleep(0.05)
+            log_timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+            log_file_path = os.path.join(subdirs['logs'], f"{base_filename}_{log_timestamp}.log")
     gap_log_filename = None
     gap_log_path = None
     if config.include_silence_markers and getattr(config, 'log_silence_gaps', False):
@@ -390,6 +397,15 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             word_stats = alignment_result['word_stats']
             segment_stats = alignment_result['segment_stats']
             unmatched_turns = alignment_result.get('unmatched_diarization_segments', [])
+            backfill_report = {'enabled': config.backfill_missing_turns,
+                               'status': 'disabled' if not config.backfill_missing_turns else 'not_needed',
+                               'uncovered_turns': len(unmatched_turns), 'recovered_words': 0}
+            if getattr(config, 'processing_metadata', None):
+                for segment in segments:
+                    for word in segment.get('words', []):
+                        if not word.get('is_silence_marker'):
+                            word['transcription_source'] = 'sunet-scribe'
+
 
             if unmatched_turns and getattr(config, 'backfill_missing_turns', True):
                 min_duration = max(0.0, getattr(config, 'backfill_min_duration', 0.0) or 0.0)
@@ -418,6 +434,9 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     unmatched_turns = eligible_turns
                     alignment_result['unmatched_diarization_segments'] = unmatched_turns
 
+            if backfill_report['uncovered_turns'] and not unmatched_turns and config.backfill_missing_turns:
+                backfill_report['status'] = 'below_minimum_duration'
+
             if unmatched_turns and getattr(config, 'backfill_missing_turns', True):
                 print(f"  -> Attempting targeted transcription for {len(unmatched_turns)} unmatched diarization segments...")
 
@@ -429,6 +448,8 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     backfill_overlap = base_transcribe_config.overlap_duration
 
                 backfill_settings = WhisperSettings()
+                for name, value in getattr(config, 'backfill_whisper_settings', {}).items():
+                    setattr(backfill_settings, name, value)
                 backfill_settings.verbose = False
                 backfill_settings.vad = None
                 if isinstance(whisper_result, dict) and whisper_result.get('language'):
@@ -454,6 +475,9 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                         sensevoice_enabled=config.backfill_enable_sensevoice,
                         sensevoice_model=config.backfill_sensevoice_model,
                         sensevoice_language=config.backfill_sensevoice_language,
+                        processing_settings={"whisper": backfill_settings.to_dict(),
+                                             "ignore_words": config.backfill_ignore_words,
+                                             "sensevoice_device": config.backfill_sensevoice_device},
                     )
 
                 backfill_transcriber = BackfillTranscriber(
@@ -472,6 +496,7 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     sensevoice_language=config.backfill_sensevoice_language,
                 )
 
+                backfill_error_occurred = False
                 try:
                     # Use subprocess isolation to ensure memory is fully released after each file
                     # This solves MPS memory fragmentation issues on macOS
@@ -481,6 +506,7 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                         timeout=600.0  # 10 minute timeout per file
                     )
                 except Exception as backfill_error:  # pragma: no cover - defensive logging
+                    backfill_error_occurred = True
                     print(f"  -> Backfill transcription failed: {backfill_error}")
                     backfill_outcome = {
                         'segments': [],
@@ -494,6 +520,16 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     backfill_transcriber.close()
 
                 recovered_segments = backfill_outcome.get('segments', [])
+                backfill_report.update(
+                    status='failed' if backfill_error_occurred or backfill_outcome.get('error') else 'partial' if recovered_segments and backfill_outcome.get('failed_turns') else
+                           'completed' if recovered_segments else 'no_words_recovered',
+                    attempted_turns=len(unmatched_turns),
+                    failed_turns=len(backfill_outcome.get('failed_turns', [])),
+                    recovered_words=backfill_outcome.get('word_count', 0))
+                for recovered in recovered_segments:
+                    for word in recovered.get('words', []):
+                        word['transcription_source'] = 'local-whisper-backfill'
+
                 if recovered_segments:
                     recovered_word_count = backfill_outcome.get('word_count', 0)
                     
@@ -594,7 +630,8 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     "enabled": getattr(config, 'backfill_missing_turns', False),
                     "model": getattr(config, 'backfill_model', None),
                     "device": getattr(config, 'backfill_device', None) or config.device,
-                    "overlap": getattr(config, 'backfill_overlap', None)
+                    "overlap": getattr(config, 'backfill_overlap', None),
+                    "outcome": backfill_report
                 },
                 "output_formats": ["vtt", "rttm", "rttm_detailed", "rtf", "txt", "tsv", "stats_json"],
                 "tsv": {
@@ -707,6 +744,10 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                 'min_silence_duration': config.min_silence_duration,
                 'preserve_markers': config.preserve_markers
             }
+            if getattr(config, 'processing_metadata', None):
+                json_metadata['processing'] = config.processing_metadata
+                json_metadata['processing']['backfill_outcome'] = backfill_report
+                settings['processing'] = config.processing_metadata
             JSONFormatter().format(segments, json_output_path, metadata=json_metadata)
             print(f"Enriched JSON saved to json/{json_filename}")
             output_files['json'] = json_filename

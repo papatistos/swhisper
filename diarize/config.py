@@ -132,6 +132,8 @@ class DiarizationConfig:
     # Timestamp correction
     whisper_timestamp_offset: float = _get_env_float("SWHISPER_WHISPER_TIMESTAMP_OFFSET", 0.1)  # Offset to add to all Whisper timestamps for better alignment with audio and pyannote segments (default: 0.1s)
 
+    scribe_timestamp_offset: float = _get_env_float("SWHISPER_SCRIBE_TIMESTAMP_OFFSET", 0.0)
+
     # Word-level processing
     smoothing_enabled: bool = _get_env_bool("SWHISPER_SMOOTHING_ENABLED", True)
     min_speaker_words: int = _get_env_int("SWHISPER_MIN_SPEAKER_WORDS", 3)

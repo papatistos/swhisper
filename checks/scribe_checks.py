@@ -141,6 +141,8 @@ class PrototypeChecks(unittest.TestCase):
             source = Path(directory) / "interview.wav"
             source.with_suffix(".swhisper").write_text(
                 "SWHISPER_BACKFILL_ENABLED=true\nSWHISPER_NUM_SPEAKERS=2\n"
+                "SWHISPER_BACKFILL_ENABLE_SENSEVOICE=true\nSWHISPER_SCRIBE_TIMESTAMP_OFFSET=0.2\n"
+                "SWHISPER_INITIAL_PROMPT=Intervju\n"
             )
             work = Path(directory) / "run"
             processor = Mock(return_value=True)
@@ -152,10 +154,13 @@ class PrototypeChecks(unittest.TestCase):
                     patch("transcribe_scribe.importlib.util.module_from_spec", return_value=module):
                 transcribe_scribe.local_diarization(source, work, "audio.json")
             config = processor.call_args.args[0]
-            self.assertFalse(config.backfill_missing_turns)
-            self.assertFalse(config.backfill_enable_sensevoice)
+            self.assertTrue(config.backfill_missing_turns)
+            self.assertTrue(config.backfill_enable_sensevoice)
             self.assertFalse(config.use_precision_service)
-            self.assertEqual(config.whisper_timestamp_offset, 0)
+            self.assertEqual(config.whisper_timestamp_offset, 0.2)
+            self.assertEqual(config.backfill_whisper_settings["initial_prompt"], "Intervju")
+            self.assertEqual(config.backfill_cache_dir, str(work / ".backfill_cache"))
+            self.assertFalse(processor.call_args.kwargs["apply_sidecar"])
             self.assertEqual(config.min_speakers, 2)
             self.assertEqual(config.max_speakers, 2)
             self.assertEqual(config.final_audio_dir, str(work))

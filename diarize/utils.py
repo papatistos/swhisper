@@ -1697,6 +1697,7 @@ class BackfillTranscriber:
             if status == 'error':
                 print(f"  -> Subprocess failed: {result}")
                 return {
+                    'error': 'subprocess_failed',
                     'segments': [],
                     'recovered_turns': [],
                     'failed_turns': turns,
@@ -1728,6 +1729,7 @@ class BackfillTranscriber:
                     process.join(timeout=2)
             
             return {
+                'error': 'subprocess_error_or_timeout',
                 'segments': [],
                 'recovered_turns': [],
                 'failed_turns': turns,
@@ -2463,7 +2465,8 @@ class BackfillCache:
         overlap: float,
         sensevoice_enabled: bool = False,
         sensevoice_model: str = "",
-        sensevoice_language: str = "auto"
+        sensevoice_language: str = "auto",
+        processing_settings: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.cache_dir = Path(cache_dir).expanduser()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -2474,6 +2477,7 @@ class BackfillCache:
         self.sensevoice_enabled = sensevoice_enabled
         self.sensevoice_model = sensevoice_model
         self.sensevoice_language = sensevoice_language
+        self.processing_settings = processing_settings or {}
         self.index_path = self.cache_dir / self.INDEX_FILENAME
         self._index = self._load_index()
 
@@ -2511,7 +2515,9 @@ class BackfillCache:
         signature = {
             'model': self.model,
             'device': self.device,
-            'overlap': float(self.overlap)
+            'overlap': float(self.overlap),
+            'processing_settings': self.processing_settings,
+            'sensevoice_enabled': self.sensevoice_enabled,
         }
         # Include SenseVoice config if enabled to invalidate cache when settings change
         if self.sensevoice_enabled:

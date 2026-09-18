@@ -11,6 +11,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import uuid
+from datetime import datetime, timezone
 
 from scribe_api import ScribeClient, ScribeError, atomic_json, normalize_result
 
@@ -40,10 +42,9 @@ def prepare_audio(source, wav_path):
 
 
 def local_diarization(source, work_dir, json_name):
-    # Imports delayed until after transcription. No local Whisper model is loaded.
+    # Imports delayed until after remote transcription. Local Whisper loads only if backfill needs it.
     from diarize import DiarizationConfig
-    from diarize4 import ensure_pyannote_v4, COMMUNITY_PIPELINE_ID, resolve_pyannote_token
-    from sidecar import apply_sidecar_to_diarization_config
+    from diarize4 import ensure_pyannote_v4, resolve_pyannote_token
 
     # Legacy path environment variables must not redirect this isolated run.
     class PrototypeConfig(DiarizationConfig):
@@ -59,19 +60,20 @@ def local_diarization(source, work_dir, json_name):
         def audio_subdir(self):
             return ""
 
-    config = PrototypeConfig()
-    config, _ = apply_sidecar_to_diarization_config(config, str(source.parent), source.stem)
-    # Enforce the prototype's scope AFTER applying the original file's sidecar.
-    config.pipeline_model = COMMUNITY_PIPELINE_ID
-    config.use_precision_service = False
-    config.backfill_missing_turns = False
-    config.backfill_enable_sensevoice = False
-    config.whisper_timestamp_offset = 0.0
-    config.output_dir = str(work_dir / "transcripts")
-    config.log_dir = str(work_dir / "transcripts" / "logs")
-    config.diarization_cache_dir = str(work_dir / ".diarization_cache")
-    config.enable_parameter_testing = False
-    config.force_reprocess = True  # Repeat local processing when settings change; remote result is reused.
+    from scribe_processing import configure, effective_settings
+    from transcribe import WhisperSettings
+    from sidecar import sidecar_overrides
+
+    config = configure(PrototypeConfig(), source, work_dir)
+    whisper_settings = WhisperSettings()
+    with sidecar_overrides(str(source.parent), source.stem, whisper_settings=whisper_settings):
+        config.backfill_whisper_settings = whisper_settings.to_dict()
+    config.backfill_whisper_settings.update(language="sv", task="transcribe", vad=None, verbose=False)
+    config.processing_metadata = {
+        "backend": "sunet-scribe", "timing_source": "scribe",
+        "backfill_backend": "local-whisper", "settings": effective_settings(config),
+        "backfill_whisper_settings": config.backfill_whisper_settings,
+    }
     config.hugging_face_token = resolve_pyannote_token(config.hugging_face_token)
     ensure_pyannote_v4()
     for directory in config.get_output_subdirs().values():
@@ -81,9 +83,23 @@ def local_diarization(source, work_dir, json_name):
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    print("Local community-1 diarization; backfill off; timestamp offset 0 seconds.", flush=True)
-    if not module.process_file(config, json_name, 1, 1):
-        raise ScribeError("Local diarization failed. Remote transcription remains saved for reuse.")
+    record = dict(config.processing_metadata, status="running", started_at=datetime.now(timezone.utc).isoformat())
+    record_path = work_dir / "local-runs" / (uuid.uuid4().hex + ".json")
+    atomic_json(record_path, record)
+    print(f"Local community-1 diarization; local Whisper backfill {'on' if config.backfill_missing_turns else 'off'}; "
+          f"SenseVoice {'on (backfill snippets only)' if config.backfill_enable_sensevoice else 'off'}; "
+          f"timestamp offset {config.whisper_timestamp_offset:g} seconds.", flush=True)
+    try:
+        if not module.process_file(config, json_name, 1, 1, apply_sidecar=False):
+            raise ScribeError("Local diarization failed. Remote transcription remains saved for reuse.")
+        record['status'] = 'completed'
+    except BaseException:
+        record['status'] = 'failed_or_interrupted'
+        raise
+    finally:
+        record.update(config.processing_metadata)
+        record['finished_at'] = datetime.now(timezone.utc).isoformat()
+        atomic_json(record_path, record)
 
 
 def run(args):
@@ -165,7 +181,7 @@ def run_locked(args, source, work_dir):
             "job_id": state["job_id"], "requested_language": args.language,
             "source_sha256": identity["sha256"], "audio_sha256": state["wav_sha256"],
             "base_url": identity["base_url"], "adapter_version": 1,
-            "speaker_labels_used": False, "backfill_enabled": False,
+            "speaker_labels_used": False, "processing_stage": "remote_transcription",
             "timestamp_offset": 0.0, "adopted_job": state.get("adopted_job", False),
         }
         atomic_json(output_path, result)
