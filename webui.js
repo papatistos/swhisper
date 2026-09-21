@@ -81,7 +81,7 @@ function updateRunControls() {
   const scribeGate = $("pipelineSel").value === "scribe" && !scribeSelectionReady();
   $("startBtn").disabled = !connected || !initialized || running || runBusy || changingDir || saving || editorLoading || scribeGate;
   $("stopBtn").disabled = !connected || !running || runBusy;
-  for (const id of ["pipelineSel", "dirBtn", "dirInput", "dirMenuBtn", "dirBrowse"]) {
+  for (const id of ["pipelineSel", "dirBtn", "dirInput", "dirHistory", "dirBrowse"]) {
     $(id).disabled = !connected || running || runBusy || changingDir;
   }
   if (editorScope === "global") $("saveBtn").disabled = saving || editorLoading || !formDirty() || running;
@@ -122,7 +122,7 @@ async function loadMeta() {
   const paths = [...(META.audio_paths || [])];
   if (META.audio_dir && !paths.includes(META.audio_dir)) paths.push(META.audio_dir);
   savedAudioPaths = new Set(paths);
-  renderDirMenu(paths);
+  renderDirHistory(paths);
   const sel = $("pipelineSel");
   const previous = sel.value;
   sel.innerHTML = "";
@@ -195,36 +195,24 @@ function changeDirIfSavedPath() {
   if (path && savedAudioPaths.has(path) && (!META || path !== META.audio_dir)) changeDir();
 }
 
-function renderDirMenu(paths) {
-  const menu = $("dirMenu");
-  menu.innerHTML = "";
+function renderDirHistory(paths) {
+  const history = $("dirHistory");
+  history.innerHTML = '<option value="">▾</option>';
   for (const path of paths) {
-    const option = document.createElement("button");
-    option.type = "button";
-    option.setAttribute("role", "option");
-    option.setAttribute("aria-selected", String(path === META.audio_dir));
+    const option = document.createElement("option");
+    option.value = path;
     option.textContent = path;
-    option.title = path;
-    option.onclick = handle(() => {
-      $("dirInput").value = path;
-      closeDirMenu();
-      return changeDir();
-    });
-    menu.appendChild(option);
+    history.appendChild(option);
   }
 }
 
-function toggleDirMenu() {
-  const menu = $("dirMenu");
-  const open = menu.hidden;
-  menu.hidden = !open;
-  $("dirMenuBtn").setAttribute("aria-expanded", String(open));
-  if (open) menu.querySelector("button")?.focus();
-}
-
-function closeDirMenu() {
-  $("dirMenu").hidden = true;
-  $("dirMenuBtn").setAttribute("aria-expanded", "false");
+async function chooseDirHistory() {
+  const history = $("dirHistory");
+  const path = history.value;
+  history.value = "";
+  if (!path) return;
+  $("dirInput").value = path;
+  await changeDir();
 }
 
 async function loadFiles() {
@@ -1283,11 +1271,7 @@ $("clearConsoleBtn").onclick = () => { $("consoleLog").textContent = ""; };
 $("consoleToggle").onclick = () => setConsoleCollapsed(!$("consolePanel").classList.contains("collapsed"));
 $("dirBtn").onclick = handle(changeDir);
 $("dirBrowse").onclick = handle(browseAudioDir);
-$("dirMenuBtn").onclick = event => { event.stopPropagation(); toggleDirMenu(); };
-document.addEventListener("click", event => {
-  if (!$("dirCombo").contains(event.target)) closeDirMenu();
-});
-$("dirInput").addEventListener("focus", closeDirMenu);
+$("dirHistory").addEventListener("change", handle(chooseDirHistory));
 $("dirInput").addEventListener("input", changeDirIfSavedPath);
 $("dirInput").addEventListener("change", changeDirIfSavedPath);
 $("dirInput").addEventListener("keydown", e => { if (e.key === "Enter") changeDir(); });
@@ -1324,17 +1308,7 @@ $("tabBar").addEventListener("keydown", e => {
   e.preventDefault();
   const tab = tabs[(index + tabs.length) % tabs.length]; tab.focus(); tab.click();
 });
-$("dirMenu").addEventListener("keydown", e => {
-  if (e.key === "Escape") { e.preventDefault(); closeDirMenu(); $("dirMenuBtn").focus(); return; }
-  const items = [...$("dirMenu").querySelectorAll("button")];
-  let index = items.indexOf(document.activeElement);
-  if (e.key === "ArrowDown") index++;
-  else if (e.key === "ArrowUp") index--;
-  else if (e.key === "Home") index = 0;
-  else if (e.key === "End") index = items.length - 1;
-  else return;
-  e.preventDefault(); items[(index + items.length) % items.length]?.focus();
-});
+
 $("consoleResize").addEventListener("keydown", e => {
   if (!["ArrowUp", "ArrowDown"].includes(e.key)) return;
   e.preventDefault(); setConsoleCollapsed(false);
