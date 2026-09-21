@@ -14,6 +14,9 @@ from scribe_processing import capability
 
 
 def test_capabilities_distinguish_remote_and_recovery():
+    assert capability('SWHISPER_MIN_SPEAKERS')['scope'] == 'Local processing after Scribe'
+    assert capability('SWHISPER_INITIAL_PROMPT')['scope'] == 'Local backfill only'
+    assert capability('SWHISPER_LANGUAGE')['scope'] == 'Unavailable for Scribe'
     assert capability('SWHISPER_BACKFILL_ENABLED')['supported']
     assert capability('SWHISPER_INITIAL_PROMPT')['supported']
     assert 'backfill only' in capability('SWHISPER_INITIAL_PROMPT')['description']

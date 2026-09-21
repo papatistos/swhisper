@@ -339,8 +339,8 @@ function syncSetting(el) {
   el.classList.toggle("set", explicit);
   const note = box.querySelector(".inheritance");
   note.textContent = explicit ? (editorScope === "global" ? "global value" : "per-file override") :
-    (editorScope === "global" ? "program default" : "global");
-  box.querySelector(".resetSetting").disabled = !explicit;
+    (editorScope === "global" ? "inherited program default" : "inherited global value");
+  box.querySelector(".resetSetting").disabled = el.disabled || !explicit;
   box.querySelector(".resetSetting").hidden = !explicit;
   const error = box.querySelector(".fieldError");
   error.textContent = el.validity.valid ? "" : el.validationMessage;
@@ -379,7 +379,7 @@ function inputFor(key, spec, value) {
   }
   el.dataset.explicit = value !== undefined ? "1" : "0";
   el.dataset.key = key; el.id = `setting-${key}`;
-  el.setAttribute("aria-describedby", `help-${key} error-${key} inherit-${key}`);
+  el.setAttribute("aria-describedby", `help-${key} error-${key} inherit-${key} scribe-${key}`);
   const control = document.createElement("div"); control.className = spec.type === "bool" ? "boolControl" : "";
   control.appendChild(el);
   const inheritance = document.createElement("span"); inheritance.className = "inheritance"; inheritance.id = `inherit-${key}`;
@@ -398,7 +398,10 @@ function inputFor(key, spec, value) {
   help.textContent = `${spec.help || ""}${spec.type !== "bool" && editorScope !== "global" ? ` Global: ${globalVal || "not set"}.` : ""}`;
   box.appendChild(help);
   const scribeHelp = document.createElement("div"); scribeHelp.className = "fieldHelp scribeHelp";
-  scribeHelp.textContent = spec.scribe?.description || "Not available for Scribe."; scribeHelp.hidden = true; box.appendChild(scribeHelp);
+  scribeHelp.id = `scribe-${key}`;
+  const applicability = document.createElement("strong"); applicability.className = "settingApplicability";
+  applicability.textContent = spec.scribe?.scope || (spec.scribe?.supported ? "Local processing after Scribe" : "Unavailable for Scribe");
+  scribeHelp.append(applicability, document.createTextNode(spec.scribe?.description || "Not available for Scribe.")); scribeHelp.hidden = true; box.appendChild(scribeHelp);
   const error = document.createElement("div"); error.className = "fieldError"; error.id = `error-${key}`; box.appendChild(error);
   const change = () => {
     if (el.type === "checkbox") { el.value = String(el.checked); el.indeterminate = false; el.setCustomValidity(""); }
@@ -431,6 +434,9 @@ function renderSettings(data, base, scope) {
     const note = document.createElement("p"); note.className = "settingsNote";
     note.textContent = "Defaults for future runs. Per-file overrides take precedence. Changes are saved to " + data.path + ". Credentials are not shown."; editor.appendChild(note);
   }
+  const applicabilityNote = document.createElement("p"); applicabilityNote.id = "settingsApplicability"; applicabilityNote.className = "settingsNote";
+  applicabilityNote.textContent = "Scribe: these settings control local processing. Backfill-only settings take effect when backfill is enabled. SUNET transcription is controlled by the Scribe language/model selector. Values marked as inherited are editable; greyed-out controls are unavailable.";
+  editor.appendChild(applicabilityNote);
   const common = ["SWHISPER_LANGUAGE", "SWHISPER_NUM_SPEAKERS", "SWHISPER_MIN_SPEAKERS", "SWHISPER_MAX_SPEAKERS", "SWHISPER_INITIAL_PROMPT", "SWHISPER_FORCE_REPROCESS", "SWHISPER_DIARIZE_FORCE_REPROCESS"];
   const groups = [{name:"Common settings",keys:common.filter(k=>editorMeta.params[k])}, ...editorMeta.groups.map(g=>({...g,keys:g.keys.filter(k=>!common.includes(k))}))];
   {
@@ -466,6 +472,7 @@ function renderSettings(data, base, scope) {
 function filterSettings() {
   const scribe = $("pipelineSel").value === "scribe";
   $("scribeControls").hidden = !scribe;
+  if ($("settingsApplicability")) $("settingsApplicability").hidden = !scribe;
   const onlyDiarize = editorScope === "file" && $("pipelineSel").value === "diarize4" && !$("showOtherSettings")?.checked;
   document.querySelectorAll("#editor .row").forEach(row => {row.hidden = onlyDiarize && row.dataset.stage === "transcribe";});
   document.querySelectorAll("#editor details.group").forEach(group => {group.hidden = ![...group.querySelectorAll(".row")].some(row=>!row.hidden);});
@@ -476,6 +483,7 @@ function filterSettings() {
     if (scribe) row.hidden = !supported && !$("showOtherSettings")?.checked;
     else if (key === "SWHISPER_SCRIBE_TIMESTAMP_OFFSET") row.hidden = true;
     control.disabled = scribe && !supported;
+    row.classList.toggle("settingUnavailable", control.disabled);
     row.querySelectorAll(".resetSetting").forEach(button => {button.disabled = (scribe && !supported) || button.hidden;});
     row.querySelectorAll(".scribeHelp").forEach(help => {help.hidden = !scribe;});
   });

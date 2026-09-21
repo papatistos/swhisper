@@ -22,19 +22,19 @@ LEGACY_TUNING = {
 
 def capability(key):
     if key == 'SWHISPER_SCRIBE_TIMESTAMP_OFFSET':
-        return dict(supported=True, description='Scribe only: shift returned timestamps locally; default 0 seconds. No model re-alignment.')
+        return dict(supported=True, scope='Scribe timestamps', description='Scribe only: shift returned timestamps locally; default 0 seconds. No model re-alignment.')
     if key in UNSUPPORTED:
-        return dict(supported=False, description=UNSUPPORTED[key])
+        return dict(supported=False, scope='Unavailable for Scribe', description=UNSUPPORTED[key])
     if key in LEGACY_TUNING:
-        return dict(supported=False, description='Not applied by the community-1 path. Use VBx and community segmentation controls.')
+        return dict(supported=False, scope='Unavailable for Scribe', description='Not applied by the community-1 path. Use VBx and community segmentation controls.')
     param = SIDECAR_PARAMS.get(key)
     if (param and param.target == 'whisper' and key not in {'SWHISPER_LANGUAGE', 'SWHISPER_TASK', 'SWHISPER_VAD'}) or key in {'SWHISPER_ALIGNMENT_LAYERS', 'SWHISPER_FP16'}:
-        return dict(supported=True, description='Local Whisper backfill only; does not change the Scribe transcription. Recovery always uses Swedish transcription with VAD off.')
+        return dict(supported=True, scope='Local backfill only', description='Local Whisper backfill only; does not change the Scribe transcription. Recovery always uses Swedish transcription with VAD off.')
     if key.startswith('SWHISPER_BACKFILL_'):
-        return dict(supported=True, description='Local Whisper recovery of missing turns only. SenseVoice analyzes recovery snippets only.')
+        return dict(supported=True, scope='Local backfill only', description='Local Whisper recovery of missing turns only. SenseVoice analyzes recovery snippets only.')
     if (param and param.target == 'diarization') or key == 'SWHISPER_DIARIZE_DEVICE':
-        return dict(supported=True, description='Applies to local processing after Scribe transcription.')
-    return dict(supported=False, description='Does not control SUNET transcription or local recovery. Scribe uses its language selector; recovery uses its own Whisper defaults. Remote prompting, disfluency and alignment controls are unavailable.')
+        return dict(supported=True, scope='Local processing after Scribe', description='Applies to local processing after Scribe transcription.')
+    return dict(supported=False, scope='Unavailable for Scribe', description='Does not control SUNET transcription or local recovery. Scribe uses its language selector; recovery uses its own Whisper defaults. Remote prompting, disfluency and alignment controls are unavailable.')
 
 
 def configure(config, source, work_dir):

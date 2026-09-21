@@ -15,8 +15,8 @@ const writes = [], launches = [], errors = [], exports = [];
 let globalValues={}, globalRevision="g1", exportExists=false;
 let speakerNames={};
 const meta = () => ({audio_dir:audioDir,audio_paths:['/mock/audio','/mock/other'],
-  pipelines:[{id:'transcribe4',label:'Standard pipeline'},{id:'diarize4',label:'Diarization only'},{id:'scribe',label:'SUNET Scribe + local diarization'}],groups:[{name:'Speakers',keys:['SWHISPER_NUM_SPEAKERS','SWHISPER_CONDITION_ON_PREVIOUS']}],
-  params:{SWHISPER_NUM_SPEAKERS:{type:'int',min:1,label:'Number of speakers',global:2,stage:'diarize',help:'Speaker count',scribe:{supported:true,description:'Local speaker count'}},SWHISPER_CONDITION_ON_PREVIOUS:{type:'bool',global:true,stage:'transcribe',help:'Use previous text',scribe:{supported:true,description:'Local Whisper backfill only'}}}});
+  pipelines:[{id:'transcribe4',label:'Standard pipeline'},{id:'diarize4',label:'Diarization only'},{id:'scribe',label:'SUNET Scribe + local diarization'}],groups:[{name:'Speakers',keys:['SWHISPER_NUM_SPEAKERS','SWHISPER_CONDITION_ON_PREVIOUS','SWHISPER_VAD']}],
+  params:{SWHISPER_VAD:{type:'bool',global:true,stage:'transcribe',scribe:{supported:false,scope:'Unavailable for Scribe',description:'Not applied to Scribe.'}},SWHISPER_NUM_SPEAKERS:{type:'int',min:1,label:'Number of speakers',global:2,stage:'diarize',help:'Speaker count',scribe:{supported:true,description:'Local speaker count'}},SWHISPER_CONDITION_ON_PREVIOUS:{type:'bool',global:true,stage:'transcribe',help:'Use previous text',scribe:{supported:true,scope:'Local backfill only',description:'Local Whisper backfill only'}}}});
 const server = http.createServer(async (req,res) => {
   const u = new URL(req.url, 'http://localhost');
   let body = ''; for await (const chunk of req) body += chunk;
@@ -219,7 +219,7 @@ try {
   await check('Inherited checkbox and Use global reset',async()=>{
     const id='setting-SWHISPER_CONDITION_ON_PREVIOUS';
     assert.equal(await evaluate(`$("${id}").type`),'checkbox');assert.equal(await evaluate(`$("${id}").checked`),true);
-    assert.equal(await evaluate(`$("${id}").closest(".fieldValue").querySelector(".inheritance").textContent`),'global');
+    assert.equal(await evaluate(`$("${id}").closest(".fieldValue").querySelector(".inheritance").textContent`),'inherited global value');
     await click(id);assert.equal(await evaluate('formDirty()'),true);
     await evaluate(`$("${id}").closest(".fieldValue").querySelector(".resetSetting").click()`);
     assert.equal(await evaluate('formDirty()'),false);assert.equal(await evaluate(`$("${id}").checked`),true);
@@ -234,7 +234,7 @@ try {
   await check('Global draft navigation uses edit guard',async()=>{
     await click('globalSettingsBtn');await wait('editorScope==="global" && !editorLoading');
     await evaluate('$("setting-SWHISPER_MIN_SPEAKERS").value="5";$("setting-SWHISPER_MIN_SPEAKERS").dispatchEvent(new Event("input"))');
-    await select('b');await wait('$("dirtyDialog").open');await click('dirtyCancel');assert.equal(await evaluate('editorScope'),'global');
+    await select('b');await wait('$("dirtyDialog").open');await click('dirtyCancel');assert.equal(await evaluate('editorScope'),'inherited global value');
     await select('b');await wait('$("dirtyDialog").open');await click('dirtyDiscard');await wait('editorBase==="b"');
   });
   await check('Pipeline-specific fields and inline number validation',async()=>{
@@ -330,6 +330,22 @@ try {
     assert.equal(await evaluate('$("setting-SWHISPER_NUM_SPEAKERS").closest(".row").hidden'),false);
     assert.equal(await evaluate('$("setting-SWHISPER_CONDITION_ON_PREVIOUS").disabled'),false);
     assert.match(await evaluate('$("setting-SWHISPER_CONDITION_ON_PREVIOUS").closest(".row").querySelector(".scribeHelp").textContent'),/backfill only/);
+  });
+  await check('Scribe availability and inherited value contrast in file and global settings',async()=>{
+    for (const scope of ['file','global']) {
+      if (scope==='global') {await click('globalSettingsBtn');await wait('editorScope==="global" && !editorLoading');}
+      const speaker = scope==='global' ? 'SWHISPER_MIN_SPEAKERS' : 'SWHISPER_NUM_SPEAKERS';
+      assert.equal(await evaluate(`(()=>{const el=$('setting-${speaker}');return !el.disabled && getComputedStyle(el,'::placeholder').color===getComputedStyle(el).color})()`),true);
+      assert.equal(await evaluate('$(' + JSON.stringify('setting-SWHISPER_VAD') + ').closest(".row").hidden'),true);
+      await click('showOtherSettings');
+      assert.equal(await evaluate('$("setting-SWHISPER_VAD").closest(".row").hidden'),false);
+      assert.equal(await evaluate('$("setting-SWHISPER_VAD").disabled'),true);
+      assert.equal(await evaluate('(()=>{const el=$("setting-SWHISPER_VAD");const before=el.checked;el.click();return el.checked===before})()'),true);
+      assert.equal(await evaluate('$("setting-SWHISPER_CONDITION_ON_PREVIOUS").closest(".row").querySelector(".settingApplicability").textContent'),'Local backfill only');
+      await evaluate('$("pipelineSel").value="transcribe4";filterSettings()');
+      assert.equal(await evaluate('$("setting-SWHISPER_VAD").disabled'),false);
+      await evaluate('$("pipelineSel").value="scribe";filterSettings()');
+    }
   });
   assert.deepEqual(errors,[],'No uncaught browser errors');
   console.log('All browser workflow checks passed.');

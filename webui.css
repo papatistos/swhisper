@@ -103,6 +103,18 @@ main { flex: 1; display: flex; min-height: 0; }
 .row label .stage { color: var(--muted); font-size: 0.62rem; margin-left: 6px; }
 .row input, .row select, .row textarea { width: 100%; max-width: 100%; }
 .row input.set, .row select.set, .row textarea.set { border-color: var(--accent); }
+/* Inherited values are editable. Reserve muted controls for disabled settings. */
+.row input:not(:disabled)::placeholder, .row textarea:not(:disabled)::placeholder {
+  color: var(--text); opacity: 1;
+}
+.row input:disabled, .row select:disabled, .row textarea:disabled {
+  color: var(--muted); background: var(--panel); border-color: var(--border);
+  opacity: .55; cursor: not-allowed;
+}
+.row input:disabled::placeholder, .row textarea:disabled::placeholder { color: var(--muted); opacity: 1; }
+.settingUnavailable > label { color: var(--muted); cursor: default; }
+.settingApplicability { display: block; color: var(--accent); margin-bottom: 2px; }
+.settingUnavailable .settingApplicability { color: var(--muted); }
 #editorBar { display: flex; gap: 10px; align-items: center; padding: 10px 20px;
              border-top: 1px solid var(--border); background: var(--panel); }
 #editorBar .msg { color: var(--muted); font-size: 0.8rem; flex: 1; }
