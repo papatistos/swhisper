@@ -12,7 +12,7 @@ let audioDir = '/mock/audio', serverFolder = null, offline = false, failSave = f
 let status = {running:false, pipeline:null, returncode:null, run_id:null, progress:{completed:{}}};
 const saved = {a:{values:{SWHISPER_NUM_SPEAKERS:'2',SWHISPER_CONDITION_ON_PREVIOUS:'yes'},comment:'original'}, b:{values:{},comment:'B'}};
 const writes = [], launches = [], errors = [], exports = [];
-let globalValues={}, globalRevision="g1", exportExists=false;
+let globalValues={}, globalRevision="g1", exportCanceled=false;
 let speakerNames={};
 const meta = () => ({audio_dir:audioDir,audio_paths:['/mock/audio','/mock/other'],
   pipelines:[{id:'transcribe4',label:'Standard pipeline'},{id:'diarize4',label:'Diarization only'},{id:'scribe',label:'SUNET Scribe + local diarization'}],groups:[{name:'Speakers',keys:['SWHISPER_NUM_SPEAKERS','SWHISPER_CONDITION_ON_PREVIOUS']}],
@@ -44,7 +44,8 @@ const server = http.createServer(async (req,res) => {
     const pcm=Buffer.alloc(44+160000);pcm.write('RIFF');pcm.writeUInt32LE(pcm.length-8,4);pcm.write('WAVEfmt ',8);pcm.writeUInt32LE(16,16);pcm.writeUInt16LE(1,20);pcm.writeUInt16LE(1,22);pcm.writeUInt32LE(8000,24);pcm.writeUInt32LE(16000,28);pcm.writeUInt16LE(2,32);pcm.writeUInt16LE(16,34);pcm.write('data',36);pcm.writeUInt32LE(160000,40);
     const range=/bytes=(\d+)-(\d*)/.exec(req.headers.range||'');const start=range?Number(range[1]):0,end=range&&range[2]?Number(range[2]):pcm.length-1;res.writeHead(range?206:200,{'Content-Type':'audio/wav','Accept-Ranges':'bytes','Content-Length':end-start+1,...(range?{'Content-Range':`bytes ${start}-${end}/${pcm.length}`}:{})});res.end(pcm.subarray(start,end+1));return;
   }
-  if (u.pathname.endsWith('/export-preview')) return send({paths:['/mock/audio/exports/review.txt'],existing:exportExists?['/mock/audio/exports/review.txt']:[],token:'e1'});
+  if (u.pathname.endsWith('/save-as')) return send(exportCanceled ? {canceled:true} : {token:'native-save-selection',path:'/mock/chosen/review.txt',format:data.format});
+  if (u.pathname.endsWith('/save-selected')) {exports.push(data);return send({written:['/mock/chosen/review.txt']});}
   if (u.pathname.startsWith('/api/render/') && u.pathname.endsWith('/save')) {exports.push(data);return send({written:['/mock/audio/exports/review.txt']});}
   if (u.pathname.startsWith('/api/render/')) {
     await delay(renderDelay[data.options?.min_pause] || 0);
@@ -273,10 +274,12 @@ try {
     await wait('$("timeline").querySelector(".segment.active")?.dataset.start==="3"');
     await click('reviewAudio');
   });
-  await check('Export previews destination and requires explicit overwrite',async()=>{
-    exportExists=true;await click('renderSave');await wait('$("exportDialog").open && exportPlan!==null');
-    assert.equal(await evaluate('$("exportConfirm").disabled'),true);assert.equal(exports.length,0);
-    await click('exportOverwrite');await click('exportConfirm');await wait('!exporting && $("exportPaths").textContent.startsWith("Exported")');assert.equal(exports.at(-1).overwrite,true);await click('exportCancel');exportExists=false;await click('tabSettings');
+  await check('Export uses native Save As and cancellation writes nothing',async()=>{
+    await click('renderSave');await wait('$("exportDialog").open');
+    assert.equal(await evaluate('$("exportFormat").value'),'txt');assert.equal(exports.length,0);
+    await click('exportConfirm');await wait('!exporting && !$("exportDialog").open');
+    assert.equal(exports.at(-1).token,'native-save-selection');
+    exportCanceled=true;const before=exports.length;await click('renderSave');await wait('$("exportDialog").open');await click('exportConfirm');await wait('!exporting && !$("exportDialog").open');assert.equal(exports.length,before);exportCanceled=false;await click('tabSettings');
   });
   await check('Folder change cancel preserves folder and edits',async()=>{await input('folder draft');await evaluate('$("dirInput").value="/mock/other"; $("dirBtn").click()');await wait('$("dirtyDialog").open');await click('dirtyCancel');await wait('!$("dirtyDialog").open');assert.equal(audioDir,'/mock/audio');assert.equal(await evaluate('$("dirInput").value'),'/mock/audio');});
   await check('Dirty page requests unload warning',async()=>{
