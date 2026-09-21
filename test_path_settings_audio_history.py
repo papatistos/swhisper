@@ -8,7 +8,7 @@ import path_settings
 
 
 class RememberAudioDirectoryTests(unittest.TestCase):
-    def test_latest_selection_becomes_active_and_previous_active_is_in_history(self):
+    def test_latest_selection_is_a_unique_history_entry(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             (root / ".swhisper.env").write_text(
@@ -21,10 +21,10 @@ class RememberAudioDirectoryTests(unittest.TestCase):
                 saved = (root / ".swhisper.env").read_text(encoding="utf-8")
                 history = path_settings.get_commented_audio_dirs()
 
-        self.assertIn('SWHISPER_AUDIO_DIR="/recordings/latest"', saved)
-        self.assertNotIn('#SWHISPER_AUDIO_DIR="/recordings/latest"', saved)
-        self.assertIn('#SWHISPER_AUDIO_DIR="/recordings/older"', saved)
-        self.assertEqual(history, ["/recordings/older", "/recordings/earlier"])
+        self.assertIn('SWHISPER_AUDIO_DIR="/recordings/older"', saved)
+        self.assertIn('#SWHISPER_AUDIO_DIR="/recordings/latest"', saved)
+        self.assertNotIn('#SWHISPER_AUDIO_DIR="/recordings/older"', saved)
+        self.assertEqual(history, ["/recordings/earlier", "/recordings/latest"])
 
 
 if __name__ == "__main__":

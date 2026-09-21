@@ -167,10 +167,11 @@ def get_commented_audio_dirs() -> list[str]:
 
 
 def remember_audio_dir(path_value: str) -> str:
-    """Make an audio directory the restart-persistent selection.
+    """Remember an audio directory as a unique commented env-file entry.
 
-    The active ``SWHISPER_AUDIO_DIR`` entry stores the most recent selection.
-    Every earlier valid selection is retained as one commented history entry.
+    Existing duplicate commented entries are removed at the same time.  An
+    active ``SWHISPER_AUDIO_DIR`` entry wins over its commented equivalent,
+    so the file does not accumulate two copies of the current path.
     """
     normalized = normalize_path_value(path_value)
     key = str(normalized)
@@ -180,36 +181,37 @@ def remember_audio_dir(path_value: str) -> str:
     else:
         lines = []
 
-    assignments = {index: (is_commented, raw_value)
-                   for index, is_commented, raw_value in _audio_dir_assignments(lines)}
-    history_keys = set()
+    assignments = list(_audio_dir_assignments(lines))
+    active_keys = {
+        parsed_key
+        for _, is_commented, raw_value in assignments
+        if not is_commented
+        for parsed_key in [_path_key(raw_value)]
+        if parsed_key is not None
+    }
+    seen_comments = set()
     cleaned = []
     last_audio_index = -1
-    selected_written = False
     for index, line in enumerate(lines):
-        assignment = assignments.get(index)
+        assignment = next((item for item in assignments if item[0] == index), None)
         if assignment is None:
             cleaned.append(line)
             continue
 
         last_audio_index = len(cleaned)
-        _, raw_value = assignment
-        parsed_key = _path_key(raw_value)
-        if parsed_key is None:
+        _, is_commented, raw_value = assignment
+        if not is_commented:
             cleaned.append(line)
             continue
-        if parsed_key == key:
-            if not selected_written:
-                cleaned.append(f'SWHISPER_AUDIO_DIR="{key}"')
-                selected_written = True
-            continue
-        if parsed_key in history_keys:
-            continue
-        history_keys.add(parsed_key)
-        cleaned.append(f'#SWHISPER_AUDIO_DIR="{parsed_key}"')
 
-    if not selected_written:
-        new_line = f'SWHISPER_AUDIO_DIR="{key}"'
+        parsed_key = _path_key(raw_value)
+        if parsed_key is None or parsed_key in active_keys or parsed_key in seen_comments:
+            continue
+        seen_comments.add(parsed_key)
+        cleaned.append(line)
+
+    if key not in active_keys and key not in seen_comments:
+        new_line = f'#SWHISPER_AUDIO_DIR="{key}"'
         if last_audio_index >= 0:
             cleaned.insert(last_audio_index + 1, new_line)
         else:

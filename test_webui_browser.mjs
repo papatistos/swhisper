@@ -97,8 +97,8 @@ try {
   await cdp('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
   await cdp('Page.navigate',{url:`http://127.0.0.1:${server.address().port}/`});
   await wait('typeof initialized !== "undefined" && initialized && connected');
-  await check('Directory history control visibly labels the saved folders',async()=>{
-    assert.equal(await evaluate('$("dirMenuBtn").textContent'),'Recent folders (1)');
+  await check('Directory history dropdown opens the saved folders',async()=>{
+    assert.equal(await evaluate('$("dirMenuBtn").textContent'),'▾');
     await click('dirMenuBtn');
     assert.equal(await evaluate('$("dirMenu").hidden'),false);
     assert.equal(await evaluate('$("dirMenu").querySelectorAll("button").length'),2);

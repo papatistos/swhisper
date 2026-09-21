@@ -123,7 +123,6 @@ async function loadMeta() {
   if (META.audio_dir && !paths.includes(META.audio_dir)) paths.push(META.audio_dir);
   savedAudioPaths = new Set(paths);
   renderDirMenu(paths);
-  updateDirMenuLabel(paths);
   const sel = $("pipelineSel");
   const previous = sel.value;
   sel.innerHTML = "";
@@ -213,13 +212,6 @@ function renderDirMenu(paths) {
     });
     menu.appendChild(option);
   }
-}
-
-function updateDirMenuLabel(paths) {
-  const historyCount = paths.filter(path => path !== META.audio_dir).length;
-  $("dirMenuBtn").textContent = historyCount
-    ? `Recent folders (${historyCount})`
-    : "Recent folders";
 }
 
 function toggleDirMenu() {
