@@ -142,7 +142,7 @@ def create_completion_marker(config: DiarizationConfig, base_filename: str,
         f.write(completion_content)
 
 
-def process_file(config: DiarizationConfig, json_file: str, processed_files: int, total_files: int, *, apply_sidecar: bool = True) -> bool:
+def process_file(config: DiarizationConfig, json_file: str, processed_files: int, total_files: int, *, apply_sidecar: bool = True, raise_errors: bool = False) -> bool:
     """
     Process a single audio file through the diarization pipeline.
     
@@ -780,6 +780,8 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             import traceback
             print(traceback.format_exc())
             print(f"❌ Processing failed :-(")
+            if raise_errors:
+                raise
             return False
             
         finally:               

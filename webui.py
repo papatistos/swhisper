@@ -539,6 +539,14 @@ class AppState:
         except Exception as exc:  # history must never break the UI
             with self.lock:
                 self._append_log_line_locked(f"⚠️ Could not write run history: {exc}")
+        if returncode not in (None, 0) and not self.stop_requested:
+            from pipeline_errors import last_failure
+            with self.lock:
+                if self.run_id != run_id:
+                    return
+                lines = self._read_complete_lines(self.run_log_path) if self.run_log_path else self.log_lines
+                reason = last_failure(lines) or f"Process exited with code {returncode}; see the preceding log for details."
+                self._append_log_line_locked(f"❌ Failure reason: {reason}")
 
     def stop(self) -> None:
         with self.lock:

@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime, timezone
 
 from scribe_api import ScribeClient, ScribeError, atomic_json, normalize_result
+from audio_integrity import pcm_checksum, checksum_without_jpr_metadata
 
 
 def sha256(path):
@@ -39,6 +40,33 @@ def prepare_audio(source, wav_path):
     except subprocess.CalledProcessError:
         raise ScribeError("ffmpeg could not prepare the audio; check the source file.") from None
     os.replace(temporary, wav_path)
+
+
+def restore_working_audio(source, wav_path, state, state_path):
+    """Rebuild disposable audio from the verified source; retain remote provenance."""
+    candidate = wav_path.with_name(f"audio-rebuild-{uuid.uuid4().hex}.wav")
+    print("Rebuilding the local audio copy from the original recording...", flush=True)
+    try:
+        prepare_audio(source, candidate)
+        if sha256(source) != state['identity']['sha256']:
+            raise ScribeError("The original recording changed during audio preparation. Retry with the original recording.")
+        checksum = sha256(candidate)
+        # Keep the previous copy for diagnosis without treating it as input again.
+        if wav_path.exists():
+            backup = wav_path.parent / 'replaced-audio'
+            backup.mkdir(exist_ok=True)
+            os.replace(wav_path, backup / f"audio-{uuid.uuid4().hex}.wav")
+        os.replace(candidate, wav_path)
+        # wav_sha256 describes the audio uploaded to SUNET and must stay unchanged.
+        if not state.get('job_id') and not state.get('upload_started'):
+            state['wav_sha256'] = checksum
+        state['local_wav_sha256'] = checksum
+        state['local_pcm_sha256'] = pcm_checksum(wav_path)
+        atomic_json(state_path, state)
+    finally:
+        candidate.unlink(missing_ok=True)
+        candidate.with_suffix('.tmp.wav').unlink(missing_ok=True)
+    print("Local audio copy rebuilt. Continuing with the saved Scribe job.", flush=True)
 
 
 def local_diarization(source, work_dir, json_name):
@@ -90,9 +118,14 @@ def local_diarization(source, work_dir, json_name):
           f"SenseVoice {'on (backfill snippets only)' if config.backfill_enable_sensevoice else 'off'}; "
           f"timestamp offset {config.whisper_timestamp_offset:g} seconds.", flush=True)
     try:
-        if not module.process_file(config, json_name, 1, 1, apply_sidecar=False):
+        if not module.process_file(config, json_name, 1, 1, apply_sidecar=False, raise_errors=True):
             raise ScribeError("Local diarization failed. Remote transcription remains saved for reuse.")
         record['status'] = 'completed'
+    except Exception as exc:
+        from pipeline_errors import failure_reason
+        reason = failure_reason(exc)
+        record.update(status='failed', failure_reason=reason)
+        raise ScribeError(f"Local diarization failed: {reason} Remote transcription remains saved for reuse.") from exc
     except BaseException:
         record['status'] = 'failed_or_interrupted'
         raise
@@ -127,7 +160,11 @@ def run_locked(args, source, work_dir):
     if state_path.exists():
         state = json.loads(state_path.read_text())
         if state.get("identity") != identity:
-            raise ScribeError("Recording or remote settings changed. Choose a new --work-dir to preserve the old run.")
+            raise ScribeError(
+                f"Cannot resume this saved run: the original recording or the Scribe settings no longer match. "
+                f"Previous results are preserved in {work_dir}. Restore the original recording/settings to resume, "
+                "or copy the recording into a separate folder and select that folder in the WebUI to start a new Scribe run. "
+                "A new run may upload the recording again.")
     else:
         if any(p.name != ".lock" for p in work_dir.iterdir()):
             raise ScribeError("Work directory is not empty and has no prototype state. Choose a new directory.")
@@ -143,13 +180,35 @@ def run_locked(args, source, work_dir):
     if not state.get("wav_sha256"):
         prepare_audio(source, wav_path)
         state["wav_sha256"] = sha256(wav_path)
+        state['local_pcm_sha256'] = pcm_checksum(wav_path)
         atomic_json(state_path, state)
-    elif not wav_path.exists() or sha256(wav_path) != state["wav_sha256"]:
-        raise ScribeError("Staged audio changed or is missing. Choose a new work directory.")
+    elif not wav_path.exists():
+        restore_working_audio(source, wav_path, state, state_path)
+    else:
+        expected = state.get('local_wav_sha256', state['wav_sha256'])
+        current = sha256(wav_path)
+        if current != expected:
+            audio_checksum = pcm_checksum(wav_path)
+            same_audio = (audio_checksum is not None and audio_checksum == state.get('local_pcm_sha256'))
+            if not same_audio and not state.get('local_pcm_sha256'):
+                same_audio = checksum_without_jpr_metadata(wav_path) == expected
+            if same_audio:
+                state['local_pcm_sha256'] = audio_checksum
+                state['local_wav_sha256'] = current
+                atomic_json(state_path, state)
+                print("Audio verified; only WAV metadata changed.", flush=True)
+            else:
+                restore_working_audio(source, wav_path, state, state_path)
+        elif not state.get('local_pcm_sha256'):
+            audio_checksum = pcm_checksum(wav_path)
+            if audio_checksum is not None:
+                state['local_pcm_sha256'] = audio_checksum
+                atomic_json(state_path, state)
 
     if output_path.exists():
         if sha256(output_path) != state.get("output_sha256"):
-            raise ScribeError("Normalized output changed or is incomplete; refusing to reuse it.")
+            raise ScribeError(
+                "The saved transcript has changed and must be restored before this run can continue.")
         print(f"Reusing saved Scribe transcription: {output_path}", flush=True)
     else:
         token = (os.getenv("SUNET_SCRIBE_API_KEY", "").strip()
