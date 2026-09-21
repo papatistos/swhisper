@@ -167,6 +167,7 @@ class AppState:
         self.progress = ProgressTracker()
         self.progress_offset = 0
         self.scribe_plan = None
+        self.export_selections: Dict[str, Dict[str, Any]] = {}
 
     # -- configuration ------------------------------------------------------
 
@@ -1218,6 +1219,122 @@ def _export_plan(basename, body):
     plan = dict(name=name, destination=str(destination), paths=[str(t) for t in targets],
                 existing=[str(t) for t in targets if t.exists()], token=token)
     return plan, targets, formats, selected, segments, options, metadata
+
+
+def _apple_script_string(value: str) -> str:
+    """Quote one string literal for the small AppleScript dialogs below."""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _native_save_path(default_name: str, prompt: str) -> Optional[Path]:
+    """Return the path from macOS's Save As dialog, or ``None`` on cancel."""
+    if sys.platform != "darwin":
+        raise HTTPException(501, "The Save As dialog is only available on macOS")
+    script = ('tell application "System Events" to activate\n'
+              f'set chosen to choose file name with prompt {_apple_script_string(prompt)} '
+              f'default name {_apple_script_string(default_name)}\n'
+              'return POSIX path of chosen')
+    try:
+        result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(500, "The Save As dialog timed out") from None
+    if result.returncode != 0:
+        message = (result.stderr or "").strip()
+        if "-128" in message or "User canceled" in message:
+            return None
+        raise HTTPException(500, f"Save As dialog failed: {message or 'unknown osascript error'}")
+    chosen = result.stdout.strip()
+    if not chosen:
+        raise HTTPException(500, "The Save As dialog did not return a file path")
+    target = Path(os.path.expanduser(chosen))
+    if not target.is_absolute():
+        raise HTTPException(500, "The Save As dialog returned a relative file path")
+    return target
+
+
+def _validate_export_targets(dirs, base, targets) -> None:
+    """Reject pipeline artifacts and symlinks before writing an export copy."""
+    protected = set()
+    for version in _transcript_versions(dirs, base):
+        original = Path(dirs['audio']) / version['id']
+        protected.add(original.resolve())
+        protected.add((original.parent.parent / 'rtf' / (original.stem + '.rtf')).resolve())
+    if any(target.resolve() in protected for target in targets):
+        raise HTTPException(409, 'Choose a different filename. Pipeline transcript versions are preserved.')
+    if any(target.is_symlink() for target in targets):
+        raise HTTPException(409, 'Export targets cannot be symbolic links')
+
+
+@app.post('/api/render/{basename}/save-as')
+def api_render_save_as(basename: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """Ask macOS where one rendered transcript copy should be saved.
+
+    The opaque token keeps the later write tied to the path that the native
+    dialog returned. The browser never has to send a filesystem destination.
+    """
+    dirs, base, selected, segments, options, metadata = _render(basename, body)
+    fmt = body.get('format')
+    if fmt not in ('txt', 'rtf'):
+        raise HTTPException(400, 'Choose TXT or RTF')
+    default_name = Path(selected['id']).stem + options.suffix() + '_view.' + fmt
+    target = _native_save_path(default_name, f"Export transcript as {fmt.upper()}")
+    if target is None:
+        return {'canceled': True}
+    if target.suffix.lower() != '.' + fmt:
+        raise HTTPException(400, f"Choose a .{fmt} filename for the {fmt.upper()} export")
+    _validate_export_targets(dirs, base, [target])
+    token = uuid.uuid4().hex
+    with state.lock:
+        state.export_selections[token] = {
+            'created_at': time.monotonic(),
+            'dirs': dirs,
+            'base': base,
+            'selected': selected,
+            'segments': segments,
+            'options': options,
+            'metadata': metadata,
+            'format': fmt,
+            'target': target,
+        }
+        expired = [key for key, value in state.export_selections.items()
+                   if time.monotonic() - value['created_at'] > 600]
+        for key in expired:
+            del state.export_selections[key]
+    return {'token': token, 'path': str(target), 'format': fmt}
+
+
+@app.post('/api/render/{basename}/save-selected')
+def api_render_save_selected(basename: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """Write the single export copy chosen by ``api_render_save_as``."""
+    token = body.get('token')
+    if not isinstance(token, str):
+        raise HTTPException(400, 'Choose an export location first')
+    with state.lock:
+        selection = state.export_selections.pop(token, None)
+    if not selection or selection['base'] != basename:
+        raise HTTPException(409, 'Choose the export location again before saving')
+    target = selection['target']
+    _validate_export_targets(selection['dirs'], selection['base'], [target])
+    formatter = TXTFormatter() if selection['format'] == 'txt' else RTFFormatter()
+    content = formatter.render(selection['segments'],
+                               config=_render_config(selection['options'].linebreak_threshold,
+                                                     selection['options'].preamble),
+                               transcript_id=selection['selected'].get('timestamp'),
+                               speaker_stats=selection['metadata'].get('speaker_stats'),
+                               stats=selection['options'].stats)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix='.swhisper-export-', dir=target.parent)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                handle.write(content)
+            os.replace(temporary, target)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+    except OSError as exc:
+        raise HTTPException(500, f"Could not export transcript: {exc}") from None
+    return {'written': [str(target)]}
 
 
 @app.post('/api/render/{basename}/export-preview')

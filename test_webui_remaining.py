@@ -1,6 +1,7 @@
 """Global settings, export, and audio tests using temporary files only."""
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -109,6 +110,68 @@ class RemainingTests(unittest.TestCase):
         response=self.client.post('/api/render/a/save',json={**body,'token':plan['token'],'overwrite':True})
         self.assertEqual(response.status_code,409)
         self.assertEqual(target.read_text(),'Someone else wrote this')
+
+    def test_native_save_as_writes_the_selected_path(self):
+        original = self.transcript()
+        target = self.root / 'chosen folder' / 'review.rtf'
+        scripts = []
+
+        def fake_run(argv, **kwargs):
+            scripts.append(argv[-1])
+            return subprocess.CompletedProcess(argv, 0, stdout=str(target) + '\n', stderr='')
+
+        with patch.object(webui.subprocess, 'run', fake_run):
+            choice = self.client.post('/api/render/a/save-as', json={'format': 'rtf', 'options': {'stats': False}})
+        self.assertEqual(choice.status_code, 200, choice.text)
+        self.assertIn('choose file name', scripts[0])
+        self.assertIn('default name', scripts[0])
+        self.assertIn('.rtf', scripts[0])
+        self.assertEqual(choice.json()['path'], str(target))
+
+        saved = self.client.post('/api/render/a/save-selected', json={'token': choice.json()['token']})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json()['written'], [str(target)])
+        self.assertTrue(target.exists())
+        self.assertIn('Hello', target.read_text())
+        self.assertEqual(original.read_text(), 'Original transcript')
+
+    def test_native_save_as_cancel_returns_without_an_error_or_export(self):
+        self.transcript()
+
+        def fake_run(argv, **kwargs):
+            return subprocess.CompletedProcess(
+                argv, 1, stdout='', stderr='execution error: User canceled. (-128)')
+
+        with patch.object(webui.subprocess, 'run', fake_run):
+            response = self.client.post('/api/render/a/save-as', json={'format': 'txt', 'options': {'stats': False}})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {'canceled': True})
+        self.assertEqual(webui.state.export_selections, {})
+
+    def test_native_save_as_keeps_the_selected_format_extension(self):
+        self.transcript()
+
+        def fake_run(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 0, stdout=str(self.root / 'review.rtf') + '\n', stderr='')
+
+        with patch.object(webui.subprocess, 'run', fake_run):
+            response = self.client.post('/api/render/a/save-as', json={'format': 'txt', 'options': {'stats': False}})
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertIn('Choose a .txt filename', response.json()['detail'])
+
+    def test_native_save_as_reports_write_errors_clearly(self):
+        self.transcript()
+        target = self.root / 'review.txt'
+
+        def fake_run(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 0, stdout=str(target) + '\n', stderr='')
+
+        with patch.object(webui.subprocess, 'run', fake_run):
+            choice = self.client.post('/api/render/a/save-as', json={'format': 'txt', 'options': {'stats': False}})
+        with patch.object(webui.tempfile, 'mkstemp', side_effect=OSError('disk full')):
+            response = self.client.post('/api/render/a/save-selected', json={'token': choice.json()['token']})
+        self.assertEqual(response.status_code, 500, response.text)
+        self.assertIn('Could not export transcript: disk full', response.json()['detail'])
 
     def test_view_options_do_not_modify_original(self):
         original=self.transcript();response=self.client.post('/api/render/a',json={'options':{'stats':False,'preamble':False}})

@@ -140,13 +140,11 @@
 <dialog id="exportDialog" aria-labelledby="exportTitle">
   <h2 id="exportTitle">Export transcript view</h2>
   <p class="settingsNote">Creates a copy. Pipeline transcript versions are preserved.</p>
-  <label for="exportName">Filename without extension</label><input id="exportName" type="text">
-  <label for="exportDestination">Folder inside the audio folder</label><input id="exportDestination" type="text" value="exports">
-  <label><input id="exportTXT" type="checkbox" checked> TXT</label>
-  <label><input id="exportRTF" type="checkbox" checked> RTF</label>
+  <label for="exportFormat">Format</label>
+  <select id="exportFormat"><option value="txt">Plain text (TXT)</option><option value="rtf">Rich Text (RTF)</option></select>
+  <p class="settingsNote">The system Save As dialog lets you name the file and choose or create a destination folder.</p>
   <p id="exportPaths" role="status"></p>
-  <label id="overwriteLabel" hidden><input id="exportOverwrite" type="checkbox"> Replace the existing export files listed above</label>
-  <div class="dialogActions"><button id="exportCancel" autofocus>Cancel</button><button id="exportPreview">Check destination</button><button id="exportConfirm" class="primary" disabled>Export copy</button></div>
+  <div class="dialogActions"><button id="exportCancel" autofocus>Cancel</button><button id="exportConfirm" class="primary">Export copy…</button></div>
 </dialog>
 
 <dialog id="speakerDialog" aria-labelledby="speakerTitle">

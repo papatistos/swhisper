@@ -15,7 +15,7 @@ let changingDir = false;
 let editorBase = null, savedForm = null, saving = false, editorLoading = false;
 let editorSeq = 0, folderSeq = 0, filesSeq = 0, transcriptSeq = 0, logSeq = 0, logListSeq = 0;
 let connected = false, lastStatus = null, runBusy = false, pollBusy = false, activeRunId = null, statusSeq = 0;
-let editorScope = "file", editorMeta = null, globalRevision = null, timelineSeq = 0, exportContext = null, exportPlan = null, exporting = false;
+let editorScope = "file", editorMeta = null, globalRevision = null, timelineSeq = 0, exportContext = null, exporting = false;
 let pendingPreview = null, dirtyChoice = null, initialized = false, pollTimer = null;
 const escapeHTML = value => String(value).replace(/[&<>"']/g, c => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"}[c]));
 
@@ -738,33 +738,23 @@ async function saveSpeakerNames() {
 async function saveRenderedView() {
   if (!renderAvailable || !currentBase) return;
   exportContext = {base:currentBase, version:$("versionSel").value, options:renderOptions()};
-  const filename = exportContext.version.split("/").pop().replace(/\.txt$/, "");
-  $("exportName").value = filename + "_view";
-  $("exportDestination").value = "exports"; $("exportOverwrite").checked = false;
-  invalidateExport(); $("exportDialog").showModal(); await previewExport();
-}
-function invalidateExport() {exportPlan=null;$("exportConfirm").disabled=true;$("exportPaths").textContent="Check the destination before exporting.";$("overwriteLabel").hidden=true;$("exportOverwrite").checked=false;}
-function exportBody() {return {...exportContext,name:$("exportName").value,destination:$("exportDestination").value,formats:[...($("exportTXT").checked?["txt"]:[]),...($("exportRTF").checked?["rtf"]:[])]};}
-async function previewExport() {
-  if (!exportContext || exporting) return;
-  const body=exportBody(), identity=JSON.stringify(body);
-  try {
-    if (!body.formats.length) throw new Error("Choose TXT and/or RTF.");
-    const {data}=await api(`/api/render/${encodeURIComponent(body.base)}/export-preview`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-    if (!exportContext || identity!==JSON.stringify(exportBody())) return;
-    exportPlan=data;$("exportPaths").textContent=data.paths.join("\n") + (data.existing.length ? "\nExisting files: explicitly choose replacement below." : "\nNew files will be created.");
-    $("overwriteLabel").hidden=!data.existing.length;$("exportConfirm").disabled=!!data.existing.length && !$("exportOverwrite").checked;
-  } catch(e) {if(exportContext && identity===JSON.stringify(exportBody())){exportPlan=null;$("exportConfirm").disabled=true;$("exportPaths").textContent=e.message;}}
+  $("exportFormat").value = "txt";
+  $("exportPaths").textContent = "Choose a format, then select Export copy to choose the filename and location.";
+  $("exportDialog").showModal();
 }
 async function confirmExport() {
-  if (!exportContext || !exportPlan || exporting) return;
+  if (!exportContext || exporting) return;
   exporting=true;$("exportConfirm").disabled=true;
-  for (const id of ["exportName","exportDestination","exportTXT","exportRTF","exportOverwrite","exportCancel","exportPreview"]) $(id).disabled=true;
+  for (const id of ["exportFormat","exportCancel"]) $(id).disabled=true;
   try {
-    const {data}=await api(`/api/render/${encodeURIComponent(exportContext.base)}/save`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...exportBody(),token:exportPlan.token,overwrite:$("exportOverwrite").checked})});
-    $("exportPaths").textContent="Exported:\n"+data.written.join("\n");exportPlan=null;
-  } catch(e) {$("exportPaths").textContent=e.message;exportPlan=null;}
-  finally {exporting=false;for (const id of ["exportName","exportDestination","exportTXT","exportRTF","exportOverwrite","exportCancel","exportPreview"]) $(id).disabled=false;}
+    const body = {...exportContext, format: $("exportFormat").value};
+    const {data: choice}=await api(`/api/render/${encodeURIComponent(exportContext.base)}/save-as`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    if (choice.canceled) { $("exportDialog").close(); exportContext=null; return; }
+    const {data}=await api(`/api/render/${encodeURIComponent(exportContext.base)}/save-selected`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token:choice.token})});
+    $("exportPaths").textContent="Exported:\n"+data.written.join("\n");
+    $("exportDialog").close(); exportContext=null;
+  } catch(e) {$("exportPaths").textContent=e.message;}
+  finally {exporting=false;$("exportConfirm").disabled=false;for (const id of ["exportFormat","exportCancel"]) $(id).disabled=false;}
 }
 function resetAudioReview() {
   timelineSeq++; $("audioPlayer").pause(); $("audioPlayer").removeAttribute("src");$("audioPlayer").load();
@@ -1353,11 +1343,9 @@ $("consoleResize").addEventListener("keydown", e => {
 $("globalSettingsBtn").onclick=handle(openGlobalSettings);
 $("pipelineSel").addEventListener("change", filterSettings);
 for(const id of ["fileSearch","fileFilter","fileSort"]) $(id).addEventListener(id==="fileSearch"?"input":"change",renderFiles);
-for(const id of ["exportName","exportDestination","exportTXT","exportRTF"]) $(id).addEventListener("input",invalidateExport);
-$("exportPreview").onclick=handle(previewExport);$("exportConfirm").onclick=handle(confirmExport);
+$("exportConfirm").onclick=handle(confirmExport);
 $("exportCancel").onclick=()=>{$("exportDialog").close();exportContext=null;};
 $("exportDialog").addEventListener("cancel",e=>{if(exporting)e.preventDefault();else exportContext=null;});
-$("exportOverwrite").onchange=()=>{$("exportConfirm").disabled=!exportPlan || (exportPlan.existing.length>0&&!$("exportOverwrite").checked);};
 $("reviewAudio").onchange=()=>{$("timeline").hidden=!$("reviewAudio").checked;$("transcriptText").style.display=$("reviewAudio").checked?"none":"";};
 $("audioPlayer").addEventListener("timeupdate",()=>{
   const time=$("audioPlayer").currentTime;
