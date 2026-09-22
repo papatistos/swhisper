@@ -252,6 +252,35 @@ class RemainingTests(unittest.TestCase):
         self.assertEqual(audio.content,b'mock')
         self.assertEqual(self.client.get('/api/audio/missing').status_code,404)
 
+    def test_page_requests_assets_by_content_hash(self):
+        # A browser that cached /webui.js before no-store was sent keeps using
+        # that copy, which pairs the current page with a stale script. The page
+        # therefore names each asset by its content, so an edited file is a URL
+        # no cache has an entry for.
+        page=self.client.get('/')
+        self.assertEqual(page.status_code,200)
+        self.assertEqual(page.headers.get('cache-control'),'no-store')
+        for name in ('webui.js','webui.css'):
+            version=webui.asset_version(name)
+            self.assertIn(f'"/{name}?v={version}"',page.text,name)
+            self.assertNotIn(f'"/{name}"',page.text,f'{name} must not be referenced unversioned')
+            # The version has to follow the file, or the stale copy survives.
+            self.assertEqual(len(version),12)
+        # The route still serves the file when the query is present.
+        served=self.client.get(f'/webui.js?v={webui.asset_version("webui.js")}')
+        self.assertEqual(served.status_code,200)
+        self.assertIn('text/javascript',served.headers['content-type'])
+
+    def test_asset_version_follows_file_contents(self):
+        original=(webui.PROJECT_ROOT/'webui.js').read_bytes()
+        before=webui.asset_version('webui.js')
+        try:
+            (webui.PROJECT_ROOT/'webui.js').write_bytes(original+b'\n// edited\n')
+            self.assertNotEqual(webui.asset_version('webui.js'),before)
+        finally:
+            (webui.PROJECT_ROOT/'webui.js').write_bytes(original)
+        self.assertEqual(webui.asset_version('webui.js'),before)
+
     def test_assets_are_never_cached(self):
         # The server reads these from the working tree on every request, so a
         # browser that reuses a cached copy would keep running an edited file's

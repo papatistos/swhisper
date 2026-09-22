@@ -709,11 +709,6 @@ def _global_defaults() -> Dict[str, Any]:
 # API endpoints
 # ---------------------------------------------------------------------------
 
-@app.get("/", response_class=HTMLResponse)
-def index() -> str:
-    return (PROJECT_ROOT / "webui.html").read_text(encoding="utf-8")
-
-
 # The stylesheet and script are served as separate files so each can be linted
 # on its own. They are never cached: the server reads them from the working
 # tree on every request, so a cached copy would leave an edited file invisible
@@ -721,6 +716,29 @@ def index() -> str:
 # a Last-Modified but no directive, which lets a browser reuse its copy without
 # asking, so the directive is given here.
 NO_STORE = {"Cache-Control": "no-store"}
+
+ASSETS = ("webui.css", "webui.js")
+
+
+def asset_version(name: str) -> str:
+    """Name an asset by its content, so an edited file is a fresh URL."""
+    return hashlib.sha256((PROJECT_ROOT / name).read_bytes()).hexdigest()[:12]
+
+
+@app.get("/", response_class=HTMLResponse)
+def index() -> HTMLResponse:
+    html = (PROJECT_ROOT / "webui.html").read_text(encoding="utf-8")
+    # Cache-Control governs the response a browser is given, not the entry it
+    # already holds. A browser that stored /webui.js before this server sent
+    # no-store keeps serving that copy, and heuristic freshness can keep it
+    # alive for hours, which pairs the current page with a stale script: the
+    # two disagree about which elements exist, and the script dies on the
+    # first one it cannot find. Asking for the file under a URL that carries
+    # its content hash sidesteps the stored entry entirely, because an edited
+    # file is a URL the browser has never seen.
+    for name in ASSETS:
+        html = html.replace(f'"/{name}"', f'"/{name}?v={asset_version(name)}"')
+    return HTMLResponse(html, headers=NO_STORE)
 
 
 @app.get("/webui.css")
