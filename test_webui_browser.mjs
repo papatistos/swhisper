@@ -331,7 +331,7 @@ try {
   await check('Global draft navigation uses edit guard',async()=>{
     await click('globalSettingsBtn');await wait('editorScope==="global" && !editorLoading');
     await evaluate('$("setting-SWHISPER_MIN_SPEAKERS").value="5";$("setting-SWHISPER_MIN_SPEAKERS").dispatchEvent(new Event("input"))');
-    await select('b');await wait('$("dirtyDialog").open');await click('dirtyCancel');assert.equal(await evaluate('editorScope'),'inherited global value');
+    await select('b');await wait('$("dirtyDialog").open');await click('dirtyCancel');assert.equal(await evaluate('editorScope'),'global','cancelling the dirty dialog keeps the global editor open');
     await select('b');await wait('$("dirtyDialog").open');await click('dirtyDiscard');await wait('editorBase==="b"');
   });
   await check('Pipeline-specific fields and inline number validation',async()=>{
