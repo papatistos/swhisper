@@ -97,6 +97,21 @@ try {
   await cdp('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
   await cdp('Page.navigate',{url:`http://127.0.0.1:${server.address().port}/`});
   await wait('typeof initialized !== "undefined" && initialized && connected');
+  await check('Directory controls share aligned edges at different font sizes',async()=>{
+    for (const fontSize of [16,22,28]) {
+      await evaluate(`document.documentElement.style.fontSize='${fontSize}px'`);
+      const bounds = await evaluate(`['dirInput','dirHistory'].map(id=>{const r=$(id).getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,right:r.right}})`);
+      const typography = await evaluate(`['dirInput','dirHistory'].map(id=>{const s=getComputedStyle($(id));return {fontSize:s.fontSize,lineHeight:s.lineHeight,appearance:s.appearance}})`);
+      assert.equal(typography[0].fontSize,typography[1].fontSize);
+      assert.equal(typography[0].lineHeight,typography[1].lineHeight);
+      assert.equal(typography[1].appearance,'none');
+      assert.equal(bounds[0].top,bounds[1].top);
+      assert.equal(bounds[0].bottom,bounds[1].bottom);
+      assert.equal(bounds[0].right-1,bounds[1].left);
+    }
+    await evaluate("document.documentElement.style.fontSize='22px'");
+  });
+  if (process.env.DIRECTORY_ALIGNMENT_ONLY) { console.log('PASS focused directory alignment'); process.exit(0); }
   await check('Directory history uses a native selector with saved folders',async()=>{
     assert.deepEqual(await evaluate('[...$("dirHistory").options].map(option=>option.value)'),['','/mock/audio','/mock/other']);
     await evaluate('$("dirHistory").value="/mock/other";$("dirHistory").dispatchEvent(new Event("change"))');
