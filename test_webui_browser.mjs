@@ -100,27 +100,70 @@ try {
   await check('Directory controls share aligned edges at different font sizes',async()=>{
     for (const fontSize of [16,22,28]) {
       await evaluate(`document.documentElement.style.fontSize='${fontSize}px'`);
-      const bounds = await evaluate(`['dirInput','dirHistory'].map(id=>{const r=$(id).getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,right:r.right}})`);
-      const typography = await evaluate(`['dirInput','dirHistory'].map(id=>{const s=getComputedStyle($(id));return {fontSize:s.fontSize,lineHeight:s.lineHeight,appearance:s.appearance}})`);
+      const bounds = await evaluate(`['dirInput','dirMenuBtn'].map(id=>{const r=$(id).getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,right:r.right}})`);
+      const typography = await evaluate(`['dirInput','dirMenuBtn'].map(id=>{const s=getComputedStyle($(id));return {fontSize:s.fontSize,lineHeight:s.lineHeight}})`);
       assert.equal(typography[0].fontSize,typography[1].fontSize);
       assert.equal(typography[0].lineHeight,typography[1].lineHeight);
-      assert.equal(typography[1].appearance,'none');
       assert.equal(bounds[0].top,bounds[1].top);
       assert.equal(bounds[0].bottom,bounds[1].bottom);
-      assert.equal(bounds[0].left,bounds[1].left,'Native popup anchor starts at the path field');
-      assert.ok(bounds[1].right > bounds[0].right,'Arrow remains exposed beside the editable field');
-      assert.deepEqual(await evaluate(`(()=>{const input=$('dirInput').getBoundingClientRect(), history=$('dirHistory').getBoundingClientRect(); return [document.elementFromPoint(input.left+10,input.top+10).id,document.elementFromPoint(history.right-10,history.top+10).id]})()`),['dirInput','dirHistory']);
+      assert.equal(bounds[0].right-1,bounds[1].left,'Arrow sits on the right edge of the editable field');
+      assert.deepEqual(await evaluate(`(()=>{const input=$('dirInput').getBoundingClientRect(), arrow=$('dirMenuBtn').getBoundingClientRect(); return [document.elementFromPoint(input.left+10,input.top+10).id,document.elementFromPoint((arrow.left+arrow.right)/2,(arrow.top+arrow.bottom)/2).id]})()`),['dirInput','dirMenuBtn']);
+    }
+    await evaluate("document.documentElement.style.fontSize='22px'");
+  });
+  // The opened menu is what users see misplaced, so it is measured while open:
+  // a native select would hand that menu to the platform and leave nothing here
+  // to measure.
+  await check('Opened directory menu is anchored to the path field at every font size',async()=>{
+    for (const fontSize of [16,22,28]) {
+      await evaluate(`document.documentElement.style.fontSize='${fontSize}px'`);
+      await click('dirMenuBtn');
+      await wait('$("dirMenu").matches(":popover-open")');
+      assert.equal(await evaluate('$("dirMenuBtn").getAttribute("aria-expanded")'),'true');
+      const geometry = await evaluate(`(()=>{const input=$('dirInput').getBoundingClientRect(), arrow=$('dirMenuBtn').getBoundingClientRect(), menu=$('dirMenu').getBoundingClientRect(), item=$('dirMenu').querySelector('button').getBoundingClientRect(), hit=document.elementFromPoint((item.left+item.right)/2,(item.top+item.bottom)/2); return {left:menu.left-input.left,top:menu.top-input.bottom,right:menu.right-arrow.right,width:menu.width,covered:$('dirMenu').contains(hit),inViewport:menu.bottom<=innerHeight}})()`);
+      assert.equal(geometry.left,0,'Menu starts at the left edge of the path field');
+      assert.equal(geometry.top,4,'Menu drops directly below the path field');
+      assert.equal(geometry.right,0,'Menu ends at the right edge of the arrow');
+      assert.ok(geometry.width>0,'Menu has a measurable box of its own');
+      assert.equal(geometry.covered,true,'Nothing paints over the opened menu');
+      assert.equal(geometry.inViewport,true,'Menu fits below the field');
+      await key('Escape','Escape');
+      await wait('!$("dirMenu").matches(":popover-open")');
+      assert.equal(await evaluate('$("dirMenuBtn").getAttribute("aria-expanded")'),'false');
     }
     await evaluate("document.documentElement.style.fontSize='22px'");
   });
   if (process.env.DIRECTORY_ALIGNMENT_ONLY) { console.log('PASS focused directory alignment'); process.exit(0); }
-  await check('Directory history uses a native selector with saved folders',async()=>{
-    assert.deepEqual(await evaluate('[...$("dirHistory").options].map(option=>option.value)'),['','/mock/audio','/mock/other']);
-    await evaluate('$("dirHistory").value="/mock/other";$("dirHistory").dispatchEvent(new Event("change"))');
+  await check('Directory menu lists saved folders and keeps keyboard access',async()=>{
+    assert.deepEqual(await evaluate('[...$("dirMenu").querySelectorAll("button")].map(item=>item.title)'),['/mock/audio','/mock/other']);
+    assert.deepEqual(await evaluate('[...$("dirMenu").querySelectorAll(".dirMenuName")].map(name=>name.textContent)'),['audio','other']);
+    assert.equal(await evaluate('$("dirMenu").querySelector("[aria-current]").title'),'/mock/audio');
+    await evaluate('$("dirInput").focus();$("dirInput").dispatchEvent(new KeyboardEvent("keydown",{key:"ArrowDown",bubbles:true,cancelable:true}))');
+    await wait('$("dirMenu").matches(":popover-open")');
+    assert.equal(await evaluate('document.activeElement.title'),'/mock/audio');
+    await key('ArrowDown','ArrowDown');
+    assert.equal(await evaluate('document.activeElement.title'),'/mock/other');
+    await key('Escape','Escape');
+    await wait('!$("dirMenu").matches(":popover-open")');
+    assert.equal(await evaluate('document.activeElement.id'),'dirInput','Escape returns focus to the field the menu was opened from');
+    await evaluate('$("dirMenuBtn").focus();$("dirMenuBtn").click()');
+    await wait('$("dirMenu").matches(":popover-open")');
+    await key('End','End');
+    assert.equal(await evaluate('document.activeElement.title'),'/mock/other');
+    await key('Home','Home');
+    assert.equal(await evaluate('document.activeElement.title'),'/mock/audio');
+    await key('Escape','Escape');
+    await wait('!$("dirMenu").matches(":popover-open")');
+    assert.equal(await evaluate('document.activeElement.id'),'dirMenuBtn','Escape returns focus to the arrow');
+  });
+  await check('Directory menu selection switches folders and manual editing still works',async()=>{
+    await click('dirMenuBtn');
+    await wait('$("dirMenu").matches(":popover-open")');
+    await evaluate('[...$("dirMenu").querySelectorAll("button")].find(item=>item.title==="/mock/other").click()');
     await wait('META.audio_dir==="/mock/other"');
-    assert.equal(await evaluate('$("dirHistory").value'),'');
-    audioDir='/mock/audio';
-    await evaluate('loadMeta()');
+    assert.equal(await evaluate('$("dirMenu").matches(":popover-open")'),false);
+    assert.equal(await evaluate('$("dirInput").value'),'/mock/other');
+    await evaluate('$("dirInput").value="/mock/audio";$("dirInput").dispatchEvent(new Event("input"))');
     await wait('META.audio_dir==="/mock/audio"');
   });
   await check('Save disabled, enabled by edit, disabled on revert',async()=>{await select('a');await wait('editorBase==="a"');assert.equal(await evaluate('$("saveBtn").disabled'),true);await input('changed');assert.equal(await evaluate('$("saveBtn").disabled'),false);await input('original');assert.equal(await evaluate('$("saveBtn").disabled'),true);});

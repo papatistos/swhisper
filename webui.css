@@ -29,16 +29,27 @@ header h1 { font-size: 1.1rem; margin: 0; font-weight: 600; }
 #dirBox { display: flex; gap: 6px; align-items: center; flex: 1; min-width: 260px; flex-wrap: wrap; }
 #dirCombo { display: flex; position: relative; flex: 1 1 18rem; min-width: 0; }
 #dirInput { flex: 1; min-width: 0; max-width: 100%; font-size: 0.8rem; color: var(--text);
-            position: relative; z-index: 1; margin-right: 2.4em;
             border-radius: 6px 0 0 6px; }
-#dirInput, #dirHistory { height: calc(1.2em + 14px); font-size: 0.8rem; line-height: 1.2;
-                         appearance: none; -webkit-appearance: none; }
-/* Give the native popup the whole field as its anchor. The input sits above
-   the select, leaving only the right-hand arrow exposed to pointer clicks. */
-#dirHistory { position: absolute; inset: 0; margin: 0; width: 100%;
-              border-radius: 6px; padding: 6px .8em 6px 4px;
-              text-align: right; cursor: pointer; }
-#dirHistory option { text-align: left; }
+#dirInput, #dirMenuBtn { height: calc(1.2em + 14px); font-size: 0.8rem; line-height: 1.2; }
+#dirMenuBtn { margin-left: -1px; border-radius: 0 6px 6px 0; padding: 6px 9px; flex-shrink: 0; }
+/* A native select would hand its opened menu to the platform, which places and
+   sizes it on its own terms. This popup is page content in the top layer, so
+   positionDirMenu() can pin it to the path field's own rectangle. */
+#dirMenu { position: fixed; inset: auto; margin: 0; padding: 4px; overflow-y: auto;
+           background: var(--panel2); border: 1px solid var(--border); border-radius: 6px;
+           box-shadow: 0 12px 30px var(--shadow); }
+#dirMenu button { display: block; width: 100%; text-align: left; border: none;
+                  border-radius: 4px; padding: 5px 8px; }
+#dirMenu button:hover { background: var(--panel); }
+/* Saved folders often differ only in their last segment, so the folder name
+   leads and the full path follows as muted context. */
+#dirMenu .dirMenuName, #dirMenu .dirMenuPath { display: block; overflow: hidden; text-overflow: ellipsis; }
+#dirMenu .dirMenuName { font-size: .8rem; }
+/* Trim long paths at the front: the tail is what tells two saved folders apart. */
+#dirMenu .dirMenuPath { font-size: .7rem; color: var(--muted);
+                        direction: rtl; text-align: left; }
+#dirMenu [aria-current="true"] .dirMenuName { color: var(--accent); font-weight: 600; }
+#dirMenu .dirMenuEmpty { margin: 0; padding: 6px 8px; font-size: .8rem; color: var(--muted); }
 select, button, input, textarea {
   background: var(--panel2); color: var(--text); border: 1px solid var(--border);
   border-radius: 6px; padding: 6px 10px; font-family: inherit; font-size: 0.9rem; }

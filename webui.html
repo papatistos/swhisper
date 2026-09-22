@@ -14,7 +14,8 @@
   <div id="dirBox">
     <div id="dirCombo">
       <input id="dirInput" type="text" aria-label="Audio directory" placeholder="Enter an audio directory…" title="Audio directory — choose a saved path from the dropdown, or enter a new path and press Change (or Enter)">
-      <select id="dirHistory" aria-label="Previously used audio directories" title="Show previously used audio directories"><option value="">▾</option></select>
+      <button id="dirMenuBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="dirMenu" title="Show previously used audio directories">▾</button>
+      <div id="dirMenu" role="menu" popover aria-label="Previously used audio directories" hidden></div>
     </div>
     <button id="dirBtn" title="Switch to this audio directory">Change</button>
     <button id="dirBrowse" title="Choose a folder in the macOS dialog (on the machine running this server)">Browse…</button>

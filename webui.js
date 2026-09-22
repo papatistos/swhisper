@@ -81,9 +81,10 @@ function updateRunControls() {
   const scribeGate = $("pipelineSel").value === "scribe" && !scribeSelectionReady();
   $("startBtn").disabled = !connected || !initialized || running || runBusy || changingDir || saving || editorLoading || scribeGate;
   $("stopBtn").disabled = !connected || !running || runBusy;
-  for (const id of ["pipelineSel", "dirBtn", "dirInput", "dirHistory", "dirBrowse"]) {
+  for (const id of ["pipelineSel", "dirBtn", "dirInput", "dirMenuBtn", "dirBrowse"]) {
     $(id).disabled = !connected || running || runBusy || changingDir;
   }
+  if ($("dirMenuBtn").disabled) closeDirMenu();
   if (editorScope === "global") $("saveBtn").disabled = saving || editorLoading || !formDirty() || running;
 }
 function reportError(error) { setMsg(error.message, "err"); }
@@ -122,7 +123,7 @@ async function loadMeta() {
   const paths = [...(META.audio_paths || [])];
   if (META.audio_dir && !paths.includes(META.audio_dir)) paths.push(META.audio_dir);
   savedAudioPaths = new Set(paths);
-  renderDirHistory(paths);
+  renderDirMenu(paths);
   const sel = $("pipelineSel");
   const previous = sel.value;
   sel.innerHTML = "";
@@ -195,24 +196,83 @@ function changeDirIfSavedPath() {
   if (path && savedAudioPaths.has(path) && (!META || path !== META.audio_dir)) changeDir();
 }
 
-function renderDirHistory(paths) {
-  const history = $("dirHistory");
-  history.innerHTML = '<option value="">▾</option>';
+function renderDirMenu(paths) {
+  const menu = $("dirMenu");
+  menu.innerHTML = "";
   for (const path of paths) {
-    const option = document.createElement("option");
-    option.value = path;
-    option.textContent = path;
-    history.appendChild(option);
+    const option = document.createElement("button");
+    option.type = "button";
+    option.setAttribute("role", "menuitem");
+    option.title = path;
+    if (path === META.audio_dir) option.setAttribute("aria-current", "true");
+    const name = document.createElement("span");
+    name.className = "dirMenuName";
+    name.textContent = path.replace(/\/+$/, "").split("/").pop() || path;
+    const full = document.createElement("span");
+    full.className = "dirMenuPath";
+    // The path keeps its own direction inside a right-to-left line box, so the
+    // leading slash stays put while the line is trimmed at the front.
+    full.appendChild(document.createElement("bdi")).textContent = path;
+    option.append(name, full);
+    option.onclick = handle(() => {
+      closeDirMenu();
+      $("dirInput").value = path;
+      return changeDir();
+    });
+    menu.appendChild(option);
   }
+  if (!paths.length) {
+    const empty = document.createElement("p");
+    empty.className = "dirMenuEmpty";
+    empty.textContent = "No saved folders yet.";
+    menu.appendChild(empty);
+  }
+  if (dirMenuOpen()) positionDirMenu();
 }
 
-async function chooseDirHistory() {
-  const history = $("dirHistory");
-  const path = history.value;
-  history.value = "";
-  if (!path) return;
-  $("dirInput").value = path;
-  await changeDir();
+function dirMenuOpen() {
+  return $("dirMenu").matches(":popover-open");
+}
+
+// The popup lives in the top layer, so it is positioned against the viewport
+// rather than against #dirCombo: left edge and width come from the path field
+// itself, which is what the menu has to line up with.
+function positionDirMenu() {
+  const menu = $("dirMenu");
+  const input = $("dirInput").getBoundingClientRect();
+  const arrow = $("dirMenuBtn").getBoundingClientRect();
+  menu.style.left = `${input.left}px`;
+  menu.style.top = `${input.bottom + 4}px`;
+  menu.style.width = `${arrow.right - input.left}px`;
+  menu.style.maxHeight = `${Math.max(120, window.innerHeight - input.bottom - 16)}px`;
+}
+
+function openDirMenu() {
+  const menu = $("dirMenu");
+  if (dirMenuOpen() || $("dirMenuBtn").disabled) return;
+  menu.hidden = false;          // [hidden] would outrank the top-layer display.
+  positionDirMenu();
+  menu.showPopover();
+  positionDirMenu();            // Scrollbars may appear once the menu is laid out.
+}
+
+function closeDirMenu() {
+  if (!dirMenuOpen()) return;
+  const inside = $("dirMenu").contains(document.activeElement);
+  $("dirMenu").hidePopover();
+  if (inside) $("dirMenuBtn").focus();
+}
+
+function toggleDirMenu() {
+  if (dirMenuOpen()) return closeDirMenu();
+  openDirMenu();
+  focusDirMenuItem(0);   // The arrow opens a menu, so the menu takes the focus.
+}
+
+function focusDirMenuItem(index) {
+  const items = [...$("dirMenu").querySelectorAll("button")];
+  if (!items.length) return;
+  items[(index + items.length) % items.length].focus();
 }
 
 async function loadFiles() {
@@ -1271,10 +1331,40 @@ $("clearConsoleBtn").onclick = () => { $("consoleLog").textContent = ""; };
 $("consoleToggle").onclick = () => setConsoleCollapsed(!$("consolePanel").classList.contains("collapsed"));
 $("dirBtn").onclick = handle(changeDir);
 $("dirBrowse").onclick = handle(browseAudioDir);
-$("dirHistory").addEventListener("change", handle(chooseDirHistory));
+$("dirMenuBtn").onclick = toggleDirMenu;
+// beforetoggle runs synchronously, so the arrow never reports a stale state —
+// light dismiss and Escape close the popover without going through closeDirMenu.
+$("dirMenu").addEventListener("beforetoggle", event => {
+  const open = event.newState === "open";
+  $("dirMenuBtn").setAttribute("aria-expanded", String(open));
+  if (open) {
+    addEventListener("resize", positionDirMenu);
+    addEventListener("scroll", positionDirMenu, true);
+  } else {
+    removeEventListener("resize", positionDirMenu);
+    removeEventListener("scroll", positionDirMenu, true);
+  }
+});
+$("dirMenu").addEventListener("toggle", event => {
+  if (event.newState === "closed") $("dirMenu").hidden = true;
+});
+$("dirMenu").addEventListener("keydown", e => {
+  const items = [...$("dirMenu").querySelectorAll("button")];
+  let index = items.indexOf(document.activeElement);
+  if (e.key === "ArrowDown") index++;
+  else if (e.key === "ArrowUp") index--;
+  else if (e.key === "Home") index = 0;
+  else if (e.key === "End") index = items.length - 1;
+  else return;
+  e.preventDefault(); focusDirMenuItem(index);
+});
 $("dirInput").addEventListener("input", changeDirIfSavedPath);
 $("dirInput").addEventListener("change", changeDirIfSavedPath);
-$("dirInput").addEventListener("keydown", e => { if (e.key === "Enter") changeDir(); });
+$("dirInput").addEventListener("keydown", e => {
+  if (e.key === "Enter") return changeDir();
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  e.preventDefault(); openDirMenu(); focusDirMenuItem(e.key === "ArrowDown" ? 0 : -1);
+});
 $("folderNoticeReload").onclick = handle(async () => {
   if (!lastStatus?.folder) return;   // changeDir runs the unsaved-edit guard
   $("dirInput").value = lastStatus.folder;
