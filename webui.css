@@ -29,11 +29,16 @@ header h1 { font-size: 1.1rem; margin: 0; font-weight: 600; }
 #dirBox { display: flex; gap: 6px; align-items: center; flex: 1; min-width: 260px; flex-wrap: wrap; }
 #dirCombo { display: flex; position: relative; flex: 1 1 18rem; min-width: 0; }
 #dirInput { flex: 1; min-width: 0; max-width: 100%; font-size: 0.8rem; color: var(--text);
+            position: relative; z-index: 1; margin-right: 2.4em;
             border-radius: 6px 0 0 6px; }
 #dirInput, #dirHistory { height: calc(1.2em + 14px); font-size: 0.8rem; line-height: 1.2;
                          appearance: none; -webkit-appearance: none; }
-#dirHistory { margin: 0 0 0 -1px; border-radius: 0 6px 6px 0; padding: 6px 4px;
-              width: 2.4em; flex-shrink: 0; text-align: center; cursor: pointer; }
+/* Give the native popup the whole field as its anchor. The input sits above
+   the select, leaving only the right-hand arrow exposed to pointer clicks. */
+#dirHistory { position: absolute; inset: 0; margin: 0; width: 100%;
+              border-radius: 6px; padding: 6px .8em 6px 4px;
+              text-align: right; cursor: pointer; }
+#dirHistory option { text-align: left; }
 select, button, input, textarea {
   background: var(--panel2); color: var(--text); border: 1px solid var(--border);
   border-radius: 6px; padding: 6px 10px; font-family: inherit; font-size: 0.9rem; }

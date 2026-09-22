@@ -107,7 +107,9 @@ try {
       assert.equal(typography[1].appearance,'none');
       assert.equal(bounds[0].top,bounds[1].top);
       assert.equal(bounds[0].bottom,bounds[1].bottom);
-      assert.equal(bounds[0].right-1,bounds[1].left);
+      assert.equal(bounds[0].left,bounds[1].left,'Native popup anchor starts at the path field');
+      assert.ok(bounds[1].right > bounds[0].right,'Arrow remains exposed beside the editable field');
+      assert.deepEqual(await evaluate(`(()=>{const input=$('dirInput').getBoundingClientRect(), history=$('dirHistory').getBoundingClientRect(); return [document.elementFromPoint(input.left+10,input.top+10).id,document.elementFromPoint(history.right-10,history.top+10).id]})()`),['dirInput','dirHistory']);
     }
     await evaluate("document.documentElement.style.fontSize='22px'");
   });
