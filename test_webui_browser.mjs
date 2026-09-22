@@ -89,6 +89,13 @@ try {
   const evaluate=async expression=>{const r=await cdp('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
   const wait=async(expression)=>{for(let i=0;i<400;i++){if(await evaluate(expression))return;await delay(20);}throw Error('Timed out: '+expression);};
   const click=async id=>evaluate(`document.getElementById(${JSON.stringify(id)}).click()`);
+  // el.click() dispatches a bare click event. Popover light dismiss runs on
+  // mousedown, so only a real pointer sequence exercises the arrow's toggle.
+  const mouseClick=async id=>{
+    const at=await evaluate(`(()=>{const r=document.getElementById(${JSON.stringify(id)}).getBoundingClientRect();return{x:(r.left+r.right)/2,y:(r.top+r.bottom)/2}})()`);
+    for(const type of ['mousePressed','mouseReleased'])
+      await cdp('Input.dispatchMouseEvent',{type,x:at.x,y:at.y,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});
+  };
   const select=async base=>evaluate(`document.querySelector('[data-base="${base}"] .fileSelect').click()`);
   const input=async value=>evaluate(`document.getElementById('commentField').value=${JSON.stringify(value)};document.getElementById('commentField').dispatchEvent(new Event('input',{bubbles:true}))`);
   const key=async(key,code)=>{await cdp('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode:({Escape:27,Enter:13,ArrowLeft:37,ArrowRight:39,ArrowUp:38,ArrowDown:40})[key]});await cdp('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:({Escape:27,Enter:13,ArrowLeft:37,ArrowRight:39,ArrowUp:38,ArrowDown:40})[key]});};
@@ -132,6 +139,26 @@ try {
       assert.equal(await evaluate('$("dirMenuBtn").getAttribute("aria-expanded")'),'false');
     }
     await evaluate("document.documentElement.style.fontSize='22px'");
+  });
+  // The arrow is a toggle, and a real pointer is the only way to prove it:
+  // light dismiss closes the popover on mousedown, so a handler that reads the
+  // open state during the click sees a menu the browser has already closed.
+  await check('Arrow closes the menu it opened under a real pointer',async()=>{
+    await mouseClick('dirMenuBtn');
+    await wait('$("dirMenu").matches(":popover-open")');
+    await mouseClick('dirMenuBtn');
+    await wait('!$("dirMenu").matches(":popover-open")');
+    assert.equal(await evaluate('$("dirMenuBtn").getAttribute("aria-expanded")'),'false');
+    await mouseClick('dirMenuBtn');
+    await wait('$("dirMenu").matches(":popover-open")');
+    // Clicking a menu item must survive the same pointer sequence.
+    const item=await evaluate(`(()=>{const b=[...$('dirMenu').querySelectorAll('button')].find(b=>b.title==='/mock/other');const r=b.getBoundingClientRect();return{x:(r.left+r.right)/2,y:(r.top+r.bottom)/2}})()`);
+    for(const type of ['mousePressed','mouseReleased'])
+      await cdp('Input.dispatchMouseEvent',{type,x:item.x,y:item.y,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});
+    await wait('META.audio_dir==="/mock/other"');
+    assert.equal(await evaluate('$("dirMenu").matches(":popover-open")'),false,'Choosing a folder closes the menu');
+    await evaluate('$("dirInput").value="/mock/audio";$("dirInput").dispatchEvent(new Event("input"))');
+    await wait('META.audio_dir==="/mock/audio"');
   });
   if (process.env.DIRECTORY_ALIGNMENT_ONLY) { console.log('PASS focused directory alignment'); process.exit(0); }
   await check('Directory menu lists saved folders and keeps keyboard access',async()=>{

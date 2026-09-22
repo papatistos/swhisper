@@ -248,12 +248,8 @@ function positionDirMenu() {
 }
 
 function openDirMenu() {
-  const menu = $("dirMenu");
   if (dirMenuOpen() || $("dirMenuBtn").disabled) return;
-  menu.hidden = false;          // [hidden] would outrank the top-layer display.
-  positionDirMenu();
-  menu.showPopover();
-  positionDirMenu();            // Scrollbars may appear once the menu is laid out.
+  $("dirMenu").showPopover();   // beforetoggle unhides and places the menu.
 }
 
 function closeDirMenu() {
@@ -261,12 +257,6 @@ function closeDirMenu() {
   const inside = $("dirMenu").contains(document.activeElement);
   $("dirMenu").hidePopover();
   if (inside) $("dirMenuBtn").focus();
-}
-
-function toggleDirMenu() {
-  if (dirMenuOpen()) return closeDirMenu();
-  openDirMenu();
-  focusDirMenuItem(0);   // The arrow opens a menu, so the menu takes the focus.
 }
 
 function focusDirMenuItem(index) {
@@ -1331,13 +1321,24 @@ $("clearConsoleBtn").onclick = () => { $("consoleLog").textContent = ""; };
 $("consoleToggle").onclick = () => setConsoleCollapsed(!$("consolePanel").classList.contains("collapsed"));
 $("dirBtn").onclick = handle(changeDir);
 $("dirBrowse").onclick = handle(browseAudioDir);
-$("dirMenuBtn").onclick = toggleDirMenu;
-// beforetoggle runs synchronously, so the arrow never reports a stale state —
-// light dismiss and Escape close the popover without going through closeDirMenu.
+// The arrow carries popovertarget, so the browser toggles the menu itself. A
+// click handler cannot: light dismiss closes the popover on mousedown, so by
+// the time the click arrives the handler reads a menu that is already closed
+// and reopens the one the user was trying to dismiss. Declaring the arrow as
+// the invoker also exempts it from light dismiss, so the two never race.
+// beforetoggle runs synchronously, before the menu is painted.
 $("dirMenu").addEventListener("beforetoggle", event => {
   const open = event.newState === "open";
   $("dirMenuBtn").setAttribute("aria-expanded", String(open));
   if (open) {
+    $("dirMenu").hidden = false;   // [hidden] would outrank the top-layer display.
+    positionDirMenu();
+    // The arrow opens a menu, so the menu takes the focus. Nothing inside the
+    // popover is focusable yet — it reaches the top layer after this handler
+    // returns — and the toggle event comes too late, in a task of its own, so
+    // a keypress that follows the click can beat it. A microtask lands in
+    // between. Opening from the path field focuses an item at that call site.
+    if (document.activeElement === $("dirMenuBtn")) queueMicrotask(() => focusDirMenuItem(0));
     addEventListener("resize", positionDirMenu);
     addEventListener("scroll", positionDirMenu, true);
   } else {
@@ -1346,7 +1347,8 @@ $("dirMenu").addEventListener("beforetoggle", event => {
   }
 });
 $("dirMenu").addEventListener("toggle", event => {
-  if (event.newState === "closed") $("dirMenu").hidden = true;
+  if (event.newState === "closed") { $("dirMenu").hidden = true; return; }
+  positionDirMenu();             // Scrollbars may appear once the menu is laid out.
 });
 $("dirMenu").addEventListener("keydown", e => {
   const items = [...$("dirMenu").querySelectorAll("button")];
