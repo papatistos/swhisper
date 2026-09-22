@@ -252,5 +252,16 @@ class RemainingTests(unittest.TestCase):
         self.assertEqual(audio.content,b'mock')
         self.assertEqual(self.client.get('/api/audio/missing').status_code,404)
 
+    def test_assets_are_never_cached(self):
+        # The server reads these from the working tree on every request, so a
+        # browser that reuses a cached copy would keep running an edited file's
+        # previous version. An ETag alone does not stop that: without a
+        # directive a browser may reuse its copy without revalidating.
+        for path, media in [('/webui.js','text/javascript'),('/webui.css','text/css')]:
+            response=self.client.get(path)
+            self.assertEqual(response.status_code,200,path)
+            self.assertIn(media,response.headers['content-type'])
+            self.assertEqual(response.headers.get('cache-control'),'no-store',path)
+
 
 if __name__=='__main__':unittest.main()

@@ -714,16 +714,23 @@ def index() -> str:
     return (PROJECT_ROOT / "webui.html").read_text(encoding="utf-8")
 
 
-# The stylesheet and script are served as separate files so the browser can
-# cache them and so each can be linted on its own.
+# The stylesheet and script are served as separate files so each can be linted
+# on its own. They are never cached: the server reads them from the working
+# tree on every request, so a cached copy would leave an edited file invisible
+# until the reader thought to bypass the cache. FileResponse sends an ETag and
+# a Last-Modified but no directive, which lets a browser reuse its copy without
+# asking, so the directive is given here.
+NO_STORE = {"Cache-Control": "no-store"}
+
+
 @app.get("/webui.css")
 def webui_css() -> FileResponse:
-    return FileResponse(PROJECT_ROOT / "webui.css", media_type="text/css")
+    return FileResponse(PROJECT_ROOT / "webui.css", media_type="text/css", headers=NO_STORE)
 
 
 @app.get("/webui.js")
 def webui_js() -> FileResponse:
-    return FileResponse(PROJECT_ROOT / "webui.js", media_type="text/javascript")
+    return FileResponse(PROJECT_ROOT / "webui.js", media_type="text/javascript", headers=NO_STORE)
 
 
 @app.get("/api/meta")
