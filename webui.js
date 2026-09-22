@@ -204,6 +204,14 @@ function renderDirMenu(paths) {
     option.type = "button";
     option.setAttribute("role", "menuitem");
     option.title = path;
+    // The menu takes the focus when it opens, and only the popover's own show
+    // algorithm can place it: beforetoggle is too early (the menu has not
+    // reached the top layer, so nothing in it is focusable yet) and toggle is
+    // too late (it arrives in a task of its own, after any keypress that
+    // follows the click). autofocus is read during the show itself. It cannot
+    // steal focus when this list is rebuilt, because document autofocus only
+    // applies while the page is loading.
+    if (!menu.children.length) option.autofocus = true;
     if (path === META.audio_dir) option.setAttribute("aria-current", "true");
     const name = document.createElement("span");
     name.className = "dirMenuName";
@@ -1333,12 +1341,6 @@ $("dirMenu").addEventListener("beforetoggle", event => {
   if (open) {
     $("dirMenu").hidden = false;   // [hidden] would outrank the top-layer display.
     positionDirMenu();
-    // The arrow opens a menu, so the menu takes the focus. Nothing inside the
-    // popover is focusable yet — it reaches the top layer after this handler
-    // returns — and the toggle event comes too late, in a task of its own, so
-    // a keypress that follows the click can beat it. A microtask lands in
-    // between. Opening from the path field focuses an item at that call site.
-    if (document.activeElement === $("dirMenuBtn")) queueMicrotask(() => focusDirMenuItem(0));
     addEventListener("resize", positionDirMenu);
     addEventListener("scroll", positionDirMenu, true);
   } else {

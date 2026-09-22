@@ -146,6 +146,12 @@ try {
   await check('Arrow closes the menu it opened under a real pointer',async()=>{
     await mouseClick('dirMenuBtn');
     await wait('$("dirMenu").matches(":popover-open")');
+    // A menu opened by pointer must be navigable by keyboard straight away,
+    // with no wait: the keypress a user makes next arrives in the very next
+    // task, so any focus move that is merely queued has already lost.
+    assert.equal(await evaluate('$("dirMenu").contains(document.activeElement)'),true,'Opening focuses an item, not the arrow');
+    await key('End','End');
+    assert.equal(await evaluate('document.activeElement.title'),'/mock/other','End reaches the last folder');
     await mouseClick('dirMenuBtn');
     await wait('!$("dirMenu").matches(":popover-open")');
     assert.equal(await evaluate('$("dirMenuBtn").getAttribute("aria-expanded")'),'false');
