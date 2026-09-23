@@ -196,6 +196,27 @@ The server binds to localhost only and additionally refuses requests whose `Host
    PYANNOTEAI_API_KEY="your_pyannote_api_key"
    ```
 
+### Using NVIDIA Nemotron 3 Diarization
+
+swhisper can use [Nemotron 3 Diarization](https://huggingface.co/nvidia/Nemotron-3-Diarization) in place of pyannote. The model runs locally and tracks at most eight speakers, so use it only for recordings with eight speakers or fewer. On an Apple Silicon Mac it diarizes an hour of audio in about 30 seconds on the CPU.
+
+The model needs Python 3.12 and a version of `transformers` that is not yet released, so it runs in its own conda environment:
+
+```bash
+conda create -n nemo python=3.12
+conda run -n nemo pip install torch numpy librosa git+https://github.com/huggingface/transformers
+```
+
+Then select the model in `.swhisper.env`:
+
+```bash
+SWHISPER_PIPELINE_MODEL=nvidia/Nemotron-3-Diarization
+```
+
+swhisper finds the `nemo` environment next to the `swhisper` environment. If your environment lives elsewhere, set `SWHISPER_NEMOTRON_PYTHON` to its `python` binary. `ffmpeg` must be on the `PATH`.
+
+Nemotron honours `SWHISPER_MAX_SPEAKERS`. It keeps the most active speakers and gives the speech of the others to whichever kept speaker the model finds most likely. It ignores `SWHISPER_MIN_SPEAKERS`, and the pyannote tuning settings (`SWHISPER_VBX_*`, `SWHISPER_CLUSTERING_*`, …) do not apply to it.
+
 ### Configuration priority
 
 Settings are loaded in this order (highest to lowest priority):
@@ -222,8 +243,9 @@ Settings are loaded in this order (highest to lowest priority):
 | **Diarization** | | |
 | `SWHISPER_MIN_SPEAKERS` | Minimum speakers | `1` |
 | `SWHISPER_MAX_SPEAKERS` | Maximum speakers | *none* |
-| `SWHISPER_PIPELINE_MODEL` | Diarization pipeline | `"pyannote/speaker-diarization-3.1"` |
+| `SWHISPER_PIPELINE_MODEL` | Diarization pipeline (`nvidia/Nemotron-3-Diarization` selects Nemotron) | `"pyannote/speaker-diarization-3.1"` |
 | `SWHISPER_USE_PRECISION` | Use commercial precision-2 service | `false` |
+| `SWHISPER_NEMOTRON_PYTHON` | Python binary of the environment that runs Nemotron | the `nemo` conda env |
 | **Processing** | | |
 | `SWHISPER_BACKFILL_ENABLED` | Re-transcribe empty turns | `true` |
 | `SWHISPER_INCLUDE_SILENCE` | Include silence markers | `true` |
