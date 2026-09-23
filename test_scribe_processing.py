@@ -104,3 +104,51 @@ def test_saved_scribe_result_local_recovery_exports_and_resume(tmp_path):
         records = [json.loads(p.read_text()) for p in (work / 'local-runs').glob('*.json')]
         assert any(r.get('backfill_outcome', {}).get('status') == 'failed' for r in records)
         assert (work / 'whisper-json-output/audio.json').read_bytes() == normalized
+
+
+def test_configure_keeps_nemotron_and_forces_community_otherwise(tmp_path):
+    from diarize.config import DiarizationConfig
+    from scribe_processing import configure
+
+    source = tmp_path / 'interview.wav'
+    source.write_bytes(b'audio')
+    for selected, expected in (('nvidia/Nemotron-3-Diarization', 'nvidia/Nemotron-3-Diarization'),
+                               ('pyannote/speaker-diarization-3.1', 'pyannote/speaker-diarization-community-1')):
+        config = DiarizationConfig()
+        config.pipeline_model = selected
+        assert configure(config, source, tmp_path / 'run').pipeline_model == expected
+
+
+def test_scribe_run_diarizes_with_nemotron_when_selected(tmp_path):
+    from diarize.config import DiarizationConfig
+    from diarize.nemotron import NemotronDiarizer, NemotronOutput
+
+    class NemotronConfig(DiarizationConfig):
+        def __post_init__(self):
+            super().__post_init__()
+            self.pipeline_model = 'nvidia/Nemotron-3-Diarization'
+
+    source = tmp_path / 'interview.wav'
+    source.write_bytes(b'original')
+    source.with_suffix('.swhisper').write_text('SWHISPER_BACKFILL_ENABLED=false\n')
+    work = tmp_path / 'run'
+    transcript = {'full_transcription': 'Hej slut', 'segments': [{'start': 0, 'end': 3, 'text': 'Hej slut'}]}
+    words = {'version': 1, 'words': [{'t': 'Hej', 's': 0.1, 'e': 0.5}, {'t': 'slut', 's': 2.5, 'e': 2.9}]}
+    annotation = Annotation()
+    annotation[Segment(0, .7)] = 'SPEAKER_00'
+    annotation[Segment(2.3, 3)] = 'SPEAKER_01'
+    def remote(self, wav, state, state_path, language):
+        state['job_id'] = 'simulated'
+        return copy.deepcopy(transcript), copy.deepcopy(words)
+    argv = [str(source), '--work-dir', str(work), '--auth', 'env']
+    with patch.dict('os.environ', {'SUNET_SCRIBE_API_KEY': 'test-key', 'SUNET_SCRIBE_ENCRYPT_PWD': 'test-password'}), \
+            patch('diarize.DiarizationConfig', NemotronConfig), \
+            patch.object(transcribe_scribe, 'prepare_audio', side_effect=lambda src, dst: dst.write_bytes(b'staged')), \
+            patch.object(ScribeClient, 'transcribe', autospec=True, side_effect=remote), \
+            patch('diarize4.ensure_pyannote_v4'), \
+            patch.object(NemotronDiarizer, 'diarize', return_value=NemotronOutput(annotation, annotation)) as nemotron:
+        assert transcribe_scribe.main(argv) == 0
+    nemotron.assert_called_once()
+    records = [json.loads(p.read_text()) for p in (work / 'local-runs').glob('*.json')]
+    assert [r['settings']['pipeline_model'] for r in records] == ['nvidia/Nemotron-3-Diarization']
+    assert records[0]['status'] == 'completed'

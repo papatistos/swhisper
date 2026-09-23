@@ -5,8 +5,8 @@ from sidecar import SIDECAR_PARAMS, apply_sidecar_to_diarization_config
 
 
 UNSUPPORTED = {
-    'SWHISPER_USE_PRECISION': 'Scribe currently uses local community-1; Precision is not integrated.',
-    'SWHISPER_PRECISION_MODEL': 'Scribe currently uses local community-1; Precision is not integrated.',
+    'SWHISPER_USE_PRECISION': 'Scribe uses local community-1 or Nemotron; Precision is not integrated.',
+    'SWHISPER_PRECISION_MODEL': 'Scribe uses local community-1 or Nemotron; Precision is not integrated.',
     'SWHISPER_WHISPER_TIMESTAMP_OFFSET': 'Use the separate Scribe timestamp offset, which defaults to zero.',
     'SWHISPER_DIARIZE_FORCE_REPROCESS': 'Scribe always repeats local processing and exports; inference may reuse its cache.',
     'SWHISPER_OUTPUT_DIR': 'Scribe exports stay inside its isolated work directory.',
@@ -39,9 +39,12 @@ def capability(key):
 
 def configure(config, source, work_dir):
     """Apply the source sidecar once, then enforce isolated local processing."""
+    from diarize.config import is_nemotron_model  # deferred: importing diarize loads the models' dependencies
+
     source, work_dir = Path(source), Path(work_dir)
     config, _ = apply_sidecar_to_diarization_config(config, str(source.parent), source.stem)
-    config.pipeline_model = 'pyannote/speaker-diarization-community-1'
+    if not is_nemotron_model(config.pipeline_model):
+        config.pipeline_model = 'pyannote/speaker-diarization-community-1'
     config.use_precision_service = False
     config.whisper_timestamp_offset = config.scribe_timestamp_offset
     config.output_dir = str(work_dir / 'transcripts')
