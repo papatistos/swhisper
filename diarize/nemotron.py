@@ -26,7 +26,7 @@ WORKER_PATH = Path(__file__).with_name("nemotron_worker.py")
 SETUP_HINT = (
     "Create the environment with:\n"
     "  conda create -n nemo python=3.12\n"
-    "  conda run -n nemo pip install torch numpy git+https://github.com/huggingface/transformers\n"
+    "  conda run -n nemo pip install torch numpy librosa git+https://github.com/huggingface/transformers\n"
     "or point SWHISPER_NEMOTRON_PYTHON at the python binary of an environment that has them."
 )
 
