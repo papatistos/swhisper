@@ -57,6 +57,14 @@ def _default_hf_token() -> str:
     return ""
 
 
+NEMOTRON_MODEL_ID = "nvidia/Nemotron-3-Diarization"
+
+
+def is_nemotron_model(model_id: Optional[str]) -> bool:
+    """Return True when the configured pipeline model is Nemotron 3 Diarization."""
+    return (model_id or "").strip().lower() == NEMOTRON_MODEL_ID.lower()
+
+
 DEFAULT_DIARIZE_AUDIO_DIR = str(
     _PATH_SETTINGS.diarize_default_audio_dir
     or _PATH_SETTINGS.audio_dir
@@ -122,6 +130,13 @@ class DiarizationConfig:
     precision_pipeline_model: str = os.getenv("SWHISPER_PRECISION_MODEL", "pyannote/speaker-diarization-precision-2")
     precision_api_token: Optional[str] = None
     precision_token_env_vars: Tuple[str, ...] = ("PYANNOTEAI_API_KEY", "PYANNOTE_API_KEY")
+
+    # NVIDIA Nemotron 3 Diarization - used when SWHISPER_PIPELINE_MODEL=nvidia/Nemotron-3-Diarization
+    nemotron_python: Optional[str] = os.getenv("SWHISPER_NEMOTRON_PYTHON") or None  # Python of the separate env that runs the model (default: the "nemo" conda env next to this one)
+    nemotron_device: str = os.getenv("SWHISPER_NEMOTRON_DEVICE", "cpu")  # "cpu" is faster than "mps" for this model on Apple Silicon
+    nemotron_threshold: float = _get_env_float("SWHISPER_NEMOTRON_THRESHOLD", 0.5)  # Speaker activity probability above which a speaker counts as speaking
+    nemotron_min_duration_on: float = _get_env_float("SWHISPER_NEMOTRON_MIN_DURATION_ON", 0.1)  # Drop speaker turns shorter than this (seconds)
+    nemotron_min_duration_off: float = _get_env_float("SWHISPER_NEMOTRON_MIN_DURATION_OFF", 0.3)  # Close pauses shorter than this within one speaker's turn (seconds)
 
     # Silence detection settings (post-processing)
     min_silence_duration: float = _get_env_float("SWHISPER_MIN_SILENCE_DURATION", 0.2)  # (rounded) silence durations below this value will be ignored
@@ -269,6 +284,13 @@ Note 3: Speaker detection is not perfect. The transcript may show too few or too
     
     def get_pipeline_config(self) -> Dict:
         """Get pipeline configuration dictionary."""
+        if is_nemotron_model(self.pipeline_model):
+            return {
+                "nemotron_threshold": self.nemotron_threshold,
+                "nemotron_min_duration_on": self.nemotron_min_duration_on,
+                "nemotron_min_duration_off": self.nemotron_min_duration_off,
+            }
+
         config = {
             "segmentation": {
                 "threshold": self.segmentation_threshold,
