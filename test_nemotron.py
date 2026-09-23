@@ -162,3 +162,13 @@ def test_diarizer_explains_how_to_create_a_missing_environment(tmp_path):
     with pytest.raises(RuntimeError, match="conda create -n nemo"):
         NemotronDiarizer(config).diarize("/audio/interview.m4a")
 
+
+def test_diarization_pipeline_delegates_to_nemotron(monkeypatch):
+    from diarize import pipeline as pipeline_module
+
+    config = DiarizationConfig()
+    config.pipeline_model = "nvidia/Nemotron-3-Diarization"
+    sentinel = object()
+    monkeypatch.setattr(pipeline_module.NemotronDiarizer, "diarize", lambda self, path: sentinel)
+
+    assert pipeline_module.DiarizationPipeline(config).diarize("/audio/interview.m4a") is sentinel

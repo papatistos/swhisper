@@ -16,6 +16,7 @@ from typing import Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from diarize import DiarizationConfig
+from diarize.nemotron import is_nemotron_model
 
 
 def _invoke_legacy_main(config: DiarizationConfig) -> None:
@@ -113,6 +114,8 @@ def run(config: Optional[DiarizationConfig] = None, *, show_header: bool = True)
                 "⚠️ Precision diarization token not detected. Set PYANNOTEAI_API_KEY "
                 "(or override precision_api_token) to use the precision-2 service."
             )
+    elif is_nemotron_model(config_obj.pipeline_model):
+        print("🎯 Using NVIDIA Nemotron 3 Diarization (runs in its own environment).")
     else:
         if getattr(config_obj, "pipeline_model", "").strip() in {"", LEGACY_PIPELINE_ID}:
             config_obj.pipeline_model = COMMUNITY_PIPELINE_ID

@@ -15,6 +15,7 @@ except ImportError:  # pragma: no cover - fallback when hook utilities are missi
     ProgressHook = None
 
 from .config import DiarizationConfig
+from .nemotron import NemotronDiarizer, is_nemotron_model
 from .utils import DeviceManager
 
 
@@ -226,6 +227,9 @@ class DiarizationPipeline:
     
     def diarize(self, audio_path: str) -> Any:
         """Perform diarization on an audio file."""
+        if is_nemotron_model(self.config.pipeline_model):
+            return NemotronDiarizer(self.config).diarize(audio_path)
+
         with self.safe_diarization_pipeline() as pipeline:
             # Add progress indicator for the actual diarization processing
             is_parameter_testing = getattr(self.config, 'enable_parameter_testing', False)
