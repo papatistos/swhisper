@@ -30,6 +30,29 @@ function rememberControl(id) {
     saveUIPreference(id, el.type === "checkbox" ? el.checked : el.value);
   });
 }
+function rememberDetails(section, key) {
+  if (typeof uiPreferences[key] === "boolean") section.open = uiPreferences[key];
+  section.querySelector("summary").addEventListener("click", event => {
+    event.preventDefault();
+    section.open = !section.open;
+    saveUIPreference(key, section.open);
+  });
+}
+function rememberAudio(id) {
+  const audio = $(id);
+  const volume = uiPreferences[id + ".volume"], rate = uiPreferences[id + ".rate"];
+  if (typeof volume === "number" && Number.isFinite(volume) && volume >= 0 && volume <= 1) audio.volume = volume;
+  if (typeof uiPreferences[id + ".muted"] === "boolean") audio.muted = uiPreferences[id + ".muted"];
+  if (typeof rate === "number" && Number.isFinite(rate) && rate >= 0.0625 && rate <= 16) audio.defaultPlaybackRate = audio.playbackRate = rate;
+  audio.addEventListener("volumechange", () => {
+    saveUIPreference(id + ".volume", audio.volume);
+    saveUIPreference(id + ".muted", audio.muted);
+  });
+  audio.addEventListener("ratechange", () => {
+    audio.defaultPlaybackRate = audio.playbackRate;
+    saveUIPreference(id + ".rate", audio.playbackRate);
+  });
+}
 let META = null;
 let FILES_BY_BASE = {};
 let currentBase = null;
@@ -215,9 +238,9 @@ async function changeDir() {
     $("consoleLog").textContent = "";
     currentLogSel = null;
     logOffset = 0;
-    showTab("settings");
     await loadMeta();
     await loadFiles();
+    showTab(currentTab);
   } catch (e) { reportError(e); $("dirInput").value = META?.audio_dir || ""; }
   finally { changingDir = false; updateRunControls(); }
 }
@@ -538,6 +561,7 @@ function renderSettings(data, base, scope) {
   {
     const note = document.createElement("label"); note.className = "settingsNote";
     note.innerHTML = '<input id="showOtherSettings" type="checkbox"> Show settings for other pipelines'; editor.appendChild(note);
+    rememberControl("showOtherSettings");
     note.querySelector("input").onchange = filterSettings;
   }
   for (const group of groups) {
@@ -545,6 +569,7 @@ function renderSettings(data, base, scope) {
     const section = document.createElement("details"); section.className = "group";
     section.open = group.name === "Common settings" || group.keys.some(k=>Object.hasOwn(data.values,k));
     const summary = document.createElement("summary"); summary.textContent = group.name; section.appendChild(summary);
+    rememberDetails(section, `group.${scope}.${group.name}`);
     for (const key of group.keys) {
       const spec = editorMeta.params[key]; if (!spec) continue;
       const row = document.createElement("div"); row.className = "row"; row.dataset.stage = spec.stage;
@@ -669,7 +694,8 @@ function setMsg(text, cls) {
 
 /* ---------- transcript view ---------- */
 
-function showTab(tab) {
+function showTab(tab, remember = false) {
+  if (remember) saveUIPreference("activeTab", tab);
   currentTab = tab;
   for (const [id, name] of [["tabSettings", "settings"], ["tabTranscript", "transcript"], ["tabCompare", "compare"], ["tabLogs", "logs"]]) {
     $(id).setAttribute("aria-selected", String(name === tab));
@@ -884,7 +910,6 @@ async function saveSpeakerNames() {
 async function saveRenderedView() {
   if (!renderAvailable || !currentBase) return;
   exportContext = {base:currentBase, version:$("versionSel").value, options:renderOptions()};
-  $("exportFormat").value = "txt";
   $("exportPaths").textContent = "Choose a format, then select Export copy to choose the filename and location.";
   $("exportDialog").showModal();
 }
@@ -904,7 +929,7 @@ async function confirmExport() {
 }
 function resetAudioReview() {
   timelineSeq++; $("audioPlayer").pause(); $("audioPlayer").removeAttribute("src");$("audioPlayer").load();
-  $("audioBar").hidden=true;$("timeline").hidden=true;$("timeline").replaceChildren();$("reviewAudio").checked=false;$("transcriptText").style.display="";
+  $("audioBar").hidden=true;$("timeline").hidden=true;$("timeline").replaceChildren();$("transcriptText").style.display="";
 }
 async function loadAudioReview(base, version) {
   const seq=++timelineSeq, folder=folderSeq, renderAtLoad=renderSeq;
@@ -929,6 +954,13 @@ function renderTimeline(segments) {
       button.onclick=()=>{$("audioPlayer").currentTime=segment.start;$("audioPlayer").play().catch(()=>{$("audioMsg").textContent="Press Play to start audio, or choose a browser-supported audio format.";});};
       const text=document.createElement("p");text.textContent=segment.text;row.append(button,text);$("timeline").appendChild(row);
     }
+  updateReviewView();
+}
+
+function updateReviewView() {
+  const review = $("reviewAudio").checked && !$("reviewAudio").disabled;
+  $("timeline").hidden = !review;
+  $("transcriptText").style.display = review ? "none" : "";
 }
 
 async function loadTranscript(base, version) {
@@ -1518,7 +1550,6 @@ async function startRun() {
       ...active.map(row => rowFor([row.file, row.stage, row.action, row.reason])));
     $("previewTable").hidden = !active.length;
     $("previewSkipped").hidden = !skipped.length;
-    $("previewSkipped").open = false;
     $("previewSkippedSummary").textContent = `${skipped.length} already up to date, not part of this run`;
     $("previewSkippedTable").querySelector("tbody").replaceChildren(
       ...skipped.map(row => rowFor([row.file, row.stage, row.reason])));
@@ -1553,7 +1584,6 @@ async function launchPreview() {
     lastStatus = data; statusSeq++;
     logOffset = 0; activeRunId = data.run_id;
     $("consoleLog").textContent = "";
-    setConsoleCollapsed(false);
     $("previewDialog").close(); pendingPreview = null;
     await pollLoop();   // re-poll now and switch to the running cadence
   } catch (e) { $("previewSummary").textContent = e.message + " Close this preview and try again."; }
@@ -1583,7 +1613,10 @@ async function pollRun() {
   if (pollBusy || changingDir) return;
   pollBusy = true;
   try {
-    if (!initialized) { await loadMeta(); await loadFiles(); initialized = true; }
+    if (!initialized) {
+      await loadMeta(); await loadFiles(); initialized = true;
+      if (["settings", "transcript", "compare", "logs"].includes(uiPreferences.activeTab)) showTab(uiPreferences.activeTab);
+    }
     const seq = ++statusSeq;
     const st = (await api("/api/run/status")).data;
     // Starting or stopping a run applies its own authoritative status. A poll
@@ -1701,9 +1734,9 @@ function initConsoleResize() {
 
 $("saveBtn").onclick = handle(saveSidecar);
 $("deleteBtn").onclick = handle(deleteSidecar);
-$("tabSettings").onclick = () => showTab("settings");
-$("tabTranscript").onclick = () => showTab("transcript");
-$("tabLogs").onclick = () => showTab("logs");
+$("tabSettings").onclick = () => showTab("settings", true);
+$("tabTranscript").onclick = () => showTab("transcript", true);
+$("tabLogs").onclick = () => showTab("logs", true);
 $("logSel").onchange = handle(async () => { currentLogSel = $("logSel").value; await loadLogContent(); });
 $("versionSel").onchange = () => { if (currentBase) loadTranscript(currentBase, $("versionSel").value); };
 $("transcriptReload").onclick = () => { if (currentBase) loadTranscript(currentBase); };
@@ -1744,7 +1777,7 @@ $("renderReset").onclick = () => {
   if (currentTab === "compare") refreshComparison();
   else if (currentBase) loadTranscript(currentBase, $("versionSel").value);
 };
-$("tabCompare").onclick = () => showTab("compare");
+$("tabCompare").onclick = () => showTab("compare", true);
 $("compareSelLeft").onchange = () => refreshComparison();
 $("compareSelRight").onchange = () => refreshComparison();
 $("compareSync").onchange = () => { if ($("compareSync").checked) syncPanes("left"); };
@@ -1853,21 +1886,24 @@ $("consoleResize").addEventListener("keydown", e => {
 });
 $("globalSettingsBtn").onclick=handle(openGlobalSettings);
 for (const id of ["pipelineSel", "runModel", "runReprocess", "scribeScope", "scribeLanguage"]) rememberControl(id);
+for (const id of ["fileSearch", "fileFilter", "fileSort", "reviewAudio", "compareSync", "compareReview", "compareFollow", "exportFormat"]) rememberControl(id);
+rememberDetails($("previewSkipped"), "previewSkipped");
+for (const id of ["audioPlayer", "compareAudio"]) rememberAudio(id);
 $("pipelineSel").addEventListener("change", () => { filterSettings(); updateRunControls(); });
 $("scribeScope").addEventListener("change", updateRunControls);
 for(const id of ["fileSearch","fileFilter","fileSort"]) $(id).addEventListener(id==="fileSearch"?"input":"change",renderFiles);
 $("exportConfirm").onclick=handle(confirmExport);
 $("exportCancel").onclick=()=>{$("exportDialog").close();exportContext=null;};
 $("exportDialog").addEventListener("cancel",e=>{if(exporting)e.preventDefault();else exportContext=null;});
-$("reviewAudio").onchange=()=>{$("timeline").hidden=!$("reviewAudio").checked;$("transcriptText").style.display=$("reviewAudio").checked?"none":"";};
+$("reviewAudio").onchange = updateReviewView;
 $("audioPlayer").addEventListener("timeupdate",()=>{
   const time=$("audioPlayer").currentTime;
   document.querySelectorAll("#timeline .segment").forEach(row=>row.classList.toggle("active",time>=Number(row.dataset.start)&&time<Number(row.dataset.end)));
 });
-function setSidebarWidth(width){
+function setSidebarWidth(width, remember = true){
   width=Math.max(220,Math.min(window.innerWidth*.55,700,width));
   document.body.style.setProperty("--sidebar-width",width+"px");$("sidebarResize").setAttribute("aria-valuenow",Math.round(width));
-  try{localStorage.setItem("swhisper_sidebar_width",width);}catch{}
+  if (remember) try{localStorage.setItem("swhisper_sidebar_width",width);}catch{}
 }
 function toggleFiles(force){
   const collapsed=force??!document.body.classList.contains("filesCollapsed");
@@ -1881,7 +1917,7 @@ $("sidebarResize").addEventListener("pointerdown",e=>{
   const move=event=>setSidebarWidth(width+event.clientX-start),stop=()=>{window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",stop);};
   window.addEventListener("pointermove",move);window.addEventListener("pointerup",stop,{once:true});
 });
-try{const width=Number(localStorage.getItem("swhisper_sidebar_width"));if(width)setSidebarWidth(width);toggleFiles(localStorage.getItem("swhisper_files_collapsed")==="1");}catch{}
+try{const width=Number(localStorage.getItem("swhisper_sidebar_width"));if(width)setSidebarWidth(width, false);toggleFiles(localStorage.getItem("swhisper_files_collapsed")==="1");}catch{}
 initFontSize();
 initConsole();
 initConsoleResize();

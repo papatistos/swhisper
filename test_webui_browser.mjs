@@ -367,7 +367,7 @@ try {
   await check('Search and status filters preserve current editor',async()=>{
     await evaluate('$("fileSearch").value="unsafe";$("fileSearch").dispatchEvent(new Event("input"))');
     assert.equal(await evaluate('document.querySelectorAll(".fileSelect").length'),1);assert.equal(await evaluate('editorBase'),'b');
-    await evaluate('$("fileSearch").value="";$("fileFilter").value="reprocess";renderFiles()');
+    await evaluate('$("fileSearch").value="";$("fileSearch").dispatchEvent(new Event("input"));$("fileFilter").value="reprocess";renderFiles()');
     assert.equal(await evaluate('document.querySelector(".file").dataset.base'),'b');
     await evaluate('$("fileFilter").value="all";$("fileSort").value="newest";renderFiles()');
     assert.equal(await evaluate('document.querySelector(".file").dataset.base'),'b');await evaluate('$("fileSort").value="name";renderFiles()');
@@ -587,6 +587,7 @@ try {
   await check('Scribe availability and inherited value contrast in file and global settings',async()=>{
     for (const scope of ['file','global']) {
       if (scope==='global') {await click('globalSettingsBtn');await wait('editorScope==="global" && !editorLoading');}
+      if (await evaluate('$("showOtherSettings").checked')) await click('showOtherSettings');
       const speaker = scope==='global' ? 'SWHISPER_MIN_SPEAKERS' : 'SWHISPER_NUM_SPEAKERS';
       assert.equal(await evaluate(`(()=>{const el=$('setting-${speaker}');return !el.disabled && getComputedStyle(el,'::placeholder').color===getComputedStyle(el).color})()`),true);
       assert.equal(await evaluate('$(' + JSON.stringify('setting-SWHISPER_VAD') + ').closest(".row").hidden'),true);
@@ -628,6 +629,7 @@ try {
     assert.deepEqual(await evaluate('renderOptions()'),showPreferences);
     await click('tabTranscript');await wait('!$("versionSel").disabled');
     await evaluate('$("dirInput").value="/mock/other";changeDir()');await wait('META.audio_dir==="/mock/other" && !changingDir');
+    assert.equal(await evaluate('currentTab'),'transcript','Changing folders preserves the chosen view');
     await select('a');await wait('editorBase==="a"');await click('tabTranscript');await wait('!$("versionSel").disabled');
     assert.deepEqual(await evaluate('renderOptions()'),showPreferences);
   });
@@ -687,6 +689,53 @@ try {
     assert.equal(await evaluate('$("pipelineSel").value'),'transcribe4');
     assert.equal(await evaluate('$("runModel").value'),'');
     assert.equal(await evaluate('$("runReprocess").checked'),false);
+  });
+  await check('File filters, view toggles, export format and active tab survive reopening',async()=>{
+    for (const [id,value] of [['fileSearch','a'],['fileFilter','ready'],['fileSort','newest'],['exportFormat','rtf']]) {
+      await evaluate(`$(${JSON.stringify(id)}).value=${JSON.stringify(value)};$(${JSON.stringify(id)}).dispatchEvent(new Event(${JSON.stringify(id==='fileSearch'?'input':'change')}))`);
+    }
+    for (const [id,checked] of [['compareSync',false],['compareFollow',false],['compareReview',true]]) {
+      if (await evaluate(`$(${JSON.stringify(id)}).checked!==${checked}`)) await click(id);
+    }
+    await click('tabTranscript');
+    await reopen();
+    assert.deepEqual(await evaluate('["fileSearch","fileFilter","fileSort","exportFormat"].map(id=>$(id).value)'),['a','ready','newest','rtf']);
+    assert.equal(await evaluate('document.querySelectorAll(".fileSelect").length'),1);
+    assert.deepEqual(await evaluate('["compareSync","compareFollow","compareReview"].map(id=>$(id).checked)'),[false,false,true]);
+    assert.equal(await evaluate('currentTab'),'transcript');
+    await select('a');await wait('editorBase==="a" && renderAvailable && !$("versionSel").disabled');
+    await click('renderSave');await wait('$("exportDialog").open');
+    assert.equal(await evaluate('$("exportFormat").value'),'rtf','Opening Export does not reset the format');
+    await click('exportCancel');
+    await evaluate('$("fileSearch").value="";$("fileSearch").dispatchEvent(new Event("input"))');
+  });
+  await check('Settings visibility and group expansion persist across files and sessions',async()=>{
+    await click('tabSettings');
+    if (!await evaluate('$("showOtherSettings").checked')) await click('showOtherSettings');
+    await evaluate('(()=>{const group=document.querySelector("#editor details.group");if(group.open)group.querySelector("summary").click()})()');
+    await select('b');await wait('editorBase==="b"');
+    assert.equal(await evaluate('$("showOtherSettings").checked'),true);
+    assert.equal(await evaluate('document.querySelector("#editor details.group").open'),false);
+    await reopen();await select('a');await wait('editorBase==="a"');
+    assert.equal(await evaluate('$("showOtherSettings").checked'),true);
+    assert.equal(await evaluate('document.querySelector("#editor details.group").open'),false);
+  });
+  await check('Timestamp review remains selected through transcript and raw JSON navigation',async()=>{
+    await click('tabTranscript');await wait('!$("reviewAudio").disabled');
+    if (!await evaluate('$("reviewAudio").checked')) await click('reviewAudio');
+    await select('b');await wait('editorBase==="b" && !$("versionSel").disabled && !$("reviewAudio").disabled');
+    assert.equal(await evaluate('$("reviewAudio").checked && !$("timeline").hidden && $("transcriptText").style.display==="none"'),true);
+    await evaluate('$("versionSel").value="__raw_json__";$("versionSel").dispatchEvent(new Event("change"))');
+    await wait('$("transcriptText").textContent.includes("raw")');
+    assert.equal(await evaluate('$("transcriptText").style.display'),'', 'Versions without a timeline stay readable');
+    await reopen();await select('a');await wait('editorBase==="a" && !$("reviewAudio").disabled');
+    assert.equal(await evaluate('$("reviewAudio").checked && !$("timeline").hidden'),true);
+  });
+  await check('Playback volume, mute and speed survive new audio and fresh sessions',async()=>{
+    await evaluate('$("audioPlayer").volume=0.4;$("audioPlayer").muted=true;$("audioPlayer").playbackRate=1.5;$("compareAudio").volume=0.6;$("compareAudio").playbackRate=0.75');
+    await wait('uiPreferences["audioPlayer.rate"]===1.5 && uiPreferences["compareAudio.rate"]===0.75 && uiPreferences["audioPlayer.muted"]===true');
+    await reopen();await select('a');await wait('editorBase==="a" && !$("reviewAudio").disabled');
+    assert.deepEqual(await evaluate('[ $("audioPlayer").volume,$("audioPlayer").muted,$("audioPlayer").playbackRate,$("compareAudio").volume,$("compareAudio").playbackRate ]'),[0.4,true,1.5,0.6,0.75]);
   });
   assert.deepEqual(errors,[],'No uncaught browser errors');
   console.log('All browser workflow checks passed.');
