@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from run_scope import DIARIZATION_MODELS
 from webui_run import FORMATS
 
 LANGUAGES = ('Swedish (verbatim)', 'Swedish')
@@ -17,7 +18,7 @@ NOTES = [
 ]
 
 
-def local_settings(source, work):
+def local_settings(source, work, diarization_model=''):
     # Load only the config module, avoiding diarize/__init__ and model imports.
     import importlib.util
     import sys
@@ -27,14 +28,18 @@ def local_settings(source, work):
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
     spec.loader.exec_module(module)
-    config = configure(module.DiarizationConfig(), source, work)
-    return effective_settings(config)
+    config = module.DiarizationConfig()
+    if diarization_model:
+        config.pipeline_model = DIARIZATION_MODELS[diarization_model]
+    return effective_settings(configure(config, source, work))
 
 
-def preview_scribe(audio_dir, selected='', language=LANGUAGES[0]):
+def preview_scribe(audio_dir, selected='', language=LANGUAGES[0], diarization_model='', retranscribe=False):
     audio = Path(audio_dir).resolve()
     if language not in LANGUAGES:
         raise ValueError('Unsupported Scribe language')
+    if diarization_model and diarization_model not in DIARIZATION_MODELS:
+        raise ValueError('Unsupported diarization model')
     sources = [p for p in sorted(audio.iterdir()) if p.suffix.lower() in FORMATS and p.is_file()]
     if selected:
         sources = [p for p in sources if p.stem == selected]
@@ -57,16 +62,19 @@ def preview_scribe(audio_dir, selected='', language=LANGUAGES[0]):
                 else:
                     evidence.append((str(path), None))
             fingerprint = hashlib.sha256(json.dumps(evidence).encode()).hexdigest()
-            settings = local_settings(source, work)
+            settings = local_settings(source, work, diarization_model)
             recovery = f"local Whisper backfill {settings['backfill_model']}" if settings['backfill_missing_turns'] else "backfill off"
-            # transcribe_scribe contacts SUNET only when no saved transcript exists.
-            remote = not (work / 'whisper-json-output' / 'audio.json').is_file()
+            # transcribe_scribe contacts SUNET only when no saved transcript exists,
+            # or when this run explicitly retranscribes.
+            saved = (work / 'whisper-json-output' / 'audio.json').is_file()
+            remote = retranscribe or not saved
             rows.append(dict(local_settings=settings, file=source.name, base=source.stem, work_dir=str(work), fingerprint=fingerprint,
                              stage='Scribe + local diarization' if remote else 'Local diarization of saved Scribe transcript',
                              action='process', remote=remote,
-                             reason=f'{"Resume or upload" if remote else "Reuses the saved Scribe transcript; no upload or SUNET login"}; {recovery}; SenseVoice {"on" if settings["backfill_enable_sensevoice"] else "off"}; offset {settings["whisper_timestamp_offset"]:g}s; local exports in {work / "transcripts"}'))
+                             reason=f'{"Uploads again; the saved Scribe transcript moves to superseded/" if saved and retranscribe else "Resume or upload" if remote else "Reuses the saved Scribe transcript; no upload or SUNET login"}; diarization {settings["pipeline_model"]}; {recovery}; SenseVoice {"on" if settings["backfill_enable_sensevoice"] else "off"}; offset {settings["whisper_timestamp_offset"]:g}s; local exports in {work / "transcripts"}'))
     result = dict(audio_dir=str(audio), pipeline='scribe', language=language, selected=selected,
-                  files=rows, notes=NOTES, remote=any(row['remote'] for row in rows))
+                  files=rows, notes=NOTES, remote=any(row['remote'] for row in rows),
+                  diarization_model=diarization_model, retranscribe=retranscribe)
     result['token'] = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
     return result
 
@@ -78,7 +86,9 @@ def main(argv=None):
     plan = json.loads((sys.argv[1:] if argv is None else argv)[0])
     for index, row in enumerate(plan['files'], 1):
         try:
-            current = preview_scribe(plan['audio_dir'], language=plan['language'])
+            current = preview_scribe(plan['audio_dir'], language=plan['language'],
+                                     diarization_model=plan.get('diarization_model', ''),
+                                     retranscribe=plan.get('retranscribe', False))
             actual = next((r for r in current['files'] if r['file'] == row['file']), None)
             if actual != row:
                 raise ValueError('Recording, settings or Scribe state changed after preview. Review again.')
@@ -90,7 +100,8 @@ def main(argv=None):
             str(Path(plan['audio_dir']) / row['file']),
             '--work-dir', row['work_dir'], '--language', plan['language'],
             '--auth', 'browseros',
-        ])
+        ] + (['--diarization-model', plan['diarization_model']] if plan.get('diarization_model') else [])
+          + (['--retranscribe'] if plan.get('retranscribe') else []))
         if code:
             return code
         print(f"Scribe completed: {row['file']}", flush=True)

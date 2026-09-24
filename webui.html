@@ -42,6 +42,12 @@
     <div id="runControlBar">
       <span class="dot" id="runDot"></span>
       <select id="pipelineSel" aria-label="Pipeline"></select>
+      <select id="runModel" aria-label="Diarization model for this run">
+        <option value="">Diarization: saved setting</option>
+        <option value="community-1">Diarization: pyannote community-1</option>
+        <option value="nemotron">Diarization: Nemotron 3 (up to 8 speakers)</option>
+      </select>
+      <label id="runReprocessRow"><input type="checkbox" id="runReprocess"> <span id="runReprocessLabel">Reprocess existing outputs</span></label>
       <button class="primary" id="startBtn" disabled>Run folder…</button>
       <button id="clearRunSelection" title="Run the whole folder again" hidden>Clear selection</button>
       <button id="stopBtn" disabled>Stop</button>
@@ -57,7 +63,7 @@
           <option value="Swedish (verbatim)">Swedish (verbatim)</option>
           <option value="Swedish">Swedish</option>
         </select>
-        <span id="scribeNotice" role="note">Scribe uploads the recordings to scribe.sunet.se for remote transcription. Local Whisper backfill and optional SenseVoice use your saved settings. Prompt and decoding controls apply to backfill only, not SUNET. Scribe reuses remote results and repeats local processing; local file-limit and force-transcription settings do not apply.</span>
+        <span id="scribeNotice" role="note">Scribe uploads the recordings to scribe.sunet.se for remote transcription. Local Whisper backfill and optional SenseVoice use your saved settings. Prompt and decoding controls apply to backfill only, not SUNET. Scribe reuses remote results and repeats local processing; local file-limit and force-transcription settings do not apply. Tick "Transcribe again with Scribe" to upload again.</span>
       </div>
     </div>
     <div id="uiNotice" role="alert" hidden></div>

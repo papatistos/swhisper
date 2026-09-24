@@ -58,7 +58,7 @@ from sidecar import (
     sidecar_requests_reprocess,
 )
 from webui_run import preview_run, ProgressTracker
-from run_scope import ENV_VAR as ONLY_FILES_ENV
+from run_scope import DIARIZATION_MODELS, ENV_VAR as ONLY_FILES_ENV, REPROCESS_ENV_VAR as REPROCESS_ENV
 import webui_durations
 import webui_speakers
 from env_settings import env_snapshot, parse_env, update_env
@@ -434,7 +434,7 @@ class AppState:
         elif finish:
             self._finish_run(finish[0], finish[1], offline=True)
 
-    def start(self, pipeline: str, only: Optional[List[str]] = None, plan=None) -> None:
+    def start(self, pipeline: str, only: Optional[List[str]] = None, plan=None, options=None) -> None:
         if pipeline not in PIPELINES:
             raise HTTPException(400, f"Unknown pipeline '{pipeline}'")
         with self.lock:
@@ -474,6 +474,15 @@ class AppState:
                 header += f" — {len(only)} selected file(s)"
             else:
                 env.pop(ONLY_FILES_ENV, None)
+            # Scribe receives its options through the reviewed plan instead.
+            options = options or {}
+            env.pop(REPROCESS_ENV, None)
+            if pipeline != 'scribe' and options.get('diarization_model'):
+                env['SWHISPER_PIPELINE_MODEL'] = DIARIZATION_MODELS[options['diarization_model']]
+                header += f" — diarization {options['diarization_model']}"
+            if pipeline != 'scribe' and options.get('reprocess'):
+                env[REPROCESS_ENV] = 'true'
+                header += " — reprocessing existing outputs"
             with open(run_log_path, "w", encoding="utf-8", buffering=1) as log_file:
                 log_file.write(header + "\n")
                 log_file.flush()
@@ -604,7 +613,9 @@ class AppState:
         if self.scribe_plan:
             entry['scribe'] = dict(language=self.scribe_plan['language'],
                                    files=[r['file'] for r in self.scribe_plan['files']],
-                                   work_dirs=[r['work_dir'] for r in self.scribe_plan['files']])
+                                   work_dirs=[r['work_dir'] for r in self.scribe_plan['files']],
+                                   diarization_model=self.scribe_plan.get('diarization_model', ''),
+                                   retranscribe=self.scribe_plan.get('retranscribe', False))
         entry["files_produced"] = self._collect_new_files(audio_dir, started_at)
         entry["file_count"] = len(entry["files_produced"])
         history_path = os.path.join(audio_dir, HISTORY_FILENAME)
@@ -1652,25 +1663,40 @@ def api_scribe_artifact(path: str):
 
 @app.get("/api/run/preview")
 def api_run_preview(pipeline: str, only: Optional[List[str]] = Query(None),
-                    selected: str = '', language: str = 'Swedish (verbatim)') -> Dict[str, Any]:
+                    selected: str = '', language: str = 'Swedish (verbatim)',
+                    diarization_model: str = '', reprocess: bool = False) -> Dict[str, Any]:
     if pipeline not in PIPELINES:
         raise HTTPException(400, "Unknown pipeline")
+    # Per-run options: '' keeps the saved SWHISPER_PIPELINE_MODEL.
+    if diarization_model and diarization_model not in DIARIZATION_MODELS:
+        raise HTTPException(400, "Unknown diarization model")
     # Scribe carries its own single-recording selection and language; the local
     # pipelines take a set of basenames from the ticked files in the list.
     if pipeline == 'scribe':
         from webui_scribe import preview_scribe
         try:
-            preview = preview_scribe(state.audio_dir(), selected, language)
+            preview = preview_scribe(state.audio_dir(), selected, language, diarization_model, reprocess)
         except (ValueError, OSError) as exc:
             raise HTTPException(400, str(exc)) from None
     else:
         audio_dir = state.audio_dir()
         preview = preview_run(audio_dir, pipeline, _tconfig.TranscriptionConfig(),
                               _dconfig.DiarizationConfig(),
-                              _validated_selection(audio_dir, only))
+                              _validated_selection(audio_dir, only), reprocess)
+        preview['diarization_model'] = diarization_model
     _, revision = env_snapshot(GLOBAL_ENV_PATH)
-    preview['token'] = hashlib.sha256((preview['token'] + revision).encode()).hexdigest()
+    options = json.dumps([diarization_model, reprocess])
+    preview['token'] = hashlib.sha256((preview['token'] + revision + options).encode()).hexdigest()
     return preview
+
+
+def _run_options(body: Dict[str, Any]) -> Dict[str, Any]:
+    model, reprocess = body.get('diarization_model', ''), body.get('reprocess', False)
+    if not isinstance(model, str) or model not in ('', *DIARIZATION_MODELS):
+        raise HTTPException(400, 'Unknown diarization model')
+    if not isinstance(reprocess, bool):
+        raise HTTPException(400, 'reprocess must be true or false')
+    return {'diarization_model': model, 'reprocess': reprocess}
 
 
 @app.post("/api/run")
@@ -1682,7 +1708,7 @@ def api_run(body: Dict[str, Any]) -> Dict[str, Any]:
         selected, language = body.get('selected', ''), body.get('language', 'Swedish (verbatim)')
         if not isinstance(selected, str) or not isinstance(language, str):
             raise HTTPException(400, 'Invalid Scribe selection or language')
-        preview = api_run_preview(pipeline, selected=selected, language=language)
+        preview = api_run_preview(pipeline, selected=selected, language=language, **_run_options(body))
         if preview['token'] != body['preview_token']:
             raise HTTPException(409, 'Folder or settings changed. Review a new run preview before starting.')
         # Reruns that reuse saved Scribe transcripts contact no remote service.
@@ -1698,11 +1724,12 @@ def api_run(body: Dict[str, Any]) -> Dict[str, Any]:
     # An empty list is an empty selection, never "run everything".
     if isinstance(only, list) and not only:
         raise HTTPException(400, "Select at least one file, or run the whole folder")
+    options = _run_options(body)
     if body.get("preview_token"):
-        preview = api_run_preview(pipeline, only)
+        preview = api_run_preview(pipeline, only, **options)
         if preview["token"] != body["preview_token"]:
             raise HTTPException(409, "Folder, selection or settings changed. Review a new run preview before starting.")
-    state.start(pipeline, sorted(_validated_selection(state.audio_dir(), only) or []) or None)
+    state.start(pipeline, sorted(_validated_selection(state.audio_dir(), only) or []) or None, options=options)
     return api_run_status()
 
 

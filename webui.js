@@ -518,6 +518,7 @@ function renderSettings(data, base, scope) {
 function filterSettings() {
   const scribe = $("pipelineSel").value === "scribe";
   $("scribeControls").hidden = !scribe;
+  $("runReprocessLabel").textContent = scribe ? "Transcribe again with Scribe" : "Reprocess existing outputs";
   if ($("settingsApplicability")) $("settingsApplicability").hidden = !scribe;
   const onlyDiarize = editorScope === "file" && $("pipelineSel").value === "diarize4" && !$("showOtherSettings")?.checked;
   document.querySelectorAll("#editor .row").forEach(row => {row.hidden = onlyDiarize && row.dataset.stage === "transcribe";});
@@ -1068,6 +1069,9 @@ async function startRun() {
     const query = new URLSearchParams({ pipeline });
     if (scribe) { query.set("selected", selected); query.set("language", $("scribeLanguage").value); }
     else for (const base of runScope()) query.append("only", base);
+    // Per-run options; the preview token covers them, so the run matches the review.
+    query.set("diarization_model", $("runModel").value);
+    query.set("reprocess", String($("runReprocess").checked));
     const { data } = await api(`/api/run/preview?${query}`);
     pendingPreview = data;
     const label = META.pipelines.find(p => p.id === pipeline).label;
@@ -1081,7 +1085,9 @@ async function startRun() {
     $("previewStart").textContent = remote ? "Upload to Scribe and run" : scribe ? "Rerun locally" : "Run folder";
     $("previewFolder").textContent = `${label} · ${data.audio_dir}`
       + (scribe && selected ? ` · ${selected}` : "")
-      + (data.only ? ` · ${data.only.length} selected file(s)` : "");
+      + (data.only ? ` · ${data.only.length} selected file(s)` : "")
+      + (data.diarization_model ? ` · diarization ${data.diarization_model}` : "")
+      + (data.reprocess || data.retranscribe ? ` · ${scribe ? "transcribe again" : "reprocess existing outputs"}` : "");
     const counts = {};
     for (const row of data.files) counts[row.action] = (counts[row.action] || 0) + 1;
     $("previewSummary").textContent = data.files.length
@@ -1117,7 +1123,9 @@ async function launchPreview() {
   runBusy = true; updateRunControls();
   $("previewStart").disabled = true; $("previewCancel").disabled = true;
   try {
-    const body = { pipeline: pendingPreview.pipeline, preview_token: pendingPreview.token };
+    const body = { pipeline: pendingPreview.pipeline, preview_token: pendingPreview.token,
+                   diarization_model: pendingPreview.diarization_model || "",
+                   reprocess: Boolean(pendingPreview.reprocess ?? pendingPreview.retranscribe) };
     if (pendingPreview.pipeline === "scribe") {
       if (pendingPreview.remote) {
         if (!$("scribeConsent").checked) { $("previewSummary").textContent = "Consent to the remote upload first, or cancel."; return; }

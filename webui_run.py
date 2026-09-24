@@ -11,7 +11,7 @@ from sidecar import (SIDECAR_PARAMS, STAGE_DIARIZE, STAGE_TRANSCRIBE,
 FORMATS = {'.wav', '.m4a', '.mp3', '.mov', '.mp4', '.flac', '.aac', '.ogg'}
 
 
-def preview_run(audio_dir, pipeline, tc, dc, only=None):
+def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False):
     """Mirror FileManager and diarize.process_file selection, without conversion.
 
     Stage two is conditional on stage one's outputs. Actual conversion/model
@@ -19,6 +19,7 @@ def preview_run(audio_dir, pipeline, tc, dc, only=None):
 
     *only* is a set of basenames the run is restricted to, or None for the
     whole folder; it mirrors what SWHISPER_ONLY_FILES does inside the pipeline.
+    *reprocess* mirrors SWHISPER_RUN_REPROCESS: redo existing outputs in this run.
     """
     audio = Path(audio_dir)
     json_dir = audio / tc.json_dir
@@ -41,6 +42,8 @@ def preview_run(audio_dir, pipeline, tc, dc, only=None):
             stamp(Path(sidecar))
         if not artifact.exists():
             return 'process', 'No existing output'
+        if reprocess:
+            return 'reprocess', 'Reprocessing requested for this run'
         if force:
             return 'reprocess', 'Force reprocessing enabled'
         redo, reason = sidecar_requests_reprocess(str(audio), base, str(artifact), stage)
@@ -103,7 +106,7 @@ def preview_run(audio_dir, pipeline, tc, dc, only=None):
     if len({r['base'] for r in rows if r['stage'] != 'Diarization'}) < len([r for r in rows if r['stage'] != 'Diarization']):
         notes.append('Multiple audio files share a basename and therefore share outputs; the pipeline may process that basename more than once.')
     result = dict(audio_dir=str(audio), pipeline=pipeline, files=rows, notes=notes,
-                  only=sorted(only) if only is not None else None)
+                  only=sorted(only) if only is not None else None, reprocess=reprocess)
     payload = json.dumps([result, evidence], sort_keys=True).encode()
     result['token'] = hashlib.sha256(payload).hexdigest()
     return result
