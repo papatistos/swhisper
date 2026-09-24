@@ -215,6 +215,14 @@ SWHISPER_PIPELINE_MODEL=nvidia/Nemotron-3-Diarization
 
 swhisper finds the `nemo` environment next to the `swhisper` environment. If your environment lives elsewhere, set `SWHISPER_NEMOTRON_PYTHON` to its `python` binary. `ffmpeg` must be on the `PATH`.
 
+To use Nemotron for one run only, leave `.swhisper.env` as it is:
+
+- In the web UI, choose "Diarization: Nemotron 3" next to the pipeline selector.
+- On the command line, set the variable for that command, for example `SWHISPER_PIPELINE_MODEL=nvidia/Nemotron-3-Diarization python diarize4.py`.
+- For Scribe, use `python transcribe_scribe.py recording.m4a --diarization-model nemotron`.
+
+Recordings that already have output are skipped, so a new model changes nothing for them unless the run reprocesses them. Tick "Reprocess existing outputs" in the web UI, or set `SWHISPER_RUN_REPROCESS=true` for the command. This applies to one run only and overrides per-recording reprocess settings. For Scribe the checkbox reads "Transcribe again with Scribe" and matches `--retranscribe`: it uploads the recording again, asks for upload consent, and moves the previous SUNET transcript to `superseded/` in the recording's Scribe folder. Without it, a Scribe run reuses the saved SUNET transcript and needs no credentials.
+
 Nemotron honours `SWHISPER_MAX_SPEAKERS`. It keeps the most active speakers and gives the speech of the others to whichever kept speaker the model finds most likely. It ignores `SWHISPER_MIN_SPEAKERS`, and the pyannote tuning settings (`SWHISPER_VBX_*`, `SWHISPER_CLUSTERING_*`, …) do not apply to it.
 
 ### Configuration priority
