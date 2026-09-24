@@ -737,6 +737,58 @@ try {
     await reopen();await select('a');await wait('editorBase==="a" && !$("reviewAudio").disabled');
     assert.deepEqual(await evaluate('[ $("audioPlayer").volume,$("audioPlayer").muted,$("audioPlayer").playbackRate,$("compareAudio").volume,$("compareAudio").playbackRate ]'),[0.4,true,1.5,0.6,0.75]);
   });
+  const reloadPage = async () => {
+    await evaluate('window.__beforeReload=true');
+    await cdp('Page.reload');
+    await wait('!window.__beforeReload && typeof initialized !== "undefined" && initialized && connected');
+  };
+  await check('Tab persistence: file shortcuts and global settings survive reload',async()=>{
+    await evaluate('$("fileSearch").value="";$("fileFilter").value="all";renderFiles()');
+    await select('a');await wait('editorBase==="a"');
+    for (const [selector,tab] of [['.tbadge','transcript'],['.lbadge','logs'],['.jbadge','transcript']]) {
+      await click('tabSettings');
+      await evaluate(`document.querySelector('[data-base="a"] ${selector}').click()`);
+      await wait(`currentTab===${JSON.stringify(tab)}`);
+      assert.equal(await evaluate('JSON.parse(localStorage.getItem("swhisper_ui_preferences")).activeTab'),tab);
+      await reloadPage();
+      assert.equal(await evaluate('currentTab'),tab);
+      await select('a');await wait('editorBase==="a"');
+    }
+    await click('globalSettingsBtn');await wait('editorScope==="global" && !editorLoading');
+    await reloadPage();
+    assert.equal(await evaluate('currentTab'),'settings');
+  });
+  await check('Tab persistence: every tab button and keyboard navigation survive reload',async()=>{
+    for (const [button,tab] of [['tabCompare','compare'],['tabLogs','logs'],['tabTranscript','transcript'],['tabSettings','settings']]) {
+      await click(button);await reloadPage();
+      assert.equal(await evaluate('currentTab'),tab);
+      assert.equal(await evaluate(`$(${JSON.stringify(button)}).getAttribute('aria-selected')`),'true');
+    }
+    await evaluate('$("tabSettings").focus()');await key('ArrowRight','ArrowRight');
+    await reloadPage();assert.equal(await evaluate('currentTab'),'transcript');
+  });
+  await check('Tab persistence: unrelated writes keep the latest tab saved by another window',async()=>{
+    await click('tabSettings');
+    // Simulate another window choosing Comparison while this document still has Settings in memory.
+    await evaluate('localStorage.setItem(UI_STORAGE_KEY, JSON.stringify({...readUIPreferences(),activeTab:"compare"}));saveUIPreference("fileSort","name")');
+    await reloadPage();
+    assert.equal(await evaluate('currentTab'),'compare');
+  });
+  await check('Tab persistence: the saved view restores while the server is unavailable',async()=>{
+    await click('tabCompare');
+    await cdp('Network.enable');
+    await cdp('Network.setBlockedURLs',{urls:['*/api/meta*']});
+    try {
+      await evaluate('window.__beforeReload=true');
+      await cdp('Page.reload');
+      await wait('!window.__beforeReload && typeof currentTab !== "undefined" && document.querySelector("#tabCompare").getAttribute("aria-selected")==="true"');
+      assert.equal(await evaluate('currentTab'),'compare');
+      assert.equal(await evaluate('initialized'),false);
+    } finally {
+      await cdp('Network.setBlockedURLs',{urls:[]});
+      await evaluate('pollLoop()');await wait('initialized && connected');
+    }
+  });
   assert.deepEqual(errors,[],'No uncaught browser errors');
   console.log('All browser workflow checks passed.');
 } finally {

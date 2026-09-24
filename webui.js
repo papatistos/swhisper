@@ -12,6 +12,8 @@ function readUIPreferences() {
   } catch { return {}; }
 }
 function saveUIPreference(key, value) {
+  // Another window may have saved a newer choice for a different control.
+  Object.assign(uiPreferences, readUIPreferences());
   uiPreferences[key] = value;
   try { localStorage.setItem(UI_STORAGE_KEY, JSON.stringify(uiPreferences)); } catch {}
 }
@@ -240,7 +242,7 @@ async function changeDir() {
     logOffset = 0;
     await loadMeta();
     await loadFiles();
-    showTab(currentTab);
+    showTab(currentTab, false);
   } catch (e) { reportError(e); $("dirInput").value = META?.audio_dir || ""; }
   finally { changingDir = false; updateRunControls(); }
 }
@@ -663,7 +665,7 @@ async function selectFile(base, force = false) {
   $("deleteBtn").disabled = true;
   updateSaveState(); updateRunControls();
   updateScribeGate();
-  showTab(currentTab);
+  showTab(currentTab, false);
   document.querySelectorAll("#files .file").forEach(d => {
     d.classList.toggle("sel", d.dataset.base === base);
     d.querySelector(".fileSelect")?.setAttribute("aria-pressed", String(d.dataset.base === base));
@@ -694,7 +696,7 @@ function setMsg(text, cls) {
 
 /* ---------- transcript view ---------- */
 
-function showTab(tab, remember = false) {
+function showTab(tab, remember = true) {
   if (remember) saveUIPreference("activeTab", tab);
   currentTab = tab;
   for (const [id, name] of [["tabSettings", "settings"], ["tabTranscript", "transcript"], ["tabCompare", "compare"], ["tabLogs", "logs"]]) {
@@ -1615,7 +1617,6 @@ async function pollRun() {
   try {
     if (!initialized) {
       await loadMeta(); await loadFiles(); initialized = true;
-      if (["settings", "transcript", "compare", "logs"].includes(uiPreferences.activeTab)) showTab(uiPreferences.activeTab);
     }
     const seq = ++statusSeq;
     const st = (await api("/api/run/status")).data;
@@ -1921,6 +1922,8 @@ try{const width=Number(localStorage.getItem("swhisper_sidebar_width"));if(width)
 initFontSize();
 initConsole();
 initConsoleResize();
+// Restore the view before waiting for metadata or the first status poll.
+if (["settings", "transcript", "compare", "logs"].includes(uiPreferences.activeTab)) showTab(uiPreferences.activeTab, false);
 function pollDelay() {
   if (document.visibilityState === "hidden") return 20000;
   return lastStatus?.running ? 1000 : 2500;
