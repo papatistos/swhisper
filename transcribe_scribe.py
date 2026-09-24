@@ -21,6 +21,8 @@ DIARIZATION_MODELS = {
     "community-1": "pyannote/speaker-diarization-community-1",
     "nemotron": "nvidia/Nemotron-3-Diarization",
 }
+# State of the finished remote job; a retranscription starts a new one.
+REMOTE_JOB_KEYS = ("job_id", "upload_started", "queue_started", "adopted_job", "output_sha256")
 
 
 def sha256(path):
@@ -159,6 +161,20 @@ def run(args):
         run_locked(args, source, work_dir)
 
 
+def supersede_remote_result(work_dir, state, state_path, output_path):
+    """Move the saved SUNET result aside and clear the finished job, so the next step uploads again."""
+    target = work_dir / "superseded" / datetime.now().strftime("%Y%m%d-%H%M%S")
+    target.mkdir(parents=True)
+    atomic_json(target / "scribe-state.json", state)
+    for path in (output_path, work_dir / "scribe-transcript.json", work_dir / "scribe-words.json"):
+        if path.exists():
+            path.rename(target / path.name)
+    for key in REMOTE_JOB_KEYS:
+        state.pop(key, None)
+    atomic_json(state_path, state)
+    print(f"Retranscribing: previous Scribe transcript moved to {target}", flush=True)
+
+
 def run_locked(args, source, work_dir):
     identity = {"source": str(source), "sha256": sha256(source), "language": args.language,
                 "base_url": args.base_url.rstrip("/"), "adapter_version": 1,
@@ -214,6 +230,11 @@ def run_locked(args, source, work_dir):
                 state['local_pcm_sha256'] = audio_checksum
                 atomic_json(state_path, state)
 
+    if getattr(args, "retranscribe", False):
+        if output_path.exists():
+            supersede_remote_result(work_dir, state, state_path, output_path)
+        elif state.get("job_id") or state.get("upload_started"):
+            raise ScribeError("A Scribe job for this recording has not finished. Run without --retranscribe to resume it.")
     if output_path.exists():
         if sha256(output_path) != state.get("output_sha256"):
             raise ScribeError(
@@ -274,11 +295,15 @@ def main(argv=None):
                         help="Get tokens from BrowserOS Neo (default), or use an environment token")
     parser.add_argument("--diarization-model", choices=sorted(DIARIZATION_MODELS),
                         help="Local diarization model for this run (default: SWHISPER_PIPELINE_MODEL, else community-1)")
+    parser.add_argument("--retranscribe", action="store_true",
+                        help="Upload again for a new SUNET transcript; the saved one moves to superseded/")
     parser.add_argument("--job-id", help="Adopt an existing job for this exact audio and language; verify these in Scribe")
     parser.add_argument("--base-url", default="https://scribe.sunet.se", help="Scribe HTTPS origin")
     parser.add_argument("--poll-interval", type=float, default=10)
     parser.add_argument("--wait-seconds", type=float, default=86400)
     args = parser.parse_args(argv)
+    if args.retranscribe and args.job_id:
+        parser.error("--retranscribe starts a new job and cannot be combined with --job-id")
     try:
         run(args)
     except (ScribeError, OSError, ValueError) as exc:

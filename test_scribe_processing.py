@@ -214,3 +214,43 @@ def test_diarization_model_option_selects_nemotron_for_one_run(tmp_path):
     record = json.loads(next((work / 'local-runs').glob('*.json')).read_text())
     assert record['settings']['pipeline_model'] == 'nvidia/Nemotron-3-Diarization'
 
+
+def test_retranscribe_uploads_again_and_keeps_the_previous_transcript(tmp_path):
+    source, annotation, calls, remote = _scribe_fixture(tmp_path)
+    work = tmp_path / 'run'
+    argv = [str(source), '--work-dir', str(work), '--auth', 'env']
+    with patch.dict('os.environ', {'SUNET_SCRIBE_API_KEY': 'k', 'SUNET_SCRIBE_ENCRYPT_PWD': 'p'}), \
+            patch.object(transcribe_scribe, 'prepare_audio', side_effect=lambda src, dst: dst.write_bytes(b'staged')), \
+            patch.object(ScribeClient, 'transcribe', autospec=True, side_effect=remote), \
+            patch('diarize4.ensure_pyannote_v4'), \
+            patch.object(DiarizationPipeline, 'diarize', return_value=annotation):
+        assert transcribe_scribe.main(argv) == 0
+        assert transcribe_scribe.main(argv) == 0
+        assert len(calls) == 1  # a plain rerun reuses the saved transcript
+        first = (work / 'whisper-json-output/audio.json').read_text()
+        assert transcribe_scribe.main(argv + ['--retranscribe']) == 0
+        assert len(calls) == 2
+    superseded = list((work / 'superseded').iterdir())
+    assert len(superseded) == 1
+    assert (superseded[0] / 'audio.json').read_text() == first
+    assert json.loads((superseded[0] / 'scribe-state.json').read_text())['job_id'] == 'job-1'
+    state = json.loads((work / 'scribe-state.json').read_text())
+    assert state['job_id'] == 'job-2'
+    assert 'Hej2' in (work / 'whisper-json-output/audio.json').read_text()
+
+
+def test_retranscribe_refuses_an_unfinished_job_and_job_adoption(tmp_path):
+    import pytest
+
+    source, _, _, _ = _scribe_fixture(tmp_path)
+    work = tmp_path / 'run'
+    work.mkdir()
+    (work / 'audio.wav').write_bytes(b'staged')
+    identity = {'source': str(source), 'sha256': transcribe_scribe.sha256(source), 'language': 'Swedish (verbatim)',
+                'base_url': 'https://scribe.sunet.se', 'adapter_version': 1, 'audio_format': 'pcm_s16le/16000/mono'}
+    (work / 'scribe-state.json').write_text(json.dumps({
+        'identity': identity, 'job_id': 'pending-job', 'wav_sha256': transcribe_scribe.sha256(work / 'audio.wav')}))
+    assert transcribe_scribe.main([str(source), '--work-dir', str(work), '--auth', 'env', '--retranscribe']) == 1
+    assert json.loads((work / 'scribe-state.json').read_text())['job_id'] == 'pending-job'
+    with pytest.raises(SystemExit):
+        transcribe_scribe.main([str(source), '--work-dir', str(work), '--retranscribe', '--job-id', 'x'])
