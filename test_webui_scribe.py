@@ -149,6 +149,31 @@ sys.exit(webui_scribe.main())
             self.assertTrue(any('scribe-state.json' in f for f in history['files_produced']))
             self.assertEqual((self.root / 'a.wav').read_bytes(), b'original')
 
+    def test_preview_works_from_a_server_thread_in_a_fresh_process(self):
+        # The web server runs requests in worker threads. Importing the diarize
+        # package there installs signal handlers and fails, so the preview must
+        # not import it. A fresh process keeps earlier tests from masking this.
+        import subprocess
+        import sys
+        script = f'''import sys, threading
+sys.path.insert(0, {str(webui.PROJECT_ROOT)!r})
+from webui_scribe import preview_scribe
+result = {{}}
+def run():
+    try:
+        result['files'] = [r['file'] for r in preview_scribe({str(self.root)!r}, 'a')['files']]
+    except Exception as exc:
+        result['error'] = repr(exc)
+thread = threading.Thread(target=run)
+thread.start()
+thread.join()
+print(result)
+assert result.get('files') == ['a.wav'], result
+assert 'diarize.utils' not in sys.modules
+'''
+        completed = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, timeout=120)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
     def test_launch_requires_remote_consent_and_fresh_preview(self):
         preview = webui.api_run_preview('scribe', selected='a')
         with patch.object(self.state, 'start') as start:

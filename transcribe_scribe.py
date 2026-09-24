@@ -72,7 +72,6 @@ def restore_working_audio(source, wav_path, state, state_path):
 def local_diarization(source, work_dir, json_name):
     # Imports delayed until after remote transcription. Local Whisper loads only if backfill needs it.
     from diarize import DiarizationConfig
-    from diarize.config import is_nemotron_model
     from diarize4 import ensure_pyannote_v4, resolve_pyannote_token
 
     # Legacy path environment variables must not redirect this isolated run.
@@ -115,7 +114,7 @@ def local_diarization(source, work_dir, json_name):
     record = dict(config.processing_metadata, status="running", started_at=datetime.now(timezone.utc).isoformat())
     record_path = work_dir / "local-runs" / (uuid.uuid4().hex + ".json")
     atomic_json(record_path, record)
-    model = 'Nemotron' if is_nemotron_model(config.pipeline_model) else 'community-1'
+    model = 'Nemotron' if config.uses_nemotron else 'community-1'
     print(f"Local {model} diarization; local Whisper backfill {'on' if config.backfill_missing_turns else 'off'}; "
           f"SenseVoice {'on (backfill snippets only)' if config.backfill_enable_sensevoice else 'off'}; "
           f"timestamp offset {config.whisper_timestamp_offset:g} seconds.", flush=True)

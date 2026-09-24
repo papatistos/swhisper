@@ -39,11 +39,9 @@ def capability(key):
 
 def configure(config, source, work_dir):
     """Apply the source sidecar once, then enforce isolated local processing."""
-    from diarize.config import is_nemotron_model  # deferred: importing diarize loads the models' dependencies
-
     source, work_dir = Path(source), Path(work_dir)
     config, _ = apply_sidecar_to_diarization_config(config, str(source.parent), source.stem)
-    if not is_nemotron_model(config.pipeline_model):
+    if not config.uses_nemotron:
         config.pipeline_model = 'pyannote/speaker-diarization-community-1'
     config.use_precision_service = False
     config.whisper_timestamp_offset = config.scribe_timestamp_offset

@@ -282,9 +282,14 @@ Note 3: Speaker detection is not perfect. The transcript may show too few or too
             base_dir = os.path.join(self.final_log_dir, "backfill_cache")
         return base_dir
     
+    @property
+    def uses_nemotron(self) -> bool:
+        """True when the pipeline model is Nemotron 3 Diarization."""
+        return is_nemotron_model(self.pipeline_model)
+
     def get_pipeline_config(self) -> Dict:
         """Get pipeline configuration dictionary."""
-        if is_nemotron_model(self.pipeline_model):
+        if self.uses_nemotron:
             return {
                 "nemotron_threshold": self.nemotron_threshold,
                 "nemotron_min_duration_on": self.nemotron_min_duration_on,
