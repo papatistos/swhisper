@@ -654,6 +654,40 @@ try {
     await reopen();
     assert.deepEqual(await evaluate('renderOptions()'),await evaluate('({...RENDER_DEFAULTS,stats:false})'));
   });
+  await check('Run preferences survive metadata refresh and a fresh session',async()=>{
+    for (const [id,value] of [['pipelineSel','scribe'],['runModel','nemotron'],['scribeScope','folder'],['scribeLanguage','Swedish']]) {
+      await evaluate(`$(${JSON.stringify(id)}).value=${JSON.stringify(value)};$(${JSON.stringify(id)}).dispatchEvent(new Event('change'))`);
+    }
+    if (!await evaluate('$("runReprocess").checked')) await click('runReprocess');
+    await evaluate('loadMeta()');
+    assert.equal(await evaluate('$("pipelineSel").value'),'scribe');
+    await reopen();
+    assert.deepEqual(await evaluate('["pipelineSel","runModel","scribeScope","scribeLanguage"].map(id=>$(id).value)'),['scribe','nemotron','folder','Swedish']);
+    assert.equal(await evaluate('$("runReprocess").checked'),true);
+    assert.equal(await evaluate('$("scribeControls").hidden'),false);
+    assert.equal(await evaluate('$("startBtn").disabled'),false,'Restored folder scope can run without selecting a recording');
+    await click('startBtn');await wait('$("previewDialog").open');
+    assert.equal(await evaluate('pendingPreview.diarization_model'),'nemotron');
+    assert.equal(await evaluate('pendingPreview.reprocess'),true);
+    assert.equal(await evaluate('$("scribeConsent").checked'),false,'Upload consent still belongs to each individual run');
+    await click('previewCancel');
+  });
+  await check('An attached run does not replace the preferred pipeline',async()=>{
+    status={...status,running:true,pipeline:'transcribe4',run_id:'other-window',started_at:Date.now()/1000};
+    await reopen();
+    assert.equal(await evaluate('$("pipelineSel").value'),'transcribe4');
+    assert.equal(await evaluate('$("pipelineSel").disabled'),true);
+    assert.equal(await evaluate('JSON.parse(localStorage.getItem("swhisper_ui_preferences")).pipelineSel'),'scribe');
+    status={...status,running:false,returncode:0};
+    await evaluate('pollRun()');
+    assert.equal(await evaluate('$("pipelineSel").value'),'scribe');
+    assert.equal(await evaluate('$("pipelineSel").disabled'),false);
+    await evaluate('localStorage.setItem("swhisper_ui_preferences", JSON.stringify({pipelineSel:"removed-pipeline",runModel:"removed-model",runReprocess:"false"}))');
+    await reopen();
+    assert.equal(await evaluate('$("pipelineSel").value'),'transcribe4');
+    assert.equal(await evaluate('$("runModel").value'),'');
+    assert.equal(await evaluate('$("runReprocess").checked'),false);
+  });
   assert.deepEqual(errors,[],'No uncaught browser errors');
   console.log('All browser workflow checks passed.');
 } finally {

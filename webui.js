@@ -1,6 +1,35 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const RAW_JSON_VERSION = "__raw_json__";
+const UI_STORAGE_KEY = "swhisper_ui_preferences";
+const uiPreferences = readUIPreferences();
+let showingActivePipeline = false;
+
+function readUIPreferences() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(UI_STORAGE_KEY));
+    return saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
+  } catch { return {}; }
+}
+function saveUIPreference(key, value) {
+  uiPreferences[key] = value;
+  try { localStorage.setItem(UI_STORAGE_KEY, JSON.stringify(uiPreferences)); } catch {}
+}
+function restoreControlPreference(id) {
+  const el = $(id), value = uiPreferences[id];
+  if (!el) return;
+  if (el.type === "checkbox") {
+    if (typeof value === "boolean") el.checked = value;
+  } else if (typeof value === "string" &&
+      (!el.options || [...el.options].some(option => option.value === value))) el.value = value;
+}
+function rememberControl(id) {
+  const el = $(id);
+  restoreControlPreference(id);
+  el.addEventListener(el.type === "search" ? "input" : "change", () => {
+    saveUIPreference(id, el.type === "checkbox" ? el.checked : el.value);
+  });
+}
 let META = null;
 let FILES_BY_BASE = {};
 let currentBase = null;
@@ -76,6 +105,12 @@ function runScope() {
 function updateRunControls() {
   const running = !!(lastStatus && lastStatus.running);
   const pipeline = $("pipelineSel");
+  if (!running && showingActivePipeline) {
+    restoreControlPreference("pipelineSel");
+    showingActivePipeline = false;
+    filterSettings();
+  }
+  if (running) showingActivePipeline = true;
   // A reload or another tab can attach to a run with a different pipeline.
   // Show the server's active pipeline before locking the selector.
   if (running && pipeline.value !== lastStatus.pipeline &&
@@ -144,6 +179,8 @@ async function loadMeta() {
     sel.appendChild(o);
   }
   if ([...sel.options].some(o => o.value === previous)) sel.value = previous;
+  else restoreControlPreference("pipelineSel");
+  filterSettings();
 }
 
 async function changeDir() {
@@ -1815,7 +1852,9 @@ $("consoleResize").addEventListener("keydown", e => {
   setConsoleHeight($("consolePanel").getBoundingClientRect().height + (e.key === "ArrowUp" ? 20 : -20), true);
 });
 $("globalSettingsBtn").onclick=handle(openGlobalSettings);
-$("pipelineSel").addEventListener("change", filterSettings);
+for (const id of ["pipelineSel", "runModel", "runReprocess", "scribeScope", "scribeLanguage"]) rememberControl(id);
+$("pipelineSel").addEventListener("change", () => { filterSettings(); updateRunControls(); });
+$("scribeScope").addEventListener("change", updateRunControls);
 for(const id of ["fileSearch","fileFilter","fileSort"]) $(id).addEventListener(id==="fileSearch"?"input":"change",renderFiles);
 $("exportConfirm").onclick=handle(confirmExport);
 $("exportCancel").onclick=()=>{$("exportDialog").close();exportContext=null;};
