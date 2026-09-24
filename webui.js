@@ -763,6 +763,16 @@ async function openSpeakerNames() {
     field.value = data.names[label] || ""; field.placeholder = label; field.maxLength = 60;
     return [caption, field];
   }));
+  // Old recording-wide names are only offered: the person decides whether they fit this run.
+  const unassigned = Object.entries(data.unassigned || {});
+  $("speakerUnassigned").hidden = !unassigned.length;
+  $("speakerUnassignedList").textContent = unassigned.map(([label, name]) => `${label} = ${name}`).join(", ");
+  $("speakerUseUnassigned").onclick = () => {
+    for (const [label, name] of unassigned) {
+      const field = $("speakerRows").querySelector(`input[data-label="${CSS.escape(label)}"]`);
+      if (field) field.value = name;
+    }
+  };
   $("speakerDialog").showModal();
 }
 

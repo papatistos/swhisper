@@ -1088,7 +1088,7 @@ def api_transcript(basename: str, version: Optional[str] = None) -> Dict[str, An
         "stats_available": bool(transcript_stats.find_analysis_json(path)),
         # Only transcripts with a diarized JSON beside them can be re-rendered.
         "can_render": _diarized_json_for(dirs, selected["id"]) is not None,
-        "speaker_names": webui_speakers.names_for(dirs["audio"], base),
+        "speaker_names": _speaker_names(dirs, selected["id"]),
     }
 
 
@@ -1193,7 +1193,7 @@ def _render(basename: str, body: Dict[str, Any]):
     # Speaker names are a display mapping over the stored run, applied here so
     # the view, the review list and every export agree on who is speaking.
     detected = webui_speakers.detected_in(data.get("segments") or [])
-    names = webui_speakers.names_for(dirs["audio"], base)
+    names = webui_speakers.names_for(dirs["audio"], webui_speakers.transcript_key(dirs["audio"], json_path))
     metadata = dict(metadata)
     segments, metadata["speaker_stats"] = webui_speakers.apply(
         segments, names, metadata.get("speaker_stats"))
@@ -1446,13 +1446,20 @@ def api_timeline(basename: str, version: Optional[str] = None):
         return {'segments': [], 'audio': str(_audio_file(base).name)}
     data = json.loads(Path(path).read_text(encoding='utf-8'))
     raw = data.get('segments', [])
-    named, _ = webui_speakers.apply(raw, webui_speakers.names_for(dirs['audio'], base))
+    names = webui_speakers.names_for(dirs['audio'], webui_speakers.transcript_key(dirs['audio'], path))
+    named, _ = webui_speakers.apply(raw, names)
     return {'segments': _timeline_segments(named), 'audio': _audio_file(base).name,
-            'speakers': {'detected': webui_speakers.detected_in(raw),
-                         'names': webui_speakers.names_for(dirs['audio'], base)}}
+            'speakers': {'detected': webui_speakers.detected_in(raw), 'names': names}}
 
 
-def _detected_speakers(dirs: Dict[str, str], base: str, version: Optional[str]) -> List[str]:
+def _speaker_names(dirs: Dict[str, str], version_id: str) -> Dict[str, str]:
+    """Names entered for the diarization run behind one transcript version."""
+    json_path = _diarized_json_for(dirs, version_id)
+    return webui_speakers.names_for(dirs["audio"], json_path and webui_speakers.transcript_key(dirs["audio"], json_path))
+
+
+def _detected_speakers(dirs: Dict[str, str], base: str, version: Optional[str]):
+    """Speaker labels of one transcript version, and the key its names are stored under."""
     selected = _selected_version(dirs, base, version)
     json_path = _diarized_json_for(dirs, selected["id"])
     if json_path is None:
@@ -1462,31 +1469,33 @@ def _detected_speakers(dirs: Dict[str, str], base: str, version: Optional[str]) 
             data = json.load(handle)
     except (OSError, json.JSONDecodeError) as exc:
         raise HTTPException(500, f"Could not read diarized JSON: {exc}")
-    return webui_speakers.detected_in(data.get("segments") or [])
+    return webui_speakers.detected_in(data.get("segments") or []), webui_speakers.transcript_key(dirs["audio"], json_path)
 
 
 @app.get("/api/speakers/{basename}")
 def api_get_speakers(basename: str, version: Optional[str] = None) -> Dict[str, Any]:
     dirs = state.dirs()
     base = _safe_base(dirs["audio"], basename)
-    return {"base": base, "detected": _detected_speakers(dirs, base, version),
-            "names": webui_speakers.names_for(dirs["audio"], base)}
+    detected, transcript = _detected_speakers(dirs, base, version)
+    return {"base": base, "detected": detected, "transcript": transcript,
+            "names": webui_speakers.names_for(dirs["audio"], transcript),
+            "unassigned": webui_speakers.unassigned_for(dirs["audio"], base)}
 
 
 @app.put("/api/speakers/{basename}")
 def api_put_speakers(basename: str, body: Dict[str, Any]) -> Dict[str, Any]:
     dirs = state.dirs()
     base = _safe_base(dirs["audio"], basename)
-    detected = _detected_speakers(dirs, base, body.get("version"))
+    detected, transcript = _detected_speakers(dirs, base, body.get("version"))
     try:
         cleaned = webui_speakers.validate(body.get("names"), detected)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     try:
-        saved = webui_speakers.save_for(dirs["audio"], base, cleaned)
+        saved = webui_speakers.save_for(dirs["audio"], transcript, base, cleaned)
     except OSError as exc:
         raise HTTPException(500, f"Could not save speaker names: {exc}")
-    return {"base": base, "detected": detected, "names": saved}
+    return {"base": base, "detected": detected, "transcript": transcript, "names": saved}
 
 
 @app.get("/api/json-transcript/{basename}")

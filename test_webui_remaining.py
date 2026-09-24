@@ -218,6 +218,36 @@ class RemainingTests(unittest.TestCase):
         self.assertEqual(original.read_text(), "Original transcript")
         self.assertEqual(self.client.put("/api/speakers/a", json={"names": {"S01": ""}}).json()["names"], {})
 
+    def test_speaker_names_belong_to_the_transcript_they_were_entered_for(self):
+        self.transcript()
+        first = 'transcripts/txt/a_20260913-120000.txt'
+        self.client.put("/api/speakers/a", json={"names": {"S01": "Interviewer"}, "version": first})
+        # A new diarization run numbers its speakers anew and starts without names.
+        self.write('transcripts/txt/a_20260924-110000.txt', 'Rerun transcript')
+        self.write('transcripts/json/a_20260924-110000_diarized.json', json.dumps({'segments': [
+            {'start': 1.0, 'end': 3.0, 'speaker': 'S01', 'text': 'Hello', 'words': []}]}))
+        second = 'transcripts/txt/a_20260924-110000.txt'
+        self.assertEqual(self.client.get("/api/transcript/a", params={"version": second}).json()["speaker_names"], {})
+        self.assertEqual(self.client.get("/api/speakers/a", params={"version": second}).json()["names"], {})
+        rendered = self.client.post("/api/render/a", json={"version": second, "options": {}}).json()
+        self.assertNotIn("Interviewer", rendered["content"])
+        self.assertEqual(self.client.get("/api/transcript/a", params={"version": first}).json()["speaker_names"],
+                         {"S01": "Interviewer"})
+        stored = json.loads((self.root / 'speaker-names.json').read_text())
+        self.assertEqual(stored["transcripts"], {'transcripts/json/a_20260913-120000_diarized.json': {"S01": "Interviewer"}})
+
+    def test_recording_wide_names_from_the_old_format_are_offered_not_applied(self):
+        self.transcript()
+        self.write('speaker-names.json', json.dumps({"a": {"S01": "Christoph"}}))
+        self.assertEqual(self.client.get("/api/transcript/a").json()["speaker_names"], {})
+        self.assertNotIn("Christoph", self.client.post("/api/render/a", json={"options": {}}).json()["content"])
+        offered = self.client.get("/api/speakers/a").json()
+        self.assertEqual((offered["names"], offered["unassigned"]), ({}, {"S01": "Christoph"}))
+        # Saving names for a transcript settles them; they are not offered again.
+        self.client.put("/api/speakers/a", json={"names": {"S01": "Christoph"}})
+        offered = self.client.get("/api/speakers/a").json()
+        self.assertEqual((offered["names"], offered["unassigned"]), ({"S01": "Christoph"}, {}))
+
     def test_reveal_stays_inside_the_audio_folder(self):
         self.transcript()
         calls = []

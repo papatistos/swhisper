@@ -155,7 +155,11 @@
 
 <dialog id="speakerDialog" aria-labelledby="speakerTitle">
   <h2 id="speakerTitle">Speaker names</h2>
-  <p class="settingsNote">Names are shown in the transcript view, the timestamped review list and exports. Transcripts the pipeline produced are left unchanged. Leave a name empty to keep the original label.</p>
+  <p class="settingsNote">Names belong to this transcript version only, because every diarization run numbers its speakers anew. They are shown in the transcript view, the timestamped review list and exports. Transcripts the pipeline produced are left unchanged. Leave a name empty to keep the original label.</p>
+  <div id="speakerUnassigned" class="settingsNote" hidden>
+    <p>Names saved for this recording before names were tied to a transcript: <span id="speakerUnassignedList"></span>. They may belong to a different diarization run. Check that the labels match before you use them; they are removed once you save names for any transcript of this recording.</p>
+    <button id="speakerUseUnassigned" type="button">Fill in these names</button>
+  </div>
   <div id="speakerRows"></div>
   <p id="speakerMsg" role="status"></p>
   <div class="dialogActions"><button id="speakerCancel" autofocus>Cancel</button><button id="speakerSave" class="primary">Save names</button></div>

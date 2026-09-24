@@ -1,4 +1,4 @@
-"""Per-file speaker names, applied when a transcript is rendered.
+"""Per-transcript speaker names, applied when a transcript is rendered.
 
 Diarization names speakers ``SPEAKER_00`` and so on. A recording is far easier
 to read and to quote once those labels carry the names of the people talking.
@@ -25,31 +25,64 @@ def _path(audio_dir: str) -> str:
     return os.path.join(audio_dir, NAMES_FILENAME)
 
 
-def load_all(audio_dir: str) -> Dict[str, Dict[str, str]]:
-    try:
-        with open(_path(audio_dir), encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (OSError, json.JSONDecodeError):
+def _mappings(value: Any) -> Dict[str, Dict[str, str]]:
+    if not isinstance(value, dict):
         return {}
-    if not isinstance(data, dict):
-        return {}
-    return {base: names for base, names in data.items()
+    return {key: names for key, names in value.items()
             if isinstance(names, dict)
             and all(isinstance(k, str) and isinstance(v, str) for k, v in names.items())}
 
 
-def names_for(audio_dir: str, base: str) -> Dict[str, str]:
-    return dict(load_all(audio_dir).get(base) or {})
+def load_all(audio_dir: str) -> Dict[str, Dict[str, Dict[str, str]]]:
+    """Names per transcript, plus names saved before they were tied to one.
+
+    Each diarization run numbers its speakers anew, so a name belongs to the
+    run it was entered for. ``transcripts`` maps that run's diarized JSON (path
+    relative to the audio folder) to its names. ``unassigned`` holds the
+    per-recording names of the earlier file format: nobody recorded which run
+    they were meant for, so they are offered in the naming dialog but never
+    applied to a transcript.
+    """
+    try:
+        with open(_path(audio_dir), encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    if "transcripts" not in data:
+        return {"transcripts": {}, "unassigned": _mappings(data)}
+    return {"transcripts": _mappings(data.get("transcripts")),
+            "unassigned": _mappings(data.get("unassigned"))}
 
 
-def save_for(audio_dir: str, base: str, names: Dict[str, str]) -> Dict[str, str]:
-    """Store the mapping for *base*, dropping labels mapped to a blank name."""
+def transcript_key(audio_dir: str, diarized_json: str) -> str:
+    """The key that ties names to one diarization run."""
+    return os.path.relpath(diarized_json, audio_dir)
+
+
+def names_for(audio_dir: str, transcript: Optional[str]) -> Dict[str, str]:
+    if not transcript:
+        return {}
+    return dict(load_all(audio_dir)["transcripts"].get(transcript) or {})
+
+
+def unassigned_for(audio_dir: str, base: str) -> Dict[str, str]:
+    return dict(load_all(audio_dir)["unassigned"].get(base) or {})
+
+
+def save_for(audio_dir: str, transcript: str, base: str, names: Dict[str, str]) -> Dict[str, str]:
+    """Store the names for one transcript, dropping labels mapped to a blank name.
+
+    Saving names for any transcript of *base* settles its unassigned names.
+    """
     cleaned = {label: name.strip() for label, name in names.items() if name and name.strip()}
     data = load_all(audio_dir)
     if cleaned:
-        data[base] = cleaned
+        data["transcripts"][transcript] = cleaned
     else:
-        data.pop(base, None)
+        data["transcripts"].pop(transcript, None)
+    data["unassigned"].pop(base, None)
     target = _path(audio_dir)
     temporary = f"{target}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
     Path(temporary).write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n",
