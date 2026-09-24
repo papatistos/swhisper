@@ -267,7 +267,7 @@ try {
   });
   await check('Run preview separates what runs from what is skipped',async()=>{
     await click('startBtn');await wait('$("previewDialog").open');
-    assert.equal(await evaluate('$("previewTitle").textContent'),'Run');
+    assert.equal(await evaluate('$("previewTitle").textContent'),'Run Preview');
     assert.equal(await evaluate('$("previewStart").textContent'),'Run');
     assert.equal(await evaluate('$("previewTable").querySelectorAll("tbody tr").length'),1);
     assert.equal(await evaluate('$("previewSkipped").hidden'),false);

@@ -61,8 +61,8 @@ class WorkflowTests(unittest.TestCase):
         self.write('whisper-json-output/orphan.json', '{}')
         rows = self.preview()['files']
         self.assertTrue(any(r['file'] == 'new.m4a' and r['action'] == 'process' for r in rows))
-        self.assertTrue(any(r['file'] == 'orphan.json' and r['action'] == 'blocked' for r in rows))
-        self.assertTrue(any(r['file'] == 'new.json' and 'depends on' in r['reason'] for r in rows))
+        self.assertTrue(any(r['file'] == 'orphan' and r['action'] == 'blocked' for r in rows))
+        self.assertTrue(any(r['file'] == 'new.m4a' and 'depends on' in r['reason'] for r in rows))
 
     def test_force_and_sidecar_override_and_skip(self):
         self.write('a.wav')

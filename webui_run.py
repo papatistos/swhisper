@@ -1,15 +1,15 @@
 """Read-only run planning and progress inspection; never imports model packages."""
 import hashlib
 import json
-import os
 import re
 from pathlib import Path
 from diarization_status import model_run_reason
+from audio_sources import AUDIO_EXTENSIONS, source_audio_files
 
 from sidecar import (SIDECAR_PARAMS, STAGE_DIARIZE, STAGE_TRANSCRIBE,
                      find_sidecar, parse_sidecar_file, sidecar_requests_reprocess)
 
-FORMATS = {'.wav', '.m4a', '.mp3', '.mov', '.mp4', '.flac', '.aac', '.ogg'}
+FORMATS = AUDIO_EXTENSIONS
 
 
 def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False):
@@ -26,7 +26,8 @@ def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False):
     json_dir = audio / tc.json_dir
     diar_json = audio / dc.json_input_dir
     output = audio / dc.output_dir
-    entries = os.listdir(audio)
+    entries = source_audio_files(audio)
+    source_labels = {Path(name).stem: name for name in entries}
     rows, candidates, evidence = [], [], []
 
     def stamp(path):
@@ -100,7 +101,7 @@ def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False):
                 action, reason = 'blocked', 'Required WAV audio is missing'
             elif base in new_bases:
                 reason += '; depends on transcription/conversion succeeding'
-            rows.append(dict(file=base + '.json', base=base, stage='Diarization', action=action, reason=reason))
+            rows.append(dict(file=source_labels.get(base, base), base=base, stage='Diarization', action=action, reason=reason))
 
     scope = (f'This run is restricted to {len(only)} selected file(s).' if only is not None else
              'This runs the folder. Selecting a file in the editor does not restrict the run.')

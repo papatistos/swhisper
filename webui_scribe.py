@@ -5,6 +5,7 @@ from pathlib import Path
 
 from run_scope import DIARIZATION_MODELS
 from webui_run import FORMATS
+from audio_sources import source_audio_files
 
 LANGUAGES = ('Swedish (verbatim)', 'Swedish')
 NOTES = [
@@ -40,7 +41,7 @@ def preview_scribe(audio_dir, selected='', language=LANGUAGES[0], diarization_mo
         raise ValueError('Unsupported Scribe language')
     if diarization_model and diarization_model not in DIARIZATION_MODELS:
         raise ValueError('Unsupported diarization model')
-    sources = [p for p in sorted(audio.iterdir()) if p.suffix.lower() in FORMATS and p.is_file()]
+    sources = [audio / name for name in sorted(source_audio_files(audio))]
     if selected:
         sources = [p for p in sources if p.stem == selected]
         if len(sources) != 1:

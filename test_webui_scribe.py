@@ -20,6 +20,13 @@ class ScribeWebTests(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
+    def test_preview_prefers_source_over_converted_wav(self):
+        (self.root / 'a.m4a').write_bytes(b'source recording')
+        plan = webui.api_run_preview('scribe', selected='a')
+        self.assertEqual([row['file'] for row in plan['files']], ['a.m4a'])
+        batch = webui.api_run_preview('scribe')
+        self.assertEqual([row['file'] for row in batch['files']], ['a.m4a', 'b.wav'])
+
     def test_artifacts_are_readable_without_exposing_arbitrary_files(self):
         from fastapi.testclient import TestClient
         work = Path(webui.api_run_preview('scribe')['files'][0]['work_dir'])
@@ -219,6 +226,7 @@ assert 'diarize.utils' not in sys.modules
         (self.root / 'a.wav').write_bytes(b'changed')
         self.assertNotEqual(token, webui.api_run_preview('scribe', selected='a', language='Swedish')['token'])
         (self.root / 'a.mp3').write_bytes(b'ambiguous')
+        (self.root / 'a.m4a').write_bytes(b'another source')
         for selected in ('a', '../a', 'missing'):
             with self.assertRaises(webui.HTTPException):
                 webui.api_run_preview('scribe', selected=selected)

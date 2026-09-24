@@ -1310,7 +1310,7 @@ async function startRun() {
     // Consent is needed only when a recording has no saved Scribe transcript.
     const remote = scribe && data.remote;
     $("previewTitle").textContent = remote ? "Scribe remote upload preview"
-      : scribe ? "Scribe rerun preview (no upload)" : "Run";
+      : scribe ? "Scribe rerun preview (no upload)" : "Run Preview";
     $("previewConsent").hidden = !remote;
     $("consentRow").hidden = !remote;
     $("scribeConsent").checked = false;
