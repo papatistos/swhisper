@@ -8,7 +8,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 const html = await fs.readFile(new URL('./webui.html', import.meta.url), 'utf8');
 const css = await fs.readFile(new URL('./webui.css', import.meta.url), 'utf8');
 const js = await fs.readFile(new URL('./webui.js', import.meta.url), 'utf8');
-let audioDir = '/mock/audio', serverFolder = null, offline = false, failSave = false, sidecarDelay = {}, versionDelay = {}, renderDelay = {}, logDelay = {};
+let audioDir = '/mock/audio', serverFolder = null, offline = false, failSave = false, sidecarDelay = {}, versionDelay = {}, renderDelay = {}, logDelay = {}, pickDelay = 0;
 let status = {running:false, pipeline:null, returncode:null, run_id:null, progress:{completed:{}}};
 const saved = {a:{values:{SWHISPER_NUM_SPEAKERS:'2',SWHISPER_CONDITION_ON_PREVIOUS:'yes'},comment:'original'}, b:{values:{},comment:'B'}};
 const writes = [], launches = [], errors = [], exports = [];
@@ -53,7 +53,7 @@ const server = http.createServer(async (req,res) => {
   }
   if (u.pathname === '/api/history') return send({entries:[]});
   if (u.pathname === '/api/audio-dir') {audioDir=data.path;return send({audio_dir:audioDir,audio_paths:['/mock/audio','/mock/other']});}
-  if (u.pathname === '/api/audio-dir/pick') return send({path:'/mock/picked'});
+  if (u.pathname === '/api/audio-dir/pick') {await delay(pickDelay);return send({path:'/mock/picked'});}
   if (u.pathname === '/api/run/preview') {const only=u.searchParams.getAll('only');return send({audio_dir:audioDir,pipeline:'transcribe4',token:'preview-1',only:only.length?only:null,notes:['Folder scope'],files:[{file:'a.wav',stage:'Transcription',action:'process',reason:'No output'},{file:'b.wav',stage:'Transcription',action:'skip',reason:'Existing output'},{file:'c.wav',stage:'Transcription',action:'skip',reason:'Existing output'}]});}
   if (u.pathname === '/api/run' && req.method === 'POST') {launches.push(data);status={running:true,pipeline:'transcribe4',run_id:'run1',started_at:Date.now()/1000,audio_dir:audioDir,progress:{stage:'Transcription',current_file:'a.wav',file_index:1,total_files:2,completed:{Transcription:0}}};return send(status);}
   if (u.pathname === '/api/run/stop') {status={...status,running:false,stop_requested:true,returncode:0};return send(status);}
@@ -420,6 +420,21 @@ try {
     await wait('!changingDir && $("dirInput").value==="/mock/picked"');
     await wait('META.audio_dir==="/mock/picked"');
     audioDir='/mock/audio';
+  });
+  await check('Browse waits for a folder chosen after the normal request timeout',async()=>{
+    // Scale every client timeout down 1000x, so 15 s becomes 15 ms, and answer
+    // the dialog after 200 ms, i.e. 200 s in real time.
+    await evaluate('META.audio_dir="/mock/audio";$("dirInput").value="/mock/audio";window.__realTimeout=AbortSignal.timeout;AbortSignal.timeout=ms=>window.__realTimeout.call(AbortSignal,ms/1000)');
+    pickDelay=200;
+    try {
+      await click('dirBrowse');
+      await wait('!changingDir && $("dirInput").value==="/mock/picked"');
+      await wait('META.audio_dir==="/mock/picked"');
+    } finally {
+      pickDelay=0;
+      await evaluate('AbortSignal.timeout=window.__realTimeout');
+      audioDir='/mock/audio';
+    }
   });
   await check('Scribe defaults to explicit selected scope and Swedish verbatim without changing local defaults',async()=>{
     assert.equal(await evaluate('$("pipelineSel").value'),'transcribe4');

@@ -91,8 +91,10 @@ function reportError(error) { setMsg(error.message, "err"); }
 function handle(action) { return (...args) => Promise.resolve().then(() => action(...args)).catch(reportError); }
 
 
+// A native dialog waits for the user, and the server gives up after 300 s.
+const DIALOG_TIMEOUT_MS = 310000;
 async function api(path, opts) {
-  const res = await fetch(path, { ...opts, signal: opts?.signal || AbortSignal.timeout(15000) });
+  const res = await fetch(path, { ...opts, signal: opts?.signal || AbortSignal.timeout(opts?.timeout || 15000) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok && res.status !== 422) throw new Error(data.detail || res.statusText);
   return { status: res.status, data };
@@ -177,7 +179,7 @@ async function browseAudioDir() {
   changingDir = true;
   updateRunControls();
   try {
-    const { data } = await api("/api/audio-dir/pick", { method: "POST" });
+    const { data } = await api("/api/audio-dir/pick", { method: "POST", timeout: DIALOG_TIMEOUT_MS });
     if (!data?.path) return;
     $("dirInput").value = data.path;
     changingDir = false;  // changeDir owns the busy flag once it takes over.
@@ -805,7 +807,7 @@ async function confirmExport() {
   for (const id of ["exportFormat","exportCancel"]) $(id).disabled=true;
   try {
     const body = {...exportContext, format: $("exportFormat").value};
-    const {data: choice}=await api(`/api/render/${encodeURIComponent(exportContext.base)}/save-as`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const {data: choice}=await api(`/api/render/${encodeURIComponent(exportContext.base)}/save-as`,{method:"POST",timeout:DIALOG_TIMEOUT_MS,headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     if (choice.canceled) { $("exportDialog").close(); exportContext=null; return; }
     const {data}=await api(`/api/render/${encodeURIComponent(exportContext.base)}/save-selected`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token:choice.token})});
     $("exportPaths").textContent="Exported:\n"+data.written.join("\n");
