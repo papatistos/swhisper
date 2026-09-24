@@ -118,6 +118,12 @@
           <input type="checkbox" id="compareSync" checked> Sync scrolling</label>
         <span class="msg" id="compareMsg" role="status"></span>
       </div>
+      <div id="compareAudioBar" hidden><audio id="compareAudio" controls preload="none"></audio>
+        <label title="Keep the moment being played in the middle of both transcripts. Scrolling by hand pauses this until you press Play or select a timestamp.">
+          <input id="compareFollow" type="checkbox" checked> Follow playback</label>
+        <label><input id="compareReview" type="checkbox"> Review with timestamps</label>
+        <span id="compareAudioMsg" class="settingsNote" role="status">Select a speaker heading or a timestamp to play from there.</span>
+      </div>
       <div id="comparePanes">
         <section class="comparePane" aria-label="Left transcript">
           <div class="compareHead">

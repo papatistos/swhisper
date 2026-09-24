@@ -20,12 +20,14 @@ let speakerNames={};
 let compareFixture=null;const compareRenders=[];
 const compareDoc=version=>{
   const [step,count,intro]=version==='v1'?[25,40,['Introduction','','Statistics','']]:[10,100,[]];
-  const lines=[...intro],anchors=[];
+  const lines=[...intro],anchors=[],timeline=[];
   for(let i=0;i<count;i++){
-    anchors.push({line:lines.length,start:i*step,end:i*step+step-2});
-    lines.push(`S0${i%2} [${i*step}]:`,`${version} words `.repeat(version==='v1'?60:15),'');
+    const start=i*step,end=start+step-2,middle=(start+end)/2;
+    anchors.push({line:lines.length,start,end});
+    lines.push(`S0${i%2} [${start}]:`,`${version} words `.repeat(version==='v1'?60:15),'');
+    timeline.push({start,end:middle,speaker:`S0${i%2}`,text:`${version} first half ${i}`},{start:middle,end,speaker:`S0${i%2}`,text:`${version} second half ${i}`});
   }
-  return {content:lines.join('\n'),anchors};
+  return {content:lines.join('\n'),anchors,timeline};
 };
 const meta = () => ({audio_dir:audioDir,audio_paths:['/mock/audio','/mock/other'],
   pipelines:[{id:'transcribe4',label:'Standard pipeline'},{id:'diarize4',label:'Diarization only'},{id:'scribe',label:'SUNET Scribe + local diarization'}],groups:[{name:'Speakers',keys:['SWHISPER_NUM_SPEAKERS','SWHISPER_CONDITION_ON_PREVIOUS','SWHISPER_VAD']}],
@@ -437,6 +439,52 @@ try {
     compareFixture=null;
     await evaluate('setRenderOptions(RENDER_DEFAULTS);compareCanRender={}');
     await click('tabSettings');
+  });
+  await check('Comparison playback follows the audio in both panes and in the review lists',async()=>{
+    compareFixture={};
+    await click('tabCompare');
+    await wait('COMPARE_PANES.left.blocks?.length===100 && COMPARE_PANES.right.blocks?.length===41 && !$("renderBar").classList.contains("busy")');
+    assert.equal(await evaluate('!$("compareAudioBar").hidden && $("compareAudio").getAttribute("src").startsWith("/api/audio/a")'),true);
+    // A speaker heading seeks to its paragraph's start and plays.
+    await evaluate('$("compareAudio").load()');await wait('$("compareAudio").readyState>=3');
+    await evaluate('$("compareTextLeft").querySelectorAll(".compareSeek")[0].click()');
+    await wait('!$("compareAudio").paused && $("compareAudio").currentTime>0.2');
+    await evaluate('$("compareAudio").pause()');
+    // The fixture spans 1000 s but the mock audio lasts 10 s, so pretend the player is at 400 s.
+    await evaluate('Object.defineProperty($("compareAudio"),"currentTime",{get:()=>400,set:()=>{},configurable:true});Object.defineProperty($("compareAudio"),"paused",{get:()=>false,configurable:true})');
+    const middles='[compareCoordinate(comparePane("left")).time,compareCoordinate(comparePane("right")).time]';
+    const tick='$("compareAudio").dispatchEvent(new Event("timeupdate"))';
+    await evaluate(tick);
+    let [left,right]=await evaluate(middles);
+    assert.ok(Math.abs(left-400)<2 && Math.abs(right-400)<2,`Both panes follow playback (${left}, ${right})`);
+    assert.deepEqual(await evaluate('[COMPARE_PANES.left.active.anchor.start,COMPARE_PANES.right.active.anchor.start]'),[400,400]);
+    assert.equal(await evaluate('document.querySelectorAll("#compareView .compareParagraph.active").length'),2);
+    // Scrolling by hand stops the view from jumping back until playback is resumed.
+    await evaluate('$("compareTextLeft").scrollTop=0');
+    await wait('$("compareAudioMsg").textContent.includes("Following paused")');
+    await evaluate(tick);
+    [left]=await evaluate(middles);
+    assert.ok(left<100,'A suspended follow leaves the reader where they scrolled');
+    await evaluate('$("compareAudio").dispatchEvent(new Event("play"))');
+    [left,right]=await evaluate(middles);
+    assert.ok(Math.abs(left-400)<2 && Math.abs(right-400)<2,'Play resumes following');
+    // The review lists replace the text in both panes and follow the same way.
+    await click('compareReview');
+    assert.deepEqual(await evaluate('[...document.querySelectorAll("#compareTextLeft .segment, #compareTextRight .segment")].length'),280);
+    await evaluate(tick);
+    [left,right]=await evaluate(middles);
+    assert.ok(Math.abs(left-400)<2 && Math.abs(right-400)<2,'Review lists follow playback');
+    assert.deepEqual(await evaluate('[...document.querySelectorAll("#compareView .segment.active p")].map(p=>p.textContent)'),['v2 first half 40','v1 first half 16']);
+    // A version without a diarized JSON has no segments and keeps its text.
+    compareFixture.stored='v1';
+    await evaluate('compareCanRender={};refreshComparison()');
+    await wait('$("compareNoteRight").textContent.includes("no diarized JSON") && $("compareTextRight").querySelector(".compareParagraph") && $("compareTextLeft").querySelector(".segment")');
+    await evaluate('delete $("compareAudio").currentTime;delete $("compareAudio").paused');
+    await click('compareReview');
+    compareFixture=null;
+    await evaluate('compareCanRender={}');
+    await click('tabSettings');
+    assert.equal(await evaluate('$("compareAudio").paused'),true,'Leaving the tab stops its audio');
   });
   await check('Sidebar collapse and responsive width',async()=>{
     await click('filesToggle');assert.equal(await evaluate('getComputedStyle($("filePanel")).display'),'none');await click('filesToggle');

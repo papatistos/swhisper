@@ -650,6 +650,9 @@ function showTab(tab) {
   if (tab === "compare") $("compareBar").after($("renderBar"));
   if (tab === "transcript") $("transcriptBar").after($("renderBar"));
   $("renderSpeakers").hidden = $("renderSave").hidden = tab === "compare";
+  // Audio keeps playing when its view is hidden, so stop the one left behind.
+  if (tab !== "compare") $("compareAudio").pause();
+  if (tab !== "transcript") $("audioPlayer").pause();
   if (tab === "transcript" && currentBase) loadTranscript(currentBase);
   if (tab === "compare") loadComparison(currentBase);
   if (tab === "logs") handle(loadLogList)();
@@ -969,6 +972,7 @@ function comparePlaceholder(message) {
   for (const side of ["left", "right"]) {
     const pane = comparePane(side);
     pane.blocks = pane.timed = [];
+    pane.result = pane.active = null;
     pane.note.textContent = "";
     pane.text.innerHTML = `<div class="placeholder">${escapeHTML(message)}</div>`;
   }
@@ -980,6 +984,7 @@ async function loadComparison(base) {
     compareBase = null;
     for (const side of ["left", "right"]) { comparePane(side).sel.innerHTML = ""; comparePane(side).sel.disabled = true; }
     comparePlaceholder("Select an audio file to compare its transcript versions.");
+    setCompareAudio(null);
     return;
   }
   $("compareMsg").textContent = "Loading…";
@@ -993,9 +998,11 @@ async function loadComparison(base) {
   if (!versions.length) {
     for (const side of ["left", "right"]) { comparePane(side).sel.innerHTML = ""; comparePane(side).sel.disabled = true; }
     comparePlaceholder("No transcript yet — run a pipeline first.");
+    setCompareAudio(null);
     $("compareMsg").textContent = "";
     return;
   }
+  setCompareAudio(base);
   ["left", "right"].forEach((side, index) => {
     const sel = comparePane(side).sel;
     sel.innerHTML = "";
@@ -1018,17 +1025,18 @@ async function renderComparePane(side, base, options) {
   if (!(version in compareCanRender)) {
     const {data} = await api(`/api/transcript/${encodeURIComponent(base)}${query}`);
     compareCanRender[version] = !!data.can_render;
-    if (!data.can_render) return {content: data.content, anchors: data.anchors || [], rendered: false};
+    if (!data.can_render) return {content: data.content, anchors: data.anchors || [], timeline: [], rendered: false};
   }
   if (compareCanRender[version]) {
     const {data} = await api(`/api/render/${encodeURIComponent(base)}`, {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({version, options}),
     });
-    return {content: data.content, anchors: data.anchors || [], rendered: true};
+    return {content: data.content, anchors: data.anchors || [], timeline: data.timeline || [], rendered: true};
   }
+  // Without a diarized JSON there are no segment times to review with.
   const {data} = await api(`/api/transcript/${encodeURIComponent(base)}${query}`);
-  return {content: data.content, anchors: data.anchors || [], rendered: false};
+  return {content: data.content, anchors: data.anchors || [], timeline: [], rendered: false};
 }
 
 async function refreshComparison() {
@@ -1044,17 +1052,11 @@ async function refreshComparison() {
   try {
     const results = await Promise.all(["left", "right"].map(side => renderComparePane(side, base, options)));
     if (seq !== compareSeq || folder !== folderSeq || base !== currentBase) return;
-    ["left", "right"].forEach((side, index) => {
-      const pane = comparePane(side), result = results[index];
-      fillComparePane(pane, result.content, result.anchors);
-      pane.note.textContent = result.rendered ? ""
-        : "Shown as the pipeline wrote it: this version has no diarized JSON, so the Show settings do not apply.";
-    });
+    ["left", "right"].forEach((side, index) => { comparePane(side).result = results[index]; });
+    showComparePanes(position);
     bar.style.display = results.some(r => r.rendered) ? "" : "none";
     const same = comparePane("left").sel.value === comparePane("right").sel.value;
     $("compareMsg").textContent = same ? "Both panes show the same version." : "";
-    if (position) scrollPaneTo(comparePane("left"), position);
-    syncPanes("left");
   } catch (e) {
     if (seq === compareSeq) $("compareMsg").textContent = e.message;
   } finally {
@@ -1071,14 +1073,116 @@ function fillComparePane(pane, content, anchors) {
   const add = (from, to, anchor) => {
     if (to <= from) return;
     const div = document.createElement("div");
-    div.textContent = lines.slice(from, to).join("\n") + (to < lines.length ? "\n" : "");
+    const rest = lines.slice(anchor ? from + 1 : from, to).join("\n") + (to < lines.length ? "\n" : "");
+    if (anchor) {
+      // The speaker heading plays the paragraph. Its start is an exact time;
+      // positions inside the paragraph are only interpolated, so they do not seek.
+      div.className = "compareParagraph";
+      const heading = document.createElement("span");
+      heading.className = "compareSeek";
+      heading.tabIndex = 0;
+      heading.setAttribute("role", "button");
+      heading.title = "Play from here";
+      heading.textContent = lines[from];
+      heading.onclick = () => compareSeek(anchor.start);
+      heading.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); compareSeek(anchor.start); } };
+      div.append(heading, "\n" + rest);
+    } else div.textContent = rest;
     blocks.push({el: div, anchor});
   };
   add(0, anchors.length ? anchors[0].line : lines.length, null);
   anchors.forEach((a, i) => add(a.line, i + 1 < anchors.length ? anchors[i + 1].line : lines.length, a));
+  setCompareBlocks(pane, blocks);
+}
+
+// The review list: one row per segment, each anchored to the segment's own times.
+function fillCompareTimeline(pane, segments) {
+  setCompareBlocks(pane, segments.map(segment => {
+    const row = document.createElement("div");
+    row.className = "segment";
+    const button = document.createElement("button");
+    const seconds = Math.floor(segment.start);
+    button.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")} ${segment.speaker}`;
+    button.onclick = () => compareSeek(segment.start);
+    const text = document.createElement("p");
+    text.textContent = segment.text;
+    row.append(button, text);
+    return {el: row, anchor: {start: segment.start, end: segment.end}};
+  }));
+}
+
+function setCompareBlocks(pane, blocks) {
   pane.blocks = blocks;
   pane.timed = blocks.filter(b => b.anchor);
+  pane.active = null;
   pane.text.replaceChildren(...blocks.map(b => b.el));
+}
+
+// Show each pane's last result as text or as a review list, keeping the reading position.
+function showComparePanes(position = compareCoordinate(comparePane("left"))) {
+  const review = $("compareReview").checked;
+  for (const side of ["left", "right"]) {
+    const pane = comparePane(side), result = pane.result;
+    if (!result) continue;
+    const asList = review && result.timeline.length > 0;
+    if (asList) fillCompareTimeline(pane, result.timeline);
+    else fillComparePane(pane, result.content, result.anchors);
+    pane.note.textContent = !result.rendered
+      ? "Shown as the pipeline wrote it: this version has no diarized JSON, so the Show settings do not apply."
+      : review && !asList ? "This version has no timestamped segments, so it is shown as text." : "";
+  }
+  if (position) scrollPaneTo(comparePane("left"), position);
+  syncPanes("left");
+  highlightComparePlayback();
+}
+
+/* ---------- comparison playback ----------
+   One player serves both panes, because both versions describe the same
+   recording. While it plays, both panes keep the moment being played in the
+   middle and mark the paragraph or segment it falls in. */
+
+let compareFollowSuspended = false;
+
+function compareSeek(time) {
+  const audio = $("compareAudio");
+  compareFollowSuspended = false;
+  audio.currentTime = time;
+  audio.play().catch(() => {
+    $("compareAudioMsg").textContent = "Press Play to start audio, or choose a browser-supported audio format.";
+  });
+}
+
+function highlightComparePlayback() {
+  const audio = $("compareAudio");
+  const time = audio.currentTime;
+  const playing = audio.src && (time > 0 || !audio.paused);
+  for (const side of ["left", "right"]) {
+    const pane = comparePane(side);
+    const active = playing ? (pane.timed || []).find(b => time >= b.anchor.start && time < b.anchor.end) : null;
+    if (active === pane.active) continue;
+    pane.active?.el.classList.remove("active");
+    active?.el.classList.add("active");
+    pane.active = active || null;
+  }
+}
+
+function followComparePlayback() {
+  highlightComparePlayback();
+  const audio = $("compareAudio");
+  if (audio.paused || compareFollowSuspended || !$("compareFollow").checked) return;
+  for (const side of ["left", "right"]) scrollPaneTo(comparePane(side), {time: audio.currentTime});
+}
+
+function setCompareAudio(base) {
+  const audio = $("compareAudio");
+  const src = base ? `/api/audio/${encodeURIComponent(base)}?folder=${folderSeq}` : "";
+  if (audio.getAttribute("src") === (src || null)) return;   // keep playing across re-renders
+  audio.pause();
+  if (src) audio.src = src; else audio.removeAttribute("src");
+  audio.load();
+  compareFollowSuspended = false;
+  $("compareAudioBar").hidden = !base;
+  $("compareAudioMsg").textContent = "Select a speaker heading or a timestamp to play from there.";
 }
 
 /* The position in the middle of a pane, as a moment in the recording
@@ -1140,6 +1244,11 @@ function onCompareScroll(side) {
   // Ignore the scroll that syncing just caused, or the panes would chase each other.
   if (Math.abs(pane.text.scrollTop - pane.expected) < 1) return;
   pane.expected = NaN;
+  // Scrolling by hand while audio plays means the reader wants to look elsewhere.
+  if (!$("compareAudio").paused && $("compareFollow").checked && !compareFollowSuspended) {
+    compareFollowSuspended = true;
+    $("compareAudioMsg").textContent = "Following paused because you scrolled. Select a speaker heading or a timestamp, or pause and play again, to resume.";
+  }
   cancelAnimationFrame(compareSyncFrame);
   compareSyncFrame = requestAnimationFrame(() => syncPanes(side));
 }
@@ -1575,6 +1684,15 @@ $("tabCompare").onclick = () => showTab("compare");
 $("compareSelLeft").onchange = () => refreshComparison();
 $("compareSelRight").onchange = () => refreshComparison();
 $("compareSync").onchange = () => { if ($("compareSync").checked) syncPanes("left"); };
+$("compareReview").onchange = () => showComparePanes();
+$("compareFollow").onchange = () => { compareFollowSuspended = false; followComparePlayback(); };
+$("compareAudio").addEventListener("timeupdate", followComparePlayback);
+// Playing again, or moving the playhead, asks for the view to follow once more.
+for (const type of ["play", "seeked"]) $("compareAudio").addEventListener(type, () => {
+  compareFollowSuspended = false;
+  $("compareAudioMsg").textContent = "Select a speaker heading or a timestamp to play from there.";
+  followComparePlayback();
+});
 for (const side of ["left", "right"]) comparePane(side).text.addEventListener("scroll", () => onCompareScroll(side));
 $("renderSave").onclick = saveRenderedView;
 $("renderSpeakers").onclick = handle(openSpeakerNames);
