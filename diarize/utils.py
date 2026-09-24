@@ -32,6 +32,7 @@ from transcript_render.markers import (
     format_speaker_hint,
     is_marker_token,
     is_disfluency_marker,
+    marker_asterisk_count,
     is_silence_token,
     is_silence_token as _is_silence_token,
     parse_silence_duration,
@@ -1882,7 +1883,7 @@ class BackfillTranscriber:
             total_duration = max(0.0, end - start)
             
             # Create a single merged marker with spaces to distinguish from Whisper's [*] markers
-            asterisk_count = max(1, min(50, math.ceil(total_duration / 0.1)))
+            asterisk_count = marker_asterisk_count(total_duration)
             marker_token = f"[ {'*' * asterisk_count} ]"
             
             merged_marker = {

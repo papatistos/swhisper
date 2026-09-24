@@ -19,6 +19,7 @@ from scipy.signal import resample
 from .config import TranscriptionConfig, WhisperSettings
 from .memory_utils import ResourceManager, MemoryMonitor
 from .audio_utils import AudioProcessor
+from transcript_render.markers import marker_asterisk_count
 
 
 DISFLUENCY_MARKER_PATTERN = re.compile(r"^\[\*+\]$")
@@ -316,11 +317,7 @@ class TranscriptionWorker:
                 if start is None or end is None:
                     continue
 
-                duration = max(0.0, end - start)
-                if duration <= 0:
-                    asterisk_count = 1
-                else:
-                    asterisk_count = max(1, min(50, math.ceil(duration / 0.1)))
+                asterisk_count = marker_asterisk_count(end - start)
 
                 new_marker = f"[{'*' * asterisk_count}]"
                 if word.get('word') != new_marker:

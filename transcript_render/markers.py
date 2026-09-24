@@ -4,6 +4,7 @@ This module is deliberately free of ``torch``/``whisper`` imports so the web UI
 and the standalone renderer can reuse it without loading the ML stack.
 """
 
+import math
 import re
 from typing import Any, Dict, Optional, Tuple
 
@@ -40,6 +41,15 @@ def set_word_text(word: Dict[str, Any], new_text: str) -> None:
     """Synchronize word/text fields after updating marker contents."""
     word['word'] = new_text
     word['text'] = new_text
+
+
+def marker_asterisk_count(duration: float) -> int:
+    """Return one asterisk per started 0.1 s of a marker, from 1 to 50.
+
+    Rounding the tenths first stops float error from adding an asterisk to an
+    exact tenth, e.g. 3.62 - 3.42 = 0.20000000000000018 s.
+    """
+    return max(1, min(50, math.ceil(round(duration * 10, 6))))
 
 
 STATIC_MARKERS = {"[DISCONTINUITY]", "[SILENCE]", "[OVERLAP]"}

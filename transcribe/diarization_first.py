@@ -25,6 +25,7 @@ from .config import TranscriptionConfig, WhisperSettings
 from .audio_utils import AudioProcessor
 from .memory_utils import ResourceManager
 from .transcription import fix_zero_duration_words
+from transcript_render.markers import marker_asterisk_count
 from .speaker_chunking import (
     extract_speaker_segments,
     create_speaker_aware_chunks,
@@ -566,11 +567,7 @@ class DiarizationFirstPipeline:
                 if start is None or end is None:
                     continue
                 
-                duration = max(0.0, end - start)
-                if duration <= 0:
-                    asterisk_count = 1
-                else:
-                    asterisk_count = max(1, min(50, math.ceil(duration / 0.1)))
+                asterisk_count = marker_asterisk_count(end - start)
                 
                 new_marker = f"[{'*' * asterisk_count}]"
                 word['word'] = new_marker

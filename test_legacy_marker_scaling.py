@@ -17,7 +17,7 @@ def _legacy_result():
                     {'text': '[*]', 'start': 0.8, 'end': 1.26, 'confidence': 0},
                     {'text': 'Så', 'start': 1.84, 'end': 2.1, 'confidence': 0.086},
                     {'text': 'viktiga', 'start': 2.82, 'end': 3.42, 'confidence': 0.0},
-                    {'text': '[*]', 'start': 3.45, 'end': 3.62, 'confidence': 0},
+                    {'text': '[*]', 'start': 3.42, 'end': 3.62, 'confidence': 0},
                     {'text': 'saker.', 'start': 3.62, 'end': 3.72, 'confidence': 0.0},
                 ],
             },
