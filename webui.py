@@ -89,6 +89,7 @@ from transcript_render import (
     RenderOptions,
     RTFFormatter,
     TXTFormatter,
+    anchors_from_txt,
     derive_segments,
     DEFAULT_MIN_SILENCE,
     create_paragraph_text_from_words,
@@ -1083,6 +1084,7 @@ def api_transcript(basename: str, version: Optional[str] = None) -> Dict[str, An
         "versions": versions,
         "selected": selected["id"],
         "content": content,
+        "anchors": anchors_from_txt(content),
         "has_stats": transcript_stats.has_stats_header(content),
         "has_preamble": bool(introduction and content.lstrip().startswith(introduction.strip())),
         "stats_available": bool(transcript_stats.find_analysis_json(path)),
@@ -1210,15 +1212,16 @@ def api_render(basename: str, body: Dict[str, Any]) -> Dict[str, Any]:
     stats = metadata.get("speaker_stats")
     transcript_id = selected.get("timestamp")
 
-    content = TXTFormatter().render(segments, config=config,
-                                    transcript_id=transcript_id, speaker_stats=stats,
-                                    stats=options.stats)
+    content, anchors = TXTFormatter().render_with_anchors(
+        segments, config=config, transcript_id=transcript_id, speaker_stats=stats,
+        stats=options.stats)
 
     return {
         "base": base,
         "selected": selected["id"],
         "versions": _transcript_versions(dirs, base),
         "content": content,
+        "anchors": anchors,
         "options": asdict(options),
         "suffix": options.suffix(),
         "timeline": _timeline_segments(segments, options.linebreak_threshold),
