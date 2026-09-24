@@ -13,7 +13,7 @@ ENABLE_EARLY_FORMAT_SUMMARY = False
 
 from .config import TranscriptionConfig
 from sidecar import sidecar_requests_reprocess, STAGE_TRANSCRIBE
-from run_scope import keep_selected, describe as describe_scope
+from run_scope import keep_selected, reprocess_requested, describe as describe_scope
 
 
 class AudioConverter:
@@ -146,7 +146,7 @@ class FileManager:
         if not audio_files:
             return []
 
-        if not self.config.force_reprocess and os.path.exists(source_output_dir):
+        if not (self.config.force_reprocess or reprocess_requested()) and os.path.exists(source_output_dir):
             existing_json_basenames = {
                 os.path.splitext(f)[0]
                 for f in os.listdir(source_output_dir)

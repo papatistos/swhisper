@@ -50,3 +50,41 @@ class RunScopeTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class RunReprocessTests(unittest.TestCase):
+    def setUp(self):
+        patcher = patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop(run_scope.REPROCESS_ENV_VAR, None)
+
+    def test_reprocess_is_off_unless_set_to_a_true_value(self):
+        self.assertFalse(run_scope.reprocess_requested())
+        for value in ('false', '0', ''):
+            os.environ[run_scope.REPROCESS_ENV_VAR] = value
+            self.assertFalse(run_scope.reprocess_requested())
+        for value in ('true', '1', 'Yes'):
+            os.environ[run_scope.REPROCESS_ENV_VAR] = value
+            self.assertTrue(run_scope.reprocess_requested())
+
+    def test_run_reprocess_retranscribes_despite_a_sidecar_that_says_no(self):
+        import tempfile
+        from pathlib import Path
+        from transcribe.config import TranscriptionConfig
+        from transcribe.file_utils import FileManager
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio, output = Path(tmp, 'audio'), Path(tmp, 'json')
+            audio.mkdir()
+            output.mkdir()
+            (audio / 'a.wav').write_bytes(b'')
+            (audio / 'a.swhisper').write_text('SWHISPER_FORCE_REPROCESS=false\n')
+            (output / 'a.json').write_text('{}')
+            config = TranscriptionConfig()
+            config.force_reprocess, config.file_limit = False, None
+            manager = FileManager(config)
+            with patch('transcribe.file_utils.ENABLE_EARLY_FORMAT_SUMMARY', False):
+                self.assertEqual(manager.get_audio_files_to_process(str(audio), str(output)), [])
+                os.environ[run_scope.REPROCESS_ENV_VAR] = 'true'
+                self.assertEqual(manager.get_audio_files_to_process(str(audio), str(output)), ['a.wav'])

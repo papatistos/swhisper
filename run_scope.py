@@ -7,10 +7,15 @@ for a selection rather than for the folder.
 The value is a newline separated list, because a filename may contain a comma
 but cannot contain a newline. Extensions and directories are ignored, so
 ``a.wav``, ``/path/to/a.m4a`` and ``a`` all select the same recording.
+
+``SWHISPER_RUN_REPROCESS=true`` makes the run redo files that already have
+output, for every stage of the pipeline. Unlike the saved force settings, it
+applies to this run only and wins over per-recording sidecar settings.
 """
 import os
 
 ENV_VAR = "SWHISPER_ONLY_FILES"
+REPROCESS_ENV_VAR = "SWHISPER_RUN_REPROCESS"
 
 
 def _base(name):
@@ -30,6 +35,11 @@ def keep_selected(names):
     if bases is None:
         return list(names)
     return [name for name in names if _base(name) in bases]
+
+
+def reprocess_requested():
+    """True when this run must redo files that already have output."""
+    return os.getenv(REPROCESS_ENV_VAR, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def describe():
