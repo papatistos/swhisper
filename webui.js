@@ -1268,7 +1268,7 @@ async function showHistory() {
     const det = document.createElement("details");
     det.className = "hentry";
     const mins = (e.duration_s / 60).toFixed(1);
-    const result = e.stopped_by_user ? "⏹ stopped" : (e.success ? "✅ ok" : `❌ exit ${e.returncode}`);
+    const result = e.stopped_by_user ? "⏹ stopped" : e.backfill_incomplete ? "⚠️ backfill incomplete" : (e.success ? "✅ ok" : `❌ exit ${e.returncode}`);
     const resultCls = e.success ? "ok" : "bad";
     det.innerHTML = `<summary>
         <span class="when">${escapeHTML((e.started || "").replace("T", " "))}</span>
@@ -1395,6 +1395,7 @@ function statusText(st) {
   if (!st.pipeline) return "Idle";
   if (st.stop_requested) return "Stopped by you";
   if (st.returncode === null) return "Run ended; exit status unavailable";
+  if (st.progress?.backfill_incomplete) return "Transcripts saved; backfill incomplete. Failed gaps are marked [-].";
   if (st.progress?.error_count) return "Run ended with reported errors. Check the console.";
   if (st.returncode !== 0) return `Run failed (exit ${st.returncode}). Check the console.`;
   return "Run finished successfully";
@@ -1426,7 +1427,7 @@ async function pollRun() {
       $("folderNotice").hidden = true;
     }
     $("connectionStatus").textContent = "Connected";
-    $("runDot").className = "dot" + (st.running ? " run" : (st.returncode || st.progress?.error_count ? " err" : ""));
+    $("runDot").className = "dot" + (st.running ? " run" : (st.returncode || st.progress?.error_count || st.progress?.backfill_incomplete ? " err" : ""));
     $("runStatus").textContent = statusText(st);
     $("consoleMsg").textContent = statusText(st);
     const p = st.progress || {};

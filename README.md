@@ -257,10 +257,18 @@ Settings are loaded in this order (highest to lowest priority):
 | `SWHISPER_NEMOTRON_PYTHON` | Python binary of the environment that runs Nemotron | the `nemo` conda env |
 | **Processing** | | |
 | `SWHISPER_BACKFILL_ENABLED` | Re-transcribe empty turns | `true` |
+| `SWHISPER_BACKFILL_TRY_HARDER` | Use the configured decoding retries for backfill | `false` |
 | `SWHISPER_INCLUDE_SILENCE` | Include silence markers | `true` |
 | `SWHISPER_PRESERVE_MARKERS` | Preserve disfluency markers | `true` |
 
 See `.swhisper.env.example` for the complete list of all 100+ available settings with descriptions and defaults.
+
+Backfill makes one decoding attempt at temperature 0 by default. Results that
+fail the configured confidence or repetition checks become duration-scaled `[-]`
+markers. Set `SWHISPER_BACKFILL_TRY_HARDER=true` globally or in a file's `.swhisper`
+sidecar to use the configured temperature retries and accept Whisper's final
+fallback if no attempt passes, as in earlier versions. This affects backfill
+only, and changing it invalidates the backfill cache for that mode.
 
 ### Running the transcription and diarization pipeline§
 

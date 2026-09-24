@@ -157,6 +157,7 @@ class DiarizationConfig:
 
     # Targeted re-transcription for empty diarization turns
     backfill_missing_turns: bool = _get_env_bool("SWHISPER_BACKFILL_ENABLED", True)
+    backfill_try_harder: bool = _get_env_bool("SWHISPER_BACKFILL_TRY_HARDER", False)
     backfill_model: str = os.getenv("SWHISPER_BACKFILL_MODEL", "KBLab/kb-whisper-large")
     backfill_device: Optional[str] = os.getenv("SWHISPER_BACKFILL_DEVICE") if os.getenv("SWHISPER_BACKFILL_DEVICE") else None
     backfill_overlap: float = _get_env_float("SWHISPER_BACKFILL_OVERLAP", 0.5)
@@ -194,9 +195,10 @@ Note 3: Speaker detection is not perfect. The transcript may show too few or too
     
     def get_preamble_with_transcript_id(self, transcript_id: str) -> str:
         """Generate preamble with transcript ID included."""
+        from transcript_render.markers import with_backfill_legend
         return f"""Transcript-ID: {transcript_id}
 
-{self.output_preamble}"""
+{with_backfill_legend(self.output_preamble)}"""
         
     # Parameter testing options
     enable_parameter_testing: bool = _get_env_bool("SWHISPER_PARAMETER_TESTING", False)

@@ -127,7 +127,7 @@ class SenseVoiceProvider:
             
         except Exception as exc:
             print(f"      Warning: SenseVoice transcription failed: {exc}")
-            return self._empty_result()
+            return dict(self._empty_result(), error=str(exc) or type(exc).__name__)
     
     def _parse_sensevoice_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """Parse SenseVoice output and extract components.

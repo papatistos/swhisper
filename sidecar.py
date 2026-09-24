@@ -176,6 +176,7 @@ def _params() -> List[SidecarParam]:
 
         # --- Backfill ---
         P("SWHISPER_BACKFILL_ENABLED", TARGET_DIARIZATION, "backfill_missing_turns", _parse_bool, STAGE_DIARIZE),
+        P("SWHISPER_BACKFILL_TRY_HARDER", TARGET_DIARIZATION, "backfill_try_harder", _parse_bool, STAGE_DIARIZE),
         P("SWHISPER_BACKFILL_OVERLAP", TARGET_DIARIZATION, "backfill_overlap", _parse_float, STAGE_DIARIZE),
         P("SWHISPER_BACKFILL_MIN_DURATION", TARGET_DIARIZATION, "backfill_min_duration", _parse_float, STAGE_DIARIZE),
         P("SWHISPER_BACKFILL_IGNORE_WORDS", TARGET_DIARIZATION, "backfill_ignore_words", _parse_word_list, STAGE_DIARIZE),

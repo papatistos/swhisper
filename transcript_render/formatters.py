@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from .markers import (
     get_word_text,
     is_disfluency_marker,
+    is_backfill_failure_marker,
+    with_backfill_legend,
     is_silence_token as _is_silence_token,
     parse_silence_duration,
 )
@@ -292,7 +294,7 @@ class RTFFormatter(TranscriptFormatter):
             else:
                 preamble_text = config.output_preamble
 
-            escaped_preamble = escape_rtf_text(preamble_text)
+            escaped_preamble = escape_rtf_text(with_backfill_legend(preamble_text))
             rtf_content.append(f"{escaped_preamble}\\par")
             rtf_content.append("\\par")
 
@@ -436,7 +438,8 @@ class TXTFormatter(TranscriptFormatter):
                 # A marker stands for a sound that could not be transcribed —
                 # real speaking time, but not a word, regardless of whether
                 # markers are currently shown in the rendered text.
-                if not is_disfluency_marker(get_word_text(word)):
+                if not (is_disfluency_marker(get_word_text(word))
+                        or is_backfill_failure_marker(get_word_text(word))):
                     entry['words'] += 1
                 entry['speech'] += duration
 
@@ -751,7 +754,7 @@ class TXTFormatter(TranscriptFormatter):
                 preamble_text = config.get_preamble_with_transcript_id(transcript_id)
             else:
                 preamble_text = config.output_preamble
-            txt_content.append(preamble_text)
+            txt_content.append(with_backfill_legend(preamble_text))
             txt_content.append("")
 
             if summary_lines:
@@ -793,5 +796,4 @@ class TXTFormatter(TranscriptFormatter):
         """Render and write to *output_path*."""
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(self.render(segments, **kwargs))
-
 

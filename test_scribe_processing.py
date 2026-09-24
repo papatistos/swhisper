@@ -103,6 +103,15 @@ def test_saved_scribe_result_local_recovery_exports_and_resume(tmp_path):
         assert service.call_count == 1
         records = [json.loads(p.read_text()) for p in (work / 'local-runs').glob('*.json')]
         assert any(r.get('backfill_outcome', {}).get('status') == 'failed' for r in records)
+        latest = max((work / 'transcripts/json').glob('*_diarized.json'), key=lambda p: p.stat().st_mtime_ns)
+        failed_export = json.loads(latest.read_text())
+        assert failed_export['metadata']['backfill_outcome']['status'] == 'failed'
+        failure_words = [w for s in failed_export['segments'] for w in s['words'] if w.get('is_backfill_failure')]
+        assert len(failure_words) == 1
+        assert failure_words[0]['text'] == '[----------]'
+        latest_txt = max((work / 'transcripts/txt').glob('*.txt'), key=lambda p: p.stat().st_mtime_ns)
+        assert 'Backfill failures:' in latest_txt.read_text()
+        assert '[----------]' in latest_txt.read_text()
         assert (work / 'whisper-json-output/audio.json').read_bytes() == normalized
 
 

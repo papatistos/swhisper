@@ -61,7 +61,7 @@ def effective_settings(config):
     names = ('pipeline_model', 'device', 'min_speakers', 'max_speakers',
              'whisper_timestamp_offset', 'smoothing_enabled', 'min_speaker_words',
              'preserve_markers', 'min_silence_duration', 'include_silence_markers',
-             'backfill_missing_turns', 'backfill_model', 'backfill_device',
+             'backfill_missing_turns', 'backfill_try_harder', 'backfill_model', 'backfill_device',
              'backfill_overlap', 'backfill_min_duration', 'backfill_ignore_words',
              'backfill_enable_sensevoice', 'backfill_sensevoice_model',
              'backfill_sensevoice_device', 'backfill_sensevoice_language')

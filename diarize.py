@@ -113,12 +113,14 @@ def ensure_file_hydrated(path: str, max_attempts: int = 4) -> bool:
 
 
 def create_completion_marker(config: DiarizationConfig, base_filename: str, 
-                           log_timestamp: str, output_files: dict) -> None:
+                           log_timestamp: str, output_files: dict, backfill_outcome=None) -> None:
     """Create completion marker file with processing details."""
     completion_marker = os.path.join(config.final_output_dir, f"{base_filename}.ok")
     audio_file_location = f"{config.audio_subdir}/{base_filename}.wav" if config.audio_subdir else f"{base_filename}.wav"
     
-    completion_content = f"""# Diarization completed successfully
+    backfill_status = (backfill_outcome or {}).get('status', 'unknown')
+    completion_content = f"""# Diarization exported
+# Backfill status: {backfill_status}
 # Start: {log_timestamp}
 # End: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 # Audio dir: {config.audio_dir}
@@ -170,6 +172,10 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
         sidecar_reprocess, sidecar_reason = sidecar_requests_reprocess(
             config.final_audio_dir, base_filename, completion_marker, STAGE_DIARIZE
         )
+        with open(completion_marker, encoding='utf-8') as handle:
+            previous_status = handle.read()
+        if any(f'# Backfill status: {status}' in previous_status for status in ('failed', 'partial')):
+            sidecar_reprocess, sidecar_reason = True, 'Previous backfill incomplete; resuming saved gaps'
         if sidecar_reprocess:
             print(f"📎 [sidecar] Reprocessing {audio_basename}: {sidecar_reason}")
         else:
@@ -403,6 +409,7 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             segment_stats = alignment_result['segment_stats']
             unmatched_turns = alignment_result.get('unmatched_diarization_segments', [])
             backfill_report = {'enabled': config.backfill_missing_turns,
+                               'try_harder': config.backfill_try_harder,
                                'status': 'disabled' if not config.backfill_missing_turns else 'not_needed',
                                'uncovered_turns': len(unmatched_turns), 'recovered_words': 0}
             if getattr(config, 'processing_metadata', None):
@@ -480,6 +487,7 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                         sensevoice_enabled=config.backfill_enable_sensevoice,
                         sensevoice_model=config.backfill_sensevoice_model,
                         sensevoice_language=config.backfill_sensevoice_language,
+                        try_harder=config.backfill_try_harder,
                         processing_settings={"whisper": backfill_settings.to_dict(),
                                              "ignore_words": config.backfill_ignore_words,
                                              "sensevoice_device": config.backfill_sensevoice_device},
@@ -490,6 +498,7 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     backfill_model,
                     backfill_device,
                     backfill_settings.to_dict(),
+                    try_harder=config.backfill_try_harder,
                     overlap_duration=backfill_overlap,
                     snippet_output_dir=snippet_dir,
                     snippet_prefix=snippet_prefix,
@@ -508,7 +517,7 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     backfill_outcome = backfill_transcriber.transcribe_turns_subprocess(
                         unmatched_turns, 
                         transcript_key=base_filename,
-                        timeout=600.0  # 10 minute timeout per file
+                        timeout=600.0  # 10 minutes without a completed turn, not per file
                     )
                 except Exception as backfill_error:  # pragma: no cover - defensive logging
                     backfill_error_occurred = True
@@ -525,12 +534,19 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     backfill_transcriber.close()
 
                 recovered_segments = backfill_outcome.get('segments', [])
+                backfill_incomplete = (backfill_error_occurred or backfill_outcome.get('error')
+                                       or backfill_outcome.get('failed_turns')
+                                       or backfill_outcome.get('enrichment_errors'))
                 backfill_report.update(
-                    status='failed' if backfill_error_occurred or backfill_outcome.get('error') else 'partial' if recovered_segments and backfill_outcome.get('failed_turns') else
+                    status=('partial' if recovered_segments else 'failed') if backfill_incomplete else
                            'completed' if recovered_segments else 'no_words_recovered',
                     attempted_turns=len(unmatched_turns),
                     failed_turns=len(backfill_outcome.get('failed_turns', [])),
                     recovered_words=backfill_outcome.get('word_count', 0))
+                if backfill_outcome.get('error'):
+                    backfill_report['error'] = backfill_outcome['error']
+                if backfill_outcome.get('enrichment_errors'):
+                    backfill_report['enrichment_errors'] = backfill_outcome['enrichment_errors']
                 for recovered in recovered_segments:
                     for word in recovered.get('words', []):
                         word['transcription_source'] = 'local-whisper-backfill'
@@ -558,8 +574,21 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     print(f"  -> Backfilled {len(recovered_segments)} diarization segments ({recovered_word_count} new words)")
                     if segment_diff != 0:
                         print(f"  -> Segment count changed by {segment_diff:+d} after merging (total now {segment_stats['total']})")
-                else:
+                elif not backfill_incomplete:
                     print("  -> Targeted transcription did not recover any words")
+
+                from diarize.backfill_results import failure_segment
+                failed_turns = backfill_outcome.get('failed_turns', [])
+                if failed_turns:
+                    from diarize.utils import BackfillMerger
+                    failure_markers = [failure_segment(t, t.get('backfill_error') or backfill_outcome.get('error') or 'Backfill failed')
+                                       for t in failed_turns]
+                    segments = BackfillMerger.merge_backfilled_words(segments, failure_markers)
+                    alignment_result['segments'] = segments
+                    segment_stats['total'] = len(segments)
+                    print(f"  -> Marked {len(failed_turns)} failed backfill gaps with [-] markers")
+                if backfill_incomplete:
+                    print(f"  -> Backfill incomplete; preserved {backfill_outcome.get('word_count', 0)} recovered words")
 
                 unmatched_turns = backfill_outcome.get('failed_turns', [])
                 alignment_result['unmatched_diarization_segments'] = unmatched_turns
@@ -633,6 +662,7 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                 },
                 "backfill": {
                     "enabled": getattr(config, 'backfill_missing_turns', False),
+                    "try_harder": config.backfill_try_harder,
                     "model": getattr(config, 'backfill_model', None),
                     "device": getattr(config, 'backfill_device', None) or config.device,
                     "overlap": getattr(config, 'backfill_overlap', None),
@@ -749,6 +779,7 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                 'min_silence_duration': config.min_silence_duration,
                 'preserve_markers': config.preserve_markers
             }
+            json_metadata['backfill_outcome'] = backfill_report
             if getattr(config, 'processing_metadata', None):
                 json_metadata['processing'] = config.processing_metadata
                 json_metadata['processing']['backfill_outcome'] = backfill_report
@@ -772,9 +803,12 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                 output_files['silence_gap_log'] = gap_log_filename
 
             # Create completion marker
-            create_completion_marker(config, base_filename, log_timestamp, output_files)
+            create_completion_marker(config, base_filename, log_timestamp, output_files, backfill_report)
 
-            print(f"✅ Successfully completed processing of {audio_basename}")
+            if backfill_report['status'] in {'failed', 'partial'}:
+                print(f"⚠️ Transcript exported for {audio_basename}; backfill incomplete")
+            else:
+                print(f"✅ Successfully completed processing of {audio_basename}")
             print(f"📄 Completion marker created: {base_filename}.ok")
             print("-" * 80)
             

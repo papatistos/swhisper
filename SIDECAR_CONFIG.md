@@ -22,6 +22,7 @@ The sidecar uses the same `KEY=value` syntax and the same variable names as `.sw
 SWHISPER_NUM_SPEAKERS=3                       # shorthand: sets min AND max speakers
 SWHISPER_INITIAL_PROMPT="Intervju om arbetet"
 SWHISPER_BACKFILL_IGNORE_WORDS=Balans,Tack
+SWHISPER_BACKFILL_TRY_HARDER=false
 ```
 
 That's it — all pipelines (`transcribe.py`, `transcribe4.py`, `transcribe5.py`, and standalone `diarize.py`/`diarize4.py`) pick sidecars up automatically. Overrides apply to that file only; every other file uses the global configuration.

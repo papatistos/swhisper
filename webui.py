@@ -532,6 +532,7 @@ class AppState:
     def _finish_run(
         self, run_id: str, returncode: Optional[int], offline: bool = False
     ) -> None:
+        progress, _ = self.progress_snapshot()
         with self.lock:
             if self.run_id != run_id or self.finished_at is not None:
                 return
@@ -539,6 +540,8 @@ class AppState:
             self.finished_at = time.time()
             if offline and returncode is None:
                 status = "— Run ended while the web UI was offline (exit code unavailable) —"
+            elif returncode == 0 and progress.get('backfill_incomplete'):
+                status = "⚠️ Transcripts saved; backfill incomplete"
             else:
                 status = "⏹ stopped by user" if self.stop_requested else (
                     "✅ finished" if returncode == 0 else f"❌ exited with code {returncode}")
@@ -607,7 +610,8 @@ class AppState:
                 "duration_s": round(self.finished_at - self.started_at, 1),
                 "returncode": self.returncode,
                 "stopped_by_user": self.stop_requested,
-                "success": self.returncode == 0 and not self.stop_requested,
+                "success": self.returncode == 0 and not self.stop_requested and not self.progress.backfill_incomplete,
+                "backfill_incomplete": len(self.progress.backfill_incomplete),
                 "audio_dir": audio_dir,
             }
             started_at = self.started_at

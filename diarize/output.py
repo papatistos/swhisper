@@ -366,6 +366,7 @@ class StatsExporter:
             "configuration": {
                 "device": settings.get("device", "unknown"),
                 "diarization": settings.get("diarization", {}),
+                "backfill": settings.get("backfill", {}),
                 "word_level_processing": settings.get("word_level_processing", {}),
                 "output_formats": settings.get("output_formats", [])
             },

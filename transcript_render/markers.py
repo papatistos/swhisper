@@ -55,6 +55,24 @@ def marker_asterisk_count(duration: float) -> int:
 STATIC_MARKERS = {"[DISCONTINUITY]", "[SILENCE]", "[OVERLAP]"}
 DISFLUENCY_MARKER_PATTERN = re.compile(r"^\[\*+\]$")
 SPACED_MARKER_PATTERN = re.compile(r"^\[\s\*{1,50}\s\]$")
+BACKFILL_FAILURE_PATTERN = re.compile(r"^\[\s*-+\s*\]$")
+BACKFILL_FAILURE_LEGEND = (
+    "Backfill failures: [-], [--], [---], etc. mark audio that could not be "
+    "transcribed reliably because backfill failed, was interrupted, or did not "
+    "pass its confidence or repetition checks. Each dash represents "
+    "one started tenth of a second, capped at 50 dashes, as with the asterisks "
+    "in [*] markers. These gaps may contain recoverable speech."
+)
+
+
+def with_backfill_legend(preamble: str) -> str:
+    if not preamble or BACKFILL_FAILURE_LEGEND in preamble:
+        return preamble
+    return preamble.rstrip() + '\n\n' + BACKFILL_FAILURE_LEGEND + '\n'
+
+
+def is_backfill_failure_marker(token: str) -> bool:
+    return bool(token and BACKFILL_FAILURE_PATTERN.fullmatch(strip_marker_hint(token)))
 MARKER_INLINE_HINT_PATTERN = re.compile(r"^\[(\s*)(S\d{2}(?:[+/]S\d{2})*)(\*+)(\s*)\]$")
 MARKER_PREFIX_HINT_PATTERN = re.compile(r"^(S\d{2}(?:[+/]S\d{2})*)\s+")
 
@@ -168,6 +186,7 @@ def is_marker_token(token: str) -> bool:
         cleaned in STATIC_MARKERS
         or bool(DISFLUENCY_MARKER_PATTERN.match(cleaned))
         or bool(SPACED_MARKER_PATTERN.match(cleaned))
+        or bool(BACKFILL_FAILURE_PATTERN.match(cleaned))
     )
 
 

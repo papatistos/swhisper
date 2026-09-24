@@ -46,6 +46,10 @@ def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False):
             return 'reprocess', 'Reprocessing requested for this run'
         if force:
             return 'reprocess', 'Force reprocessing enabled'
+        if stage == STAGE_DIARIZE and any(
+                f'# Backfill status: {status}' in artifact.read_text(encoding='utf-8')
+                for status in ('failed', 'partial')):
+            return 'reprocess', 'Previous backfill was incomplete; resume from saved gaps'
         redo, reason = sidecar_requests_reprocess(str(audio), base, str(artifact), stage)
         return ('reprocess', reason) if redo else ('skip', 'Existing output; no reprocessing requested')
 
@@ -129,6 +133,7 @@ class ProgressTracker:
         self.total = None
         self.completed = {'Transcription': set(), 'Diarization': set()}
         self.errors = []
+        self.backfill_incomplete = set()
         self.line_count = 0
 
     def feed(self, lines):
@@ -160,6 +165,10 @@ class ProgressTracker:
                 self.detail = 'Loading Whisper model'
             elif '🔄 Transcribing...' in line:
                 self.detail = 'Transcribing audio'
+            if 'Transcript exported for ' in line and '; backfill incomplete' in line:
+                self.backfill_incomplete.add(self.current or line)
+                self.completed['Diarization'].add(self.current or line)
+                self.detail = 'Transcript saved; backfill incomplete'
             match = re.search(r'Processing file (\d+) of (\d+)', line)
             if match:
                 self.index, self.total = int(match[1]), int(match[2])
@@ -173,7 +182,8 @@ class ProgressTracker:
                 self.detail = 'Transcription saved'
             if 'Completion marker created:' in line and self.current:
                 self.completed['Diarization'].add(self.current)
-                self.detail = 'Diarization saved'
+                self.detail = ('Transcript saved; backfill incomplete' if self.current in self.backfill_incomplete
+                               else 'Diarization saved')
             if (('❌' in line and 'No new audio files' not in line) or
                     'ERROR:' in line or re.search(r'^Failed: [1-9]\d*$', line) or
                     line.startswith('Traceback (most recent call last)')):
@@ -184,7 +194,7 @@ class ProgressTracker:
         return dict(stage=self.stage, detail=self.detail, current_file=self.current,
                     file_index=self.index, total_files=self.total,
                     completed={k: len(v) for k, v in self.completed.items()},
-                    error_count=len(self.errors),
+                    error_count=len(self.errors), backfill_incomplete=len(self.backfill_incomplete),
                     last_error=self.errors[-1] if self.errors else None)
 
 

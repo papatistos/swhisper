@@ -3,6 +3,7 @@
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import json
+from transcript_render.markers import is_backfill_failure_marker, get_word_text
 
 
 class DiarizationAnalyzer:
@@ -96,7 +97,8 @@ class SegmentAnalyzer:
             
             speaker_stats[speaker]['duration'] += duration
             speaker_stats[speaker]['segments'] += 1
-            speaker_stats[speaker]['words'] += len(segment.get('words', []))
+            speaker_stats[speaker]['words'] += sum(
+                not is_backfill_failure_marker(get_word_text(w)) for w in segment.get('words', []))
         
         print()
         print(f"📊 Final Segment Analysis:")

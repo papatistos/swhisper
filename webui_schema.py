@@ -119,7 +119,7 @@ PARAM_GROUPS: List[Dict[str, Any]] = [
         "SWHISPER_MIN_SILENCE_DURATION", "SWHISPER_INCLUDE_SILENCE",
         "SWHISPER_LOG_SILENCE", "SWHISPER_SILENCE_LINEBREAK"]},
     {"name": "Backfill", "keys": [
-        "SWHISPER_BACKFILL_ENABLED", "SWHISPER_BACKFILL_OVERLAP",
+        "SWHISPER_BACKFILL_ENABLED", "SWHISPER_BACKFILL_TRY_HARDER", "SWHISPER_BACKFILL_OVERLAP",
         "SWHISPER_BACKFILL_MIN_DURATION", "SWHISPER_BACKFILL_IGNORE_WORDS",
         "SWHISPER_BACKFILL_ENABLE_SENSEVOICE", "SWHISPER_BACKFILL_SENSEVOICE_LANGUAGE"]},
     {"name": "Output", "keys": [
@@ -181,6 +181,7 @@ PARAM_HELP: Dict[str, str] = {
     "SWHISPER_LOG_SILENCE": "Write a separate log file with between-word gap durations.",
     "SWHISPER_SILENCE_LINEBREAK": "Surround silences of at least this many seconds with blank lines (default 1.0; 0 disables). Affects rtf/txt output only.",
     "SWHISPER_BACKFILL_ENABLED": "Re-transcribe speaker turns that got no words. Recovers missed speech but can introduce hallucinations.",
+    "SWHISPER_BACKFILL_TRY_HARDER": "Off by default: one decoding attempt, with [-] for results that fail confidence or repetition checks. On: use the configured temperature retries and accept Whisper's final fallback, as before. Can be much slower and does not guarantee better text.",
     "SWHISPER_BACKFILL_OVERLAP": "Extra seconds of audio included around each backfilled segment (default 0.5).",
     "SWHISPER_BACKFILL_MIN_DURATION": "Skip backfilling segments shorter than this (default 0.1 s).",
     "SWHISPER_BACKFILL_IGNORE_WORDS": "Comma-separated words to treat as backfill hallucinations (replaced by markers), e.g. Balans.",
@@ -198,4 +199,3 @@ _TYPE_BY_PARSER = {
     "_parse_float_list": "float_list",
     "_parse_word_list": "word_list",
 }
-

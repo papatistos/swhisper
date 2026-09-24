@@ -9,6 +9,8 @@ import torch
 import signal
 import atexit
 import multiprocessing as mp
+import queue
+import time
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from contextlib import contextmanager
@@ -19,6 +21,8 @@ from scipy.signal import resample
 import json
 import whisper_timestamped as whisper
 from transcribe.transcription import TranscriptionWorker
+from .backfill_results import BackfillResults, turn_key as backfill_turn_key, word_count as backfill_word_count
+from .backfill_decoding import decoding_settings, validate_result, transcribe_with_policy
 
 from transcript_render.markers import (
     STATIC_MARKERS,
@@ -83,7 +87,8 @@ def _backfill_subprocess_worker(
         audio_path = config_dict['audio_path']
         model_name = config_dict['model_name']
         device = config_dict['device']
-        settings = config_dict['settings']
+        try_harder = config_dict.get('try_harder', False)
+        settings = decoding_settings(config_dict['settings'], try_harder)
         overlap_duration = config_dict['overlap_duration']
         sample_rate = config_dict['sample_rate']
         ignore_words = set(config_dict.get('ignore_words', []))
@@ -95,25 +100,16 @@ def _backfill_subprocess_worker(
         snippet_prefix = config_dict.get('snippet_prefix', 'backfill')
         
         print(f"  [Subprocess] Starting backfill for {len(turns)} turns...")
-        print(f"  [Subprocess] Loading Whisper model {model_name} on {device}...")
-        
-        # Load Whisper model
-        whisper_model = whisper.load_model(model_name, device=device)
-        
-        # Load SenseVoice if enabled
+        print("  [Subprocess] Backfill decoding: " + (
+            "configured temperature retries" if try_harder else "one attempt; reject failed quality checks"), flush=True)
+        needs_whisper = any(backfill_turn_key(t) not in cached_segments for t in turns)
+        whisper_model = None
+        if needs_whisper:
+            print(f"  [Subprocess] Loading Whisper model {model_name} on {device}...", flush=True)
+            whisper_model = whisper.load_model(model_name, device=device)
+        # SenseVoice is loaded only after Whisper has been released.
         sensevoice_provider = None
-        if enable_sensevoice:
-            try:
-                from diarize.sensevoice_provider import SenseVoiceProvider
-                sensevoice_provider = SenseVoiceProvider(
-                    model_name=sensevoice_model,
-                    device=sensevoice_device,
-                    use_vad=False,
-                )
-                print(f"  [Subprocess] SenseVoice loaded on {sensevoice_device}")
-            except Exception as exc:
-                print(f"  [Subprocess] Warning: Failed to load SenseVoice: {exc}")
-                enable_sensevoice = False
+        output_queue.put(('progress', {'phase': 'whisper_ready'}))
         
         # Helper functions (inline to avoid pickling issues)
         def load_audio_chunk(start: float, end: float) -> Tuple[Optional[np.ndarray], int]:
@@ -174,7 +170,7 @@ def _backfill_subprocess_worker(
             duration = max(0.0, end - start)
             if duration <= 0.0:
                 duration = 0.1
-            asterisk_count = max(1, min(50, int(duration * 10 + 0.5)))
+            asterisk_count = marker_asterisk_count(duration)
             marker_token = f"[ {'*' * asterisk_count} ]"
             placeholder_word = {
                 'start': start, 'end': end, 'word': marker_token,
@@ -198,7 +194,7 @@ def _backfill_subprocess_worker(
             if chunk_audio is None or len(chunk_audio) == 0:
                 return None, 0
             
-            result = whisper.transcribe(whisper_model, chunk_audio, **settings)
+            result = transcribe_with_policy(whisper.transcribe, whisper_model, chunk_audio, settings, try_harder)
             time_offset = start_sample / sample_rate
             
             segments = result.get('segments', [])
@@ -213,6 +209,8 @@ def _backfill_subprocess_worker(
                     if 'end' in word:
                         word['end'] += time_offset
             
+            if not try_harder:
+                validate_result(result, settings, start, end)
             TranscriptionWorker._scale_disfluency_markers(result)
             
             collected_words: List[Dict[str, Any]] = []
@@ -260,58 +258,35 @@ def _backfill_subprocess_worker(
             temp_result = {'segments': [segment_data]}
             TranscriptionWorker._scale_disfluency_markers(temp_result)
             
-            # Add SenseVoice if enabled
-            if enable_sensevoice and sensevoice_provider:
-                try:
-                    sv_result = sensevoice_provider.transcribe(
-                        audio=chunk_audio,
-                        language=sensevoice_language,
-                        use_itn=False,
-                    )
-                    if sv_result:
-                        segment_data['sensevoice_text'] = sv_result.get('text', '')
-                        segment_data['sensevoice_raw_text'] = sv_result.get('raw_text', '')
-                        segment_data['sensevoice_emotion'] = sv_result.get('emotion')
-                        segment_data['sensevoice_event'] = sv_result.get('event')
-                        segment_data['sensevoice_language'] = sv_result.get('language')
-                        for word in collected_words:
-                            word['sensevoice_text'] = sv_result.get('text', '')
-                            word['sensevoice_emotion'] = sv_result.get('emotion')
-                            word['sensevoice_event'] = sv_result.get('event')
-                except Exception as exc:
-                    print(f"  [Subprocess] SenseVoice error: {exc}")
-            
             return temp_result['segments'][0], len(collected_words)
         
         # Process all turns
-        recovered_segments: List[Dict[str, Any]] = []
-        recovered_turns: List[Dict[str, Any]] = []
-        failed_turns: List[Dict[str, Any]] = []
-        total_words = 0
-        placeholder_segments = 0
+        recovered_count = 0
         cache_hits = 0
-        newly_transcribed = {}
+        enrichment_jobs = []
+        enrichment_errors = []
         
         for turn in turns:
             speaker = turn.get('speaker', 'UNKNOWN')
             start = float(turn.get('start', 0.0))
             end = float(turn.get('end', start))
             duration = max(0.0, end - start)
-            turn_key = f"{speaker}_{start:.3f}_{end:.3f}"
+            turn_key = backfill_turn_key(turn)
+            started = time.monotonic()
+            turn_error = None
             
             # Check cache first
             if turn_key in cached_segments:
                 segment = cached_segments[turn_key]
-                word_count = len(segment.get('words', []))
+                word_count = backfill_word_count(segment)
                 cache_hits += 1
                 print(f"----> Using cached result for {speaker}: {start:.2f}s - {end:.2f}s")
             else:
                 print(f"----> Transcribing {speaker}: {start:.2f}s - {end:.2f}s (duration {duration:.2f}s)")
                 try:
                     segment, word_count = transcribe_single_turn(turn)
-                    if segment:
-                        newly_transcribed[turn_key] = segment
                 except Exception as exc:
+                    turn_error = str(exc) or type(exc).__name__
                     print(f"   -> Backfill error for {speaker} {start:.2f}-{end:.2f}s: {exc}")
                     segment, word_count = None, 0
             
@@ -326,7 +301,7 @@ def _backfill_subprocess_worker(
                         seg_start = first_word.get('start', segment.get('start', 0.0))
                         seg_end = last_word.get('end', segment.get('end', seg_start))
                         seg_duration = max(0.0, seg_end - seg_start)
-                        asterisk_count = max(1, min(50, int(seg_duration * 10 + 0.5)))
+                        asterisk_count = marker_asterisk_count(seg_duration)
                         marker_token = f"[ {'*' * asterisk_count} ]"
                         marker = {
                             'word': marker_token, 'text': marker_token,
@@ -336,40 +311,69 @@ def _backfill_subprocess_worker(
                         }
                         segment['words'] = [marker]
                         segment['text'] = marker_token
-                        word_count = 1
+                        word_count = 0
                         print(f"      🚫 Filtered hallucinated segment: {segment_text}")
             
             is_placeholder = bool(segment and segment.get('is_placeholder'))
+            word_count = backfill_word_count(segment)
             
-            if segment and (word_count or is_placeholder):
-                recovered_segments.append(segment)
-                enriched_turn = dict(turn)
-                enriched_turn['word_count'] = word_count
-                if is_placeholder:
-                    enriched_turn['is_placeholder'] = True
-                    placeholder_segments += 1
-                recovered_turns.append(enriched_turn)
-                total_words += word_count
-            else:
-                failed_turns.append(turn)
+            if segment:
+                recovered_count += 1
+
+            # Send a detached snapshot: Queue serializes asynchronously while
+            # the second phase may later mutate the segment's annotation fields.
+            output_queue.put(('turn', {'key': turn_key, 'segment': json.loads(json.dumps(segment)), 'error': turn_error}))
+            print(f"  [Subprocess] Whisper turn complete in {time.monotonic() - started:.1f}s ({word_count} words)", flush=True)
+            if (enable_sensevoice and segment and not is_placeholder
+                    and segment.get('sensevoice_status') != 'completed'
+                    and 'sensevoice_raw_text' not in segment):
+                enrichment_jobs.append((turn_key, turn, segment))
         
         if cache_hits > 0:
             print(f"  [Subprocess] Cache hits: {cache_hits}/{len(turns)} turns")
         
-        # Build result
-        result = {
-            'segments': recovered_segments,
-            'recovered_turns': recovered_turns,
-            'failed_turns': failed_turns,
-            'word_count': total_words,
-            'placeholders': placeholder_segments,
-            'newly_transcribed': newly_transcribed,
-            'cached_segments': cached_segments,
-        }
-        
+        # Release the large Whisper model before loading SenseVoice. Alternating
+        # both on MPS retains both weights and allocator caches throughout a run.
+        del whisper_model
+        gc.collect()
+        if torch.backends.mps.is_available():
+            torch.mps.synchronize()
+            torch.mps.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        output_queue.put(('progress', {'phase': 'whisper_released'}))
+        if enrichment_jobs:
+            try:
+                from diarize.sensevoice_provider import SenseVoiceProvider
+                sensevoice_provider = SenseVoiceProvider(model_name=sensevoice_model,
+                                                        device=sensevoice_device, use_vad=False)
+                for key, turn, segment in enrichment_jobs:
+                    started = time.monotonic()
+                    audio, _ = load_audio_chunk(float(turn['start']), float(turn['end']))
+                    try:
+                        if audio is None:
+                            raise RuntimeError('Could not read audio for SenseVoice')
+                        sv = sensevoice_provider.transcribe(audio=audio, language=sensevoice_language, use_itn=False)
+                        if sv.get('error'):
+                            raise RuntimeError(sv['error'])
+                        for field in ('text', 'raw_text', 'emotion', 'event', 'language'):
+                            segment['sensevoice_' + field] = sv.get(field)
+                        for word in segment.get('words', []):
+                            for field in ('text', 'emotion', 'event'):
+                                word['sensevoice_' + field] = sv.get(field)
+                        segment['sensevoice_status'] = 'completed'
+                    except Exception as exc:
+                        segment['sensevoice_status'] = 'failed'
+                        enrichment_errors.append(str(exc))
+                        print(f"  [Subprocess] SenseVoice failed: {exc}", flush=True)
+                    output_queue.put(('turn', {'key': key, 'segment': json.loads(json.dumps(segment))}))
+                    print(f"  [Subprocess] SenseVoice turn complete in {time.monotonic() - started:.1f}s", flush=True)
+            finally:
+                if sensevoice_provider:
+                    sensevoice_provider.close()
+
         # Cleanup before returning
         print(f"  [Subprocess] Cleaning up models...")
-        del whisper_model
         if sensevoice_provider:
             sensevoice_provider.close()
             del sensevoice_provider
@@ -384,9 +388,9 @@ def _backfill_subprocess_worker(
             torch.cuda.synchronize()
         
         gc.collect()
-        print(f"  [Subprocess] Done, processed {len(recovered_segments)} segments")
+        print(f"  [Subprocess] Done, processed {recovered_count} segments")
         
-        output_queue.put(('success', result))
+        output_queue.put(('success', {'enrichment_errors': enrichment_errors}))
         
     except Exception as e:
         import traceback
@@ -1111,6 +1115,7 @@ class BackfillMerger:
         # For each segment, find and insert backfilled words that belong within its time range
         # Split silence markers that overlap with backfilled words
         modified_segments = []
+        inserted = set()
         for segment in segments:
             seg_start = segment.get('start', 0.0)
             seg_end = segment.get('end', float('inf'))
@@ -1119,12 +1124,15 @@ class BackfillMerger:
             # Find backfilled words that overlap with this segment's time range
             words_to_merge = []
             for bf_word in backfilled_words:
+                if id(bf_word) in inserted:
+                    continue
                 bf_start = bf_word.get('start', 0.0)
                 bf_end = bf_word.get('end', 0.0)
                 
                 # Check if backfilled word overlaps with this segment
                 if bf_start < seg_end and bf_end > seg_start:
                     words_to_merge.append(bf_word)
+                    inserted.add(id(bf_word))
             
             if not words_to_merge:
                 # No backfilled words for this segment, keep as-is
@@ -1188,6 +1196,7 @@ class BackfillMerger:
             # Update segment with merged words
             updated_segment = segment.copy()
             updated_segment['words'] = merged_words
+            updated_segment.pop('is_silence_marker', None)
             
             # Recalculate segment boundaries to match word range
             if merged_words:
@@ -1203,7 +1212,8 @@ class BackfillMerger:
         final_segments = []
         for segment in modified_segments:
             # Preserve standalone silence segments
-            if segment.get('speaker') == 'SILENCE':
+            if segment.get('speaker') == 'SILENCE' and all(
+                    _is_silence_token(w) for w in segment.get('words', [])):
                 final_segments.append(segment)
                 continue
             
@@ -1255,6 +1265,12 @@ class BackfillMerger:
                     )
                 )
         
+        # Gaps before, between, or after all original segments must survive too.
+        for word in backfilled_words:
+            if id(word) not in inserted:
+                final_segments.append(BackfillMerger._create_segment_from_words(
+                    [word], word.get('speaker', 'UNKNOWN'), {}))
+
         # Sort final segments by start time
         final_segments.sort(key=lambda seg: seg.get('start', 0.0))
         
@@ -1546,11 +1562,13 @@ class BackfillTranscriber:
         sensevoice_model: str = "iic/SenseVoiceSmall",
         sensevoice_device: Optional[str] = None,
         sensevoice_language: str = "auto",
+        try_harder: bool = False,
     ) -> None:
         self.audio_path = audio_path
         self.model_name = model_name
         self.device = device or "cpu"
-        self.settings = dict(whisper_settings or {})
+        self.try_harder = try_harder
+        self.settings = decoding_settings(whisper_settings or {}, try_harder)
         self.settings.setdefault('verbose', False)
         self.overlap_duration = max(0.0, overlap_duration)
         self.sample_rate = 16000
@@ -1658,7 +1676,8 @@ class BackfillTranscriber:
         Args:
             turns: List of turn dictionaries with speaker, start, end
             transcript_key: Optional key for caching (e.g., filename)
-            timeout: Maximum time to wait for subprocess (default 10 minutes)
+            timeout: Maximum time without a completed turn or phase transition.
+                This is not a limit on the total batch duration.
             
         Returns:
             Dictionary with segments, recovered_turns, failed_turns, word_count, placeholders
@@ -1678,6 +1697,8 @@ class BackfillTranscriber:
             cached_segments = self.cache.load(transcript_key)
             if cached_segments:
                 print(f"  -> Loaded {len(cached_segments)} cached backfill segments")
+        cached_segments = {k: v for k, v in cached_segments.items() if not v.get('is_backfill_failure')}
+        partial = BackfillResults(turns, cached_segments)
         
         # Prepare config dict for subprocess (must be serializable)
         config_dict = {
@@ -1685,6 +1706,7 @@ class BackfillTranscriber:
             'model_name': self.model_name,
             'device': self.device,
             'settings': dict(self.settings),
+            'try_harder': self.try_harder,
             'overlap_duration': self.overlap_duration,
             'sample_rate': self.sample_rate,
             'ignore_words': list(self.ignore_words) if self.ignore_words else [],
@@ -1712,37 +1734,39 @@ class BackfillTranscriber:
             args=(input_queue, output_queue)
         )
         process.start()
-        
+        completed = False
         try:
-            # Wait for result with timeout
-            status, result = output_queue.get(timeout=timeout)
-            
-            if status == 'error':
-                print(f"  -> Subprocess failed: {result}")
-                return {
-                    'error': 'subprocess_failed',
-                    'segments': [],
-                    'recovered_turns': [],
-                    'failed_turns': turns,
-                    'word_count': 0,
-                    'placeholders': 0
-                }
-            
-            # Save newly transcribed segments to cache (in main process)
-            newly_transcribed = result.pop('newly_transcribed', {})
-            if self.cache and transcript_key and newly_transcribed:
-                # Merge with existing cache
-                merged_cache = {**cached_segments, **newly_transcribed}
-                self.cache.save(transcript_key, merged_cache)
-                print(f"  -> Saved {len(newly_transcribed)} new segments to cache")
-            
-            # Remove internal fields not needed by caller
-            result.pop('cached_segments', None)
-            
-            return result
+            deadline = time.monotonic() + timeout
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f'Backfill made no completed-turn progress for {timeout:g} seconds')
+                try:
+                    status, result = output_queue.get(timeout=min(1.0, remaining))
+                except queue.Empty:
+                    if not process.is_alive():
+                        raise RuntimeError(f'Backfill worker exited with code {process.exitcode} before returning results')
+                    continue
+                deadline = time.monotonic() + timeout
+                if status == 'progress':
+                    continue
+                if status == 'turn':
+                    partial.record(result['key'], result['segment'], result.get('error'))
+                    if self.cache and transcript_key and result['segment'] is not None:
+                        cached_segments[result['key']] = result['segment']
+                        self.cache.save(transcript_key, cached_segments)
+                    continue
+                if status == 'error':
+                    raise RuntimeError(str(result))
+                if status != 'success':
+                    raise RuntimeError(f'Unexpected backfill response: {status}')
+                # All completed turns have already been checkpointed.
+                completed = True
+                return partial.outcome(enrichment_errors=result.get('enrichment_errors'))
             
         except Exception as e:
-            print(f"  -> Subprocess error or timeout: {e}")
+            reason = str(e) or type(e).__name__
+            print(f"  -> Backfill incomplete: {reason}")
             if process.is_alive():
                 print(f"  -> Terminating subprocess...")
                 process.terminate()
@@ -1751,16 +1775,11 @@ class BackfillTranscriber:
                     process.kill()
                     process.join(timeout=2)
             
-            return {
-                'error': 'subprocess_error_or_timeout',
-                'segments': [],
-                'recovered_turns': [],
-                'failed_turns': turns,
-                'word_count': 0,
-                'placeholders': 0
-            }
+            return partial.outcome(error=reason)
         
         finally:
+            if completed:
+                process.join(timeout=10)
             # Ensure process is cleaned up
             if process.is_alive():
                 process.terminate()
@@ -2158,7 +2177,7 @@ class BackfillTranscriber:
             start_sample
         )
 
-        result = whisper.transcribe(self._model, chunk_audio, **self.settings)
+        result = transcribe_with_policy(whisper.transcribe, self._model, chunk_audio, self.settings, self.try_harder)
 
         time_offset = start_sample / self.sample_rate
 
@@ -2174,6 +2193,8 @@ class BackfillTranscriber:
                 if 'end' in word:
                     word['end'] += time_offset
 
+        if not self.try_harder:
+            validate_result(result, self.settings, start, end)
         TranscriptionWorker._scale_disfluency_markers(result)
 
         collected_words: List[Dict[str, Any]] = []
@@ -2490,6 +2511,7 @@ class BackfillCache:
         sensevoice_model: str = "",
         sensevoice_language: str = "auto",
         processing_settings: Optional[Dict[str, Any]] = None,
+        try_harder: bool = False,
     ) -> None:
         self.cache_dir = Path(cache_dir).expanduser()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -2501,6 +2523,7 @@ class BackfillCache:
         self.sensevoice_model = sensevoice_model
         self.sensevoice_language = sensevoice_language
         self.processing_settings = processing_settings or {}
+        self.try_harder = try_harder
         self.index_path = self.cache_dir / self.INDEX_FILENAME
         self._index = self._load_index()
 
@@ -2540,6 +2563,7 @@ class BackfillCache:
             'device': self.device,
             'overlap': float(self.overlap),
             'processing_settings': self.processing_settings,
+            'try_harder': self.try_harder,
             'sensevoice_enabled': self.sensevoice_enabled,
         }
         # Include SenseVoice config if enabled to invalidate cache when settings change
@@ -2586,4 +2610,3 @@ class BackfillCache:
         with tmp_path.open('w', encoding='utf-8') as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
         tmp_path.replace(cache_path)
-

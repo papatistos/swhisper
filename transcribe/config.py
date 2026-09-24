@@ -115,7 +115,7 @@ class WhisperSettings:
     best_of: int = _get_env_int("SWHISPER_BEST_OF", 5)  # less efficient but better results
     temperature: List[float] = None  # if None, set below in __post_init__
     compression_ratio_threshold: float = _get_env_float("SWHISPER_COMPRESSION_THRESHOLD", 2.4)
-    logprob_threshold: float = _get_env_float("SWHISPER_LOGPROB_THRESHOLD", -1.0)  # value between 0 and -1 . (-1 effectuively disables the threshold, i.e. no segment will be excluded because of low confidence)
+    logprob_threshold: float = _get_env_float("SWHISPER_LOGPROB_THRESHOLD", -1.0)  # Lower average log probability triggers fallback; strict backfill rejects it.
     no_speech_threshold: float = _get_env_float("SWHISPER_NO_SPEECH_THRESHOLD", 0.6)  # we have to be more than 60% sure there is no speech to dismiss a segment as silence
     fp16: Optional[bool] = _get_env_bool("SWHISPER_FP16", True) if os.getenv("SWHISPER_FP16") else None
     condition_on_previous_text: bool = _get_env_bool("SWHISPER_CONDITION_ON_PREVIOUS", True)
