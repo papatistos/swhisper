@@ -17,6 +17,11 @@ from datetime import datetime, timezone
 from scribe_api import ScribeClient, ScribeError, atomic_json, normalize_result
 from audio_integrity import pcm_checksum, checksum_without_jpr_metadata
 
+DIARIZATION_MODELS = {
+    "community-1": "pyannote/speaker-diarization-community-1",
+    "nemotron": "nvidia/Nemotron-3-Diarization",
+}
+
 
 def sha256(path):
     digest = hashlib.sha256()
@@ -69,7 +74,7 @@ def restore_working_audio(source, wav_path, state, state_path):
     print("Local audio copy rebuilt. Continuing with the saved Scribe job.", flush=True)
 
 
-def local_diarization(source, work_dir, json_name):
+def local_diarization(source, work_dir, json_name, diarization_model=None):
     # Imports delayed until after remote transcription. Local Whisper loads only if backfill needs it.
     from diarize import DiarizationConfig
     from diarize4 import ensure_pyannote_v4, resolve_pyannote_token
@@ -92,7 +97,10 @@ def local_diarization(source, work_dir, json_name):
     from transcribe import WhisperSettings
     from sidecar import sidecar_overrides
 
-    config = configure(PrototypeConfig(), source, work_dir)
+    config = PrototypeConfig()
+    if diarization_model:
+        config.pipeline_model = DIARIZATION_MODELS[diarization_model]
+    config = configure(config, source, work_dir)
     whisper_settings = WhisperSettings()
     with sidecar_overrides(str(source.parent), source.stem, whisper_settings=whisper_settings):
         config.backfill_whisper_settings = whisper_settings.to_dict()
@@ -249,7 +257,7 @@ def run_locked(args, source, work_dir):
         atomic_json(state_path, state)
         print(f"Saved timed transcription: {output_path}", flush=True)
     if not args.transcription_only:
-        local_diarization(source, work_dir, output_path.name)
+        local_diarization(source, work_dir, output_path.name, getattr(args, "diarization_model", None))
     print(f"Prototype results: {work_dir}", flush=True)
 
 
@@ -264,6 +272,8 @@ def main(argv=None):
                         default="Swedish (verbatim)", help="Scribe language selector")
     parser.add_argument("--auth", choices=["browseros", "env"], default="browseros",
                         help="Get tokens from BrowserOS Neo (default), or use an environment token")
+    parser.add_argument("--diarization-model", choices=sorted(DIARIZATION_MODELS),
+                        help="Local diarization model for this run (default: SWHISPER_PIPELINE_MODEL, else community-1)")
     parser.add_argument("--job-id", help="Adopt an existing job for this exact audio and language; verify these in Scribe")
     parser.add_argument("--base-url", default="https://scribe.sunet.se", help="Scribe HTTPS origin")
     parser.add_argument("--poll-interval", type=float, default=10)

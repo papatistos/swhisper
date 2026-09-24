@@ -180,3 +180,37 @@ def test_scribe_run_diarizes_with_nemotron_when_selected(tmp_path):
     records = [json.loads(p.read_text()) for p in (work / 'local-runs').glob('*.json')]
     assert [r['settings']['pipeline_model'] for r in records] == ['nvidia/Nemotron-3-Diarization']
     assert records[0]['status'] == 'completed'
+
+
+def _scribe_fixture(tmp_path):
+    source = tmp_path / 'interview.wav'
+    source.write_bytes(b'original')
+    source.with_suffix('.swhisper').write_text('SWHISPER_BACKFILL_ENABLED=false\n')
+    annotation = Annotation()
+    annotation[Segment(0, 1)] = 'SPEAKER_00'
+    calls = []
+    def remote(self, wav, state, state_path, language):
+        calls.append(language)
+        state['job_id'] = f'job-{len(calls)}'
+        text = f'Hej{len(calls)}'
+        return ({'full_transcription': text, 'segments': [{'start': 0, 'end': 1, 'text': text}]},
+                {'version': 1, 'words': [{'t': text, 's': 0.1, 'e': 0.5}]})
+    return source, annotation, calls, remote
+
+
+def test_diarization_model_option_selects_nemotron_for_one_run(tmp_path):
+    from diarize.nemotron import NemotronDiarizer, NemotronOutput
+
+    source, annotation, _, remote = _scribe_fixture(tmp_path)
+    work = tmp_path / 'run'
+    argv = [str(source), '--work-dir', str(work), '--auth', 'env', '--diarization-model', 'nemotron']
+    with patch.dict('os.environ', {'SUNET_SCRIBE_API_KEY': 'k', 'SUNET_SCRIBE_ENCRYPT_PWD': 'p'}), \
+            patch.object(transcribe_scribe, 'prepare_audio', side_effect=lambda src, dst: dst.write_bytes(b'staged')), \
+            patch.object(ScribeClient, 'transcribe', autospec=True, side_effect=remote), \
+            patch('diarize4.ensure_pyannote_v4'), \
+            patch.object(NemotronDiarizer, 'diarize', return_value=NemotronOutput(annotation, annotation)) as nemotron:
+        assert transcribe_scribe.main(argv) == 0
+    nemotron.assert_called_once()
+    record = json.loads(next((work / 'local-runs').glob('*.json')).read_text())
+    assert record['settings']['pipeline_model'] == 'nvidia/Nemotron-3-Diarization'
+
