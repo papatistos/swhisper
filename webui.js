@@ -161,6 +161,8 @@ async function changeDir() {
     $("transcriptText").innerHTML = '<div class="placeholder">Select an audio file to view its transcript.</div>';
     $("versionSel").innerHTML = "";
     $("versionSel").disabled = true;
+    compareCanRender = {};
+    loadComparison(null);
     $("logSel").innerHTML = "";
     $("logSel").disabled = true;
     $("log").textContent = "";
@@ -622,19 +624,25 @@ function setMsg(text, cls) {
 /* ---------- transcript view ---------- */
 
 function showTab(tab) {
+  // The Show settings are shared, so they follow the user back from the comparison.
+  if (currentTab === "compare" && tab === "transcript") carriedRenderOptions = renderOptions();
   currentTab = tab;
-  for (const [id, name] of [["tabSettings", "settings"], ["tabTranscript", "transcript"], ["tabLogs", "logs"]]) {
+  for (const [id, name] of [["tabSettings", "settings"], ["tabTranscript", "transcript"], ["tabCompare", "compare"], ["tabLogs", "logs"]]) {
     $(id).setAttribute("aria-selected", String(name === tab));
     $(id).tabIndex = name === tab ? 0 : -1;
+    $(id).classList.toggle("active", name === tab);
   }
-  $("tabSettings").classList.toggle("active", tab === "settings");
-  $("tabTranscript").classList.toggle("active", tab === "transcript");
-  $("tabLogs").classList.toggle("active", tab === "logs");
   $("editor").style.display = tab === "settings" ? "" : "none";
   $("transcriptView").style.display = tab === "transcript" ? "" : "none";
+  $("compareView").style.display = tab === "compare" ? "" : "none";
   $("logsView").style.display = tab === "logs" ? "" : "none";
   $("editorBar").style.display = (tab === "settings" && editorBase) ? "" : "none";
+  // One Show bar serves both transcript views; move it to the visible one.
+  if (tab === "compare") $("compareBar").after($("renderBar"));
+  if (tab === "transcript") $("transcriptBar").after($("renderBar"));
+  $("renderSpeakers").hidden = $("renderSave").hidden = tab === "compare";
   if (tab === "transcript" && currentBase) loadTranscript(currentBase);
+  if (tab === "compare") loadComparison(currentBase);
   if (tab === "logs") handle(loadLogList)();
 }
 
@@ -677,10 +685,16 @@ let renderBaseline = {...RENDER_DEFAULTS};
 let txtVersionsByBase = {};   // keeps the version list available on the raw JSON view
 let renderSeq = 0;          // drops responses that arrive out of order
 let renderTimer = null;
+let carriedRenderOptions = null;   // Show settings brought back from the comparison
 
 function debounceRender() {
   clearTimeout(renderTimer);
-  renderTimer = setTimeout(applyRenderOptions, 250);
+  renderTimer = setTimeout(renderOptionsChanged, 250);
+}
+
+function renderOptionsChanged() {
+  if (currentTab === "compare") refreshComparison();
+  else applyRenderOptions();
 }
 let renderAvailable = false;
 
@@ -901,8 +915,11 @@ async function loadTranscript(base, version) {
     renderBaseline = renderOptions();
     updateRenderBar(!!data.can_render);
     loadAudioReview(base, data.selected);
+    const carried = carriedRenderOptions;
+    carriedRenderOptions = null;
+    if (carried && data.can_render && !renderIsDefault(carried)) { setRenderOptions(carried); applyRenderOptions(); }
     // The stored TXT carries the original labels, so re-render to show names.
-    if (data.can_render && Object.keys(data.speaker_names || {}).length) applyRenderOptions();
+    else if (data.can_render && Object.keys(data.speaker_names || {}).length) applyRenderOptions();
   } catch (e) {
     if (!valid()) return;
     delete txtVersionsByBase[base];
@@ -914,6 +931,208 @@ async function loadTranscript(base, version) {
     text.innerHTML = '<div class="placeholder">No transcript yet — run a pipeline first.</div>';
     msg.textContent = /no transcript/i.test(e.message) ? "" : e.message;
   }
+}
+
+/* ---------- comparison tab ----------
+   Two versions of one recording, side by side, rendered with the same Show
+   settings. Both describe the same audio, so the panes are lined up by time
+   rather than by text: the moment in the middle of one pane is found in the
+   other through the paragraph anchors the server returns, and interpolated
+   inside a paragraph. That keeps working however different the texts are. */
+
+let compareSeq = 0;
+let compareBase = null;
+let compareSyncFrame = 0;
+let compareCanRender = {};   // version id → has a diarized JSON (per folder)
+const COMPARE_PANES = {left: {}, right: {}};
+
+function comparePane(side) {
+  const pane = COMPARE_PANES[side];
+  if (!pane.text) {
+    const suffix = side === "left" ? "Left" : "Right";
+    Object.assign(pane, {sel: $(`compareSel${suffix}`), text: $(`compareText${suffix}`),
+                         note: $(`compareNote${suffix}`), blocks: [], expected: NaN});
+  }
+  return pane;
+}
+
+function comparePlaceholder(message) {
+  for (const side of ["left", "right"]) {
+    const pane = comparePane(side);
+    pane.blocks = pane.timed = [];
+    pane.note.textContent = "";
+    pane.text.innerHTML = `<div class="placeholder">${escapeHTML(message)}</div>`;
+  }
+}
+
+async function loadComparison(base) {
+  const seq = ++compareSeq, folder = folderSeq;
+  if (!base) {
+    compareBase = null;
+    for (const side of ["left", "right"]) { comparePane(side).sel.innerHTML = ""; comparePane(side).sel.disabled = true; }
+    comparePlaceholder("Select an audio file to compare its transcript versions.");
+    return;
+  }
+  $("compareMsg").textContent = "Loading…";
+  let versions;
+  try { versions = (await api(`/api/transcript/${encodeURIComponent(base)}`)).data.versions || []; }
+  catch (e) { versions = []; }
+  if (seq !== compareSeq || folder !== folderSeq || base !== currentBase) return;
+  // Keep the chosen versions while the same recording stays selected.
+  const previous = compareBase === base ? [comparePane("left").sel.value, comparePane("right").sel.value] : [];
+  compareBase = base;
+  if (!versions.length) {
+    for (const side of ["left", "right"]) { comparePane(side).sel.innerHTML = ""; comparePane(side).sel.disabled = true; }
+    comparePlaceholder("No transcript yet — run a pipeline first.");
+    $("compareMsg").textContent = "";
+    return;
+  }
+  ["left", "right"].forEach((side, index) => {
+    const sel = comparePane(side).sel;
+    sel.innerHTML = "";
+    for (const v of versions) {
+      const o = document.createElement("option");
+      o.value = v.id;
+      o.textContent = (v.timestamp ? fmtTimestamp(v.timestamp) : v.filename) + (v.pipeline ? ` · ${v.pipeline}` : "");
+      sel.appendChild(o);
+    }
+    const keep = versions.some(v => v.id === previous[index]);
+    sel.value = keep ? previous[index] : versions[Math.min(index, versions.length - 1)].id;
+    sel.disabled = false;
+  });
+  await refreshComparison();
+}
+
+async function renderComparePane(side, base, options) {
+  const version = comparePane(side).sel.value;
+  const query = `?version=${encodeURIComponent(version)}`;
+  if (!(version in compareCanRender)) {
+    const {data} = await api(`/api/transcript/${encodeURIComponent(base)}${query}`);
+    compareCanRender[version] = !!data.can_render;
+    if (!data.can_render) return {content: data.content, anchors: data.anchors || [], rendered: false};
+  }
+  if (compareCanRender[version]) {
+    const {data} = await api(`/api/render/${encodeURIComponent(base)}`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({version, options}),
+    });
+    return {content: data.content, anchors: data.anchors || [], rendered: true};
+  }
+  const {data} = await api(`/api/transcript/${encodeURIComponent(base)}${query}`);
+  return {content: data.content, anchors: data.anchors || [], rendered: false};
+}
+
+async function refreshComparison() {
+  const base = compareBase;
+  if (!base || base !== currentBase || !comparePane("left").sel.value) return;
+  const seq = ++compareSeq, folder = folderSeq;
+  const options = renderOptions();
+  const position = compareCoordinate(comparePane("left"));
+  const bar = $("renderBar");
+  bar.classList.add("busy");
+  bar.classList.toggle("dirty", !renderIsDefault(options));
+  $("compareMsg").textContent = "Loading…";
+  try {
+    const results = await Promise.all(["left", "right"].map(side => renderComparePane(side, base, options)));
+    if (seq !== compareSeq || folder !== folderSeq || base !== currentBase) return;
+    ["left", "right"].forEach((side, index) => {
+      const pane = comparePane(side), result = results[index];
+      fillComparePane(pane, result.content, result.anchors);
+      pane.note.textContent = result.rendered ? ""
+        : "Shown as the pipeline wrote it: this version has no diarized JSON, so the Show settings do not apply.";
+    });
+    bar.style.display = results.some(r => r.rendered) ? "" : "none";
+    const same = comparePane("left").sel.value === comparePane("right").sel.value;
+    $("compareMsg").textContent = same ? "Both panes show the same version." : "";
+    if (position) scrollPaneTo(comparePane("left"), position);
+    syncPanes("left");
+  } catch (e) {
+    if (seq === compareSeq) $("compareMsg").textContent = e.message;
+  } finally {
+    if (seq === compareSeq) bar.classList.remove("busy");
+  }
+}
+
+/* Split the text into one block per paragraph, so each block can be measured
+   and mapped to the part of the recording its anchor covers. The text before
+   the first paragraph (introduction, statistics) is a block without an anchor. */
+function fillComparePane(pane, content, anchors) {
+  const lines = content.split("\n");
+  const blocks = [];
+  const add = (from, to, anchor) => {
+    if (to <= from) return;
+    const div = document.createElement("div");
+    div.textContent = lines.slice(from, to).join("\n") + (to < lines.length ? "\n" : "");
+    blocks.push({el: div, anchor});
+  };
+  add(0, anchors.length ? anchors[0].line : lines.length, null);
+  anchors.forEach((a, i) => add(a.line, i + 1 < anchors.length ? anchors[i + 1].line : lines.length, a));
+  pane.blocks = blocks;
+  pane.timed = blocks.filter(b => b.anchor);
+  pane.text.replaceChildren(...blocks.map(b => b.el));
+}
+
+/* The position in the middle of a pane, as a moment in the recording
+   ({time}), as a fraction of the introduction ({intro}), or as a fraction
+   of the whole text ({ratio}) when the pane has no anchors at all. */
+function compareCoordinate(pane) {
+  const el = pane.text, blocks = pane.blocks || [];
+  if (!blocks.length) return null;
+  const middle = el.scrollTop + el.clientHeight / 2;
+  if (!pane.timed.length) return {ratio: el.scrollTop / Math.max(1, el.scrollHeight - el.clientHeight)};
+  let lo = 0, hi = blocks.length - 1;
+  while (lo < hi) {   // last block starting at or above the middle
+    const mid = (lo + hi + 1) >> 1;
+    if (blocks[mid].el.offsetTop <= middle) lo = mid; else hi = mid - 1;
+  }
+  const block = blocks[lo];
+  const fraction = Math.min(1, Math.max(0, (middle - block.el.offsetTop) / (block.el.offsetHeight || 1)));
+  if (!block.anchor) return {intro: fraction};
+  return {time: block.anchor.start + fraction * (block.anchor.end - block.anchor.start)};
+}
+
+// Where a coordinate lies in a pane, in scroll pixels from the top.
+function compareOffset(pane, coord) {
+  const el = pane.text, timed = pane.timed || [];
+  if (coord.ratio !== undefined || !timed.length) {
+    const ratio = coord.ratio ?? 0;
+    return ratio * Math.max(0, el.scrollHeight - el.clientHeight) + el.clientHeight / 2;
+  }
+  if (coord.intro !== undefined) {
+    const intro = pane.blocks[0];
+    return intro.anchor ? 0 : intro.el.offsetTop + coord.intro * intro.el.offsetHeight;
+  }
+  let lo = 0, hi = timed.length - 1;
+  if (coord.time < timed[0].anchor.start) return timed[0].el.offsetTop;
+  while (lo < hi) {   // last paragraph starting at or before the time
+    const mid = (lo + hi + 1) >> 1;
+    if (timed[mid].anchor.start <= coord.time) lo = mid; else hi = mid - 1;
+  }
+  const {el: block, anchor} = timed[lo];
+  if (anchor.end <= anchor.start) return block.offsetTop;   // a stored TXT's last paragraph has no end
+  // A time after the paragraph ends falls in the pause before the next one.
+  if (coord.time >= anchor.end) return block.offsetTop + block.offsetHeight;
+  return block.offsetTop + (coord.time - anchor.start) / (anchor.end - anchor.start) * block.offsetHeight;
+}
+
+function scrollPaneTo(pane, coord) {
+  pane.text.scrollTop = compareOffset(pane, coord) - pane.text.clientHeight / 2;
+  pane.expected = pane.text.scrollTop;   // the scroll event this causes is ours
+}
+
+function syncPanes(fromSide) {
+  if (!$("compareSync").checked) return;
+  const coord = compareCoordinate(comparePane(fromSide));
+  if (coord) scrollPaneTo(comparePane(fromSide === "left" ? "right" : "left"), coord);
+}
+
+function onCompareScroll(side) {
+  const pane = comparePane(side);
+  // Ignore the scroll that syncing just caused, or the panes would chase each other.
+  if (Math.abs(pane.text.scrollTop - pane.expected) < 1) return;
+  pane.expected = NaN;
+  cancelAnimationFrame(compareSyncFrame);
+  compareSyncFrame = requestAnimationFrame(() => syncPanes(side));
 }
 
 /* ---------- logs tab (historical logs only — live console lives in #consolePanel) ---------- */
@@ -1218,6 +1437,7 @@ async function pollRun() {
       txtVersionsByBase = {};   // a finished run may have written new versions
       await loadFiles();
       if (currentTab === "transcript" && currentBase) await loadTranscript(currentBase);
+      if (currentTab === "compare" && currentBase) await loadComparison(currentBase);
       if (currentTab === "logs") await loadLogList();
     }
     wasRunning = st.running;
@@ -1332,14 +1552,20 @@ $("transcriptReveal").onclick = handle(async () => {
   $("transcriptMsg").className = "msg";
 });
 for (const id of ["optStats", "optPreamble", "optDisfluencies", "optPauses", "optBreaks"]) {
-  $(id).onchange = applyRenderOptions;
+  $(id).onchange = renderOptionsChanged;
 }
 for (const id of ["optThreshold", "optMinPause"]) {
   $(id).oninput = debounceRender;
 }
 $("renderReset").onclick = () => {
-  if (currentBase) loadTranscript(currentBase, $("versionSel").value);
+  if (currentTab === "compare") { setRenderOptions(RENDER_DEFAULTS); refreshComparison(); }
+  else if (currentBase) loadTranscript(currentBase, $("versionSel").value);
 };
+$("tabCompare").onclick = () => showTab("compare");
+$("compareSelLeft").onchange = () => refreshComparison();
+$("compareSelRight").onchange = () => refreshComparison();
+$("compareSync").onchange = () => { if ($("compareSync").checked) syncPanes("left"); };
+for (const side of ["left", "right"]) comparePane(side).text.addEventListener("scroll", () => onCompareScroll(side));
 $("renderSave").onclick = saveRenderedView;
 $("renderSpeakers").onclick = handle(openSpeakerNames);
 $("speakerSave").onclick = handle(saveSpeakerNames);

@@ -162,6 +162,23 @@ main { flex: 1; display: flex; min-height: 0; }
 #transcriptText { flex: 1; overflow-y: auto; padding: 14px 20px;
                   white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
 #transcriptText .placeholder { color: var(--muted); margin-top: 40px; text-align: center; }
+/* comparison view: two transcript versions side by side */
+#compareView { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+#compareBar { display: flex; gap: 10px; align-items: center; padding: 8px 20px;
+              border-bottom: 1px solid var(--border); background: var(--panel); flex-wrap: wrap; }
+#compareBar label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+#compareBar .msg { color: var(--muted); font-size: 0.8rem; flex: 1; }
+#comparePanes { flex: 1; display: flex; min-height: 0; }
+.comparePane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.comparePane + .comparePane { border-left: 1px solid var(--border); }
+.compareHead { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 12px;
+               border-bottom: 1px solid var(--border); background: var(--panel); }
+.compareHead select { max-width: 100%; }
+.compareNote { color: var(--muted); font-size: 0.75rem; }
+/* position: relative makes each block's offsetTop relative to its pane */
+.compareText { flex: 1; overflow-y: auto; padding: 14px 16px; position: relative;
+               white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
+.compareText .placeholder { color: var(--muted); margin-top: 40px; text-align: center; }
 .badge.tbadge, .badge.lbadge, .badge.jbadge { cursor: pointer; }
 .badge.tbadge:hover, .badge.lbadge:hover, .badge.jbadge:hover { border-color: var(--accent); color: var(--accent); }
 
@@ -269,6 +286,8 @@ details.group > summary { cursor: pointer; font-size: .9rem; padding: 8px 0; bor
   #tabBar { padding-left: 4px; }
   #tabBar .tab { padding-left: 8px; padding-right: 8px; }
   #transcriptBar select { width: 100%; max-width: 100%; }
+  #comparePanes { flex-direction: column; }
+  .comparePane + .comparePane { border-left: none; border-top: 1px solid var(--border); }
 }
 @media (max-width: 520px) {
   header { gap: 6px; padding: 8px; }

@@ -72,6 +72,7 @@
     <div id="tabBar" role="tablist" aria-label="File views">
       <button class="tab active" id="tabSettings" role="tab" aria-controls="editor" aria-selected="true">Settings</button>
       <button class="tab" id="tabTranscript" role="tab" aria-controls="transcriptView" aria-selected="false" tabindex="-1">Transcript</button>
+      <button class="tab" id="tabCompare" role="tab" aria-controls="compareView" aria-selected="false" tabindex="-1">Comparison</button>
       <button class="tab" id="tabLogs" role="tab" aria-controls="logsView" aria-selected="false" tabindex="-1">Logs</button>
     </div>
     <div id="editor" role="tabpanel" aria-labelledby="tabSettings" tabindex="0"><div class="placeholder">Select an audio file to edit its per-file settings.<br>
@@ -110,6 +111,29 @@
       </div>
       <div id="timeline" hidden aria-label="Timestamped transcript segments"></div>
       <div id="transcriptText"><div class="placeholder">Select an audio file to view its transcript.</div></div>
+    </div>
+    <div id="compareView" role="tabpanel" aria-labelledby="tabCompare" tabindex="0" style="display:none">
+      <div id="compareBar">
+        <label title="Keep the same moment of the recording in the middle of both transcripts">
+          <input type="checkbox" id="compareSync" checked> Sync scrolling</label>
+        <span class="msg" id="compareMsg" role="status"></span>
+      </div>
+      <div id="comparePanes">
+        <section class="comparePane" aria-label="Left transcript">
+          <div class="compareHead">
+            <select id="compareSelLeft" aria-label="Left transcript version" disabled></select>
+            <span class="compareNote" id="compareNoteLeft"></span>
+          </div>
+          <div class="compareText" id="compareTextLeft" tabindex="0"></div>
+        </section>
+        <section class="comparePane" aria-label="Right transcript">
+          <div class="compareHead">
+            <select id="compareSelRight" aria-label="Right transcript version" disabled></select>
+            <span class="compareNote" id="compareNoteRight"></span>
+          </div>
+          <div class="compareText" id="compareTextRight" tabindex="0"></div>
+        </section>
+      </div>
     </div>
     <div id="logsView" role="tabpanel" aria-labelledby="tabLogs" tabindex="0" style="display:none">
       <div id="runBar">

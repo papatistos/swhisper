@@ -14,6 +14,18 @@ const saved = {a:{values:{SWHISPER_NUM_SPEAKERS:'2',SWHISPER_CONDITION_ON_PREVIO
 const writes = [], launches = [], errors = [], exports = [];
 let globalValues={}, globalRevision="g1", exportCanceled=false;
 let speakerNames={};
+// Two versions of one recording that split it into paragraphs differently:
+// v2 has short paragraphs every 10 s, v1 long ones every 25 s behind an introduction.
+let compareFixture=null;const compareRenders=[];
+const compareDoc=version=>{
+  const [step,count,intro]=version==='v1'?[25,40,['Introduction','','Statistics','']]:[10,100,[]];
+  const lines=[...intro],anchors=[];
+  for(let i=0;i<count;i++){
+    anchors.push({line:lines.length,start:i*step,end:i*step+step-2});
+    lines.push(`S0${i%2} [${i*step}]:`,`${version} words `.repeat(version==='v1'?60:15),'');
+  }
+  return {content:lines.join('\n'),anchors};
+};
 const meta = () => ({audio_dir:audioDir,audio_paths:['/mock/audio','/mock/other'],
   pipelines:[{id:'transcribe4',label:'Standard pipeline'},{id:'diarize4',label:'Diarization only'},{id:'scribe',label:'SUNET Scribe + local diarization'}],groups:[{name:'Speakers',keys:['SWHISPER_NUM_SPEAKERS','SWHISPER_CONDITION_ON_PREVIOUS','SWHISPER_VAD']}],
   params:{SWHISPER_VAD:{type:'bool',global:true,stage:'transcribe',scribe:{supported:false,scope:'Unavailable for Scribe',description:'Not applied to Scribe.'}},SWHISPER_NUM_SPEAKERS:{type:'int',min:1,label:'Number of speakers',global:2,stage:'diarize',help:'Speaker count',scribe:{supported:true,description:'Local speaker count'}},SWHISPER_CONDITION_ON_PREVIOUS:{type:'bool',global:true,stage:'transcribe',help:'Use previous text',scribe:{supported:true,scope:'Local backfill only',description:'Local Whisper backfill only'}}}});
@@ -47,6 +59,10 @@ const server = http.createServer(async (req,res) => {
   if (u.pathname.endsWith('/save-as')) return send(exportCanceled ? {canceled:true} : {token:'native-save-selection',path:'/mock/chosen/review.txt',format:data.format});
   if (u.pathname.endsWith('/save-selected')) {exports.push(data);return send({written:['/mock/chosen/review.txt']});}
   if (u.pathname.startsWith('/api/render/') && u.pathname.endsWith('/save')) {exports.push(data);return send({written:['/mock/audio/exports/review.txt']});}
+  if (u.pathname.startsWith('/api/render/') && compareFixture) {
+    compareRenders.push({version:data.version,options:data.options});
+    return send(compareDoc(data.version));
+  }
   if (u.pathname.startsWith('/api/render/')) {
     await delay(renderDelay[data.options?.min_pause] || 0);
     return send({content:`Rendered ${data.options.min_pause}`,suffix:'_view',timeline:[{start:1,end:3,speaker:'S01',text:`Filtered ${data.options.min_pause}`}]});
@@ -72,6 +88,8 @@ const server = http.createServer(async (req,res) => {
   if (u.pathname.startsWith('/api/transcript/')) {
     const version=u.searchParams.get('version')||'v2';
     await delay(versionDelay[version]||0);
+    if (compareFixture) return send({versions:[{id:'v2',filename:'new'},{id:'v1',filename:'old'}],selected:version,
+      ...compareDoc(version),can_render:version!==compareFixture.stored,speaker_names:{}});
     return send({versions:[{id:'v2',filename:'new'},{id:'v1',filename:'old'}],selected:version,content:`Transcript ${version}`,can_render:true,speaker_names:speakerNames});
   }
   send({detail:'Unknown fixture route'},404);
@@ -354,6 +372,38 @@ try {
     await evaluate('$("sidebarResize").focus()');await key('ArrowRight','ArrowRight');
     assert.equal(await evaluate('$("filePanel").getBoundingClientRect().width'),before+20);
     await click('fontPlus');assert.equal(await evaluate('$("filePanel").getBoundingClientRect().width'),before+20);await click('fontMinus');
+  });
+  await check('Comparison tab keeps the same moment in the middle of both panes',async()=>{
+    compareFixture={};
+    await select('a');await wait('currentBase==="a"');
+    await click('tabCompare');
+    await wait('COMPARE_PANES.left.blocks?.length===100 && COMPARE_PANES.right.blocks?.length===41');
+    assert.deepEqual(await evaluate('[$("compareSelLeft").value,$("compareSelRight").value]'),['v2','v1']);
+    assert.equal(await evaluate('$("renderBar").parentElement.id'),'compareView');
+    assert.equal(await evaluate('$("renderSpeakers").hidden && $("renderSave").hidden'),true);
+    const times='(()=>{const l=compareCoordinate(comparePane("left")),r=compareCoordinate(comparePane("right"));return [l.time,r.time]})()';
+    for (const [side,top] of [['Left',4000],['Right',2500],['Left',9000]]) {
+      await evaluate(`$("compareText${side}").scrollTop=${top}`);
+      await wait(`(()=>{const [l,r]=${times};return l>50 && Math.abs(l-r)<1.5})()`);
+    }
+    const [before]=await evaluate(times);
+    compareRenders.length=0;
+    await click('optPauses');
+    await wait(`!$("renderBar").classList.contains("busy") && $("renderBar").classList.contains("dirty")`);
+    assert.deepEqual(compareRenders.map(r=>r.version).sort(),['v1','v2']);
+    assert.deepEqual(compareRenders[0].options,compareRenders[1].options,'Both panes use the same Show settings');
+    assert.equal(compareRenders[0].options.pauses,false);
+    const [after,right]=await evaluate(times);
+    assert.ok(Math.abs(after-before)<1.5 && Math.abs(after-right)<1.5,'Re-rendering keeps the reading position');
+    await click('tabTranscript');
+    await wait('$("renderBar").parentElement.id==="transcriptView" && $("versionSel").value==="v2" && !$("renderBar").classList.contains("busy")');
+    assert.equal(await evaluate('$("optPauses").checked'),false,'Show settings follow the user back to the Transcript tab');
+    compareFixture.stored='v1';await evaluate('compareCanRender={}');
+    await click('tabCompare');
+    await wait('$("compareNoteRight").textContent.includes("no diarized JSON") && $("compareNoteLeft").textContent===""');
+    compareFixture=null;
+    await evaluate('setRenderOptions(RENDER_DEFAULTS);compareCanRender={}');
+    await click('tabSettings');
   });
   await check('Sidebar collapse and responsive width',async()=>{
     await click('filesToggle');assert.equal(await evaluate('getComputedStyle($("filePanel")).display'),'none');await click('filesToggle');
