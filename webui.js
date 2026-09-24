@@ -633,8 +633,6 @@ function setMsg(text, cls) {
 /* ---------- transcript view ---------- */
 
 function showTab(tab) {
-  // The Show settings are shared, so they follow the user back from the comparison.
-  if (currentTab === "compare" && tab === "transcript") carriedRenderOptions = renderOptions();
   currentTab = tab;
   for (const [id, name] of [["tabSettings", "settings"], ["tabTranscript", "transcript"], ["tabCompare", "compare"], ["tabLogs", "logs"]]) {
     $(id).setAttribute("aria-selected", String(name === tab));
@@ -697,14 +695,41 @@ let renderBaseline = {...RENDER_DEFAULTS};
 let txtVersionsByBase = {};   // keeps the version list available on the raw JSON view
 let renderSeq = 0;          // drops responses that arrive out of order
 let renderTimer = null;
-let carriedRenderOptions = null;   // Show settings brought back from the comparison
+const RENDER_STORAGE_KEY = "swhisper_render_options";
+let renderPreferences = loadRenderPreferences();
+if (renderPreferences) setRenderOptions(renderPreferences);
+
+function loadRenderPreferences() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(RENDER_STORAGE_KEY));
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) return null;
+    const options = {...RENDER_DEFAULTS};
+    for (const [key, fallback] of Object.entries(RENDER_DEFAULTS)) {
+      const value = saved[key];
+      if (typeof fallback === "boolean" ? typeof value === "boolean"
+          : typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 60) {
+        options[key] = value;
+      }
+    }
+    return options;
+  } catch { return null; }
+}
+
+function saveRenderPreferences() {
+  if (!["optThreshold", "optMinPause"].every(id => $(id).value !== "" && $(id).validity.valid)) return;
+  renderPreferences = renderOptions();
+  try { localStorage.setItem(RENDER_STORAGE_KEY, JSON.stringify(renderPreferences)); } catch {}
+}
 
 function debounceRender() {
+  // Save immediately, even if the user closes the page before rendering starts.
+  saveRenderPreferences();
   clearTimeout(renderTimer);
   renderTimer = setTimeout(renderOptionsChanged, 250);
 }
 
 function renderOptionsChanged() {
+  saveRenderPreferences();
   if (currentTab === "compare") refreshComparison();
   else applyRenderOptions();
 }
@@ -737,7 +762,6 @@ function setRenderOptions(o) {
 function updateRenderBar(available) {
   renderAvailable = available;
   $("renderBar").style.display = available ? "" : "none";
-  if (!available) setRenderOptions(RENDER_DEFAULTS);
 }
 
 async function applyRenderOptions() {
@@ -923,15 +947,15 @@ async function loadTranscript(base, version) {
     text.textContent = data.content;
     msg.textContent = `${base} — ${data.versions.length} version(s)`;
 
-    setRenderOptions({...RENDER_DEFAULTS, stats: !!data.has_stats, preamble: data.has_preamble ?? true});
-    renderBaseline = renderOptions();
+    renderBaseline = {...RENDER_DEFAULTS, stats: !!data.has_stats, preamble: data.has_preamble ?? true};
+    if (!renderPreferences && data.can_render) {
+      setRenderOptions(renderBaseline);
+      saveRenderPreferences();
+    }
     updateRenderBar(!!data.can_render);
     loadAudioReview(base, data.selected);
-    const carried = carriedRenderOptions;
-    carriedRenderOptions = null;
-    if (carried && data.can_render && !renderIsDefault(carried)) { setRenderOptions(carried); applyRenderOptions(); }
     // The stored TXT carries the original labels, so re-render to show names.
-    else if (data.can_render && Object.keys(data.speaker_names || {}).length) applyRenderOptions();
+    if (data.can_render && (!renderIsDefault(renderOptions()) || Object.keys(data.speaker_names || {}).length)) applyRenderOptions();
   } catch (e) {
     if (!valid()) return;
     delete txtVersionsByBase[base];
@@ -1677,7 +1701,10 @@ for (const id of ["optThreshold", "optMinPause"]) {
   $(id).oninput = debounceRender;
 }
 $("renderReset").onclick = () => {
-  if (currentTab === "compare") { setRenderOptions(RENDER_DEFAULTS); refreshComparison(); }
+  clearTimeout(renderTimer);
+  setRenderOptions(currentTab === "compare" ? RENDER_DEFAULTS : renderBaseline);
+  saveRenderPreferences();
+  if (currentTab === "compare") refreshComparison();
   else if (currentBase) loadTranscript(currentBase, $("versionSel").value);
 };
 $("tabCompare").onclick = () => showTab("compare");

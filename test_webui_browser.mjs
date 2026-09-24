@@ -500,7 +500,9 @@ try {
     await cdp('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
   });
   await check('Audio timestamps seek and highlight segments',async()=>{
-    await click('tabTranscript');await wait('$("timeline").children.length===2');await click('reviewAudio');
+    await click('tabTranscript');await wait('!$("versionSel").disabled && renderAvailable');
+    // Earlier Show choices now persist; explicitly restore the unfiltered timeline.
+    await click('renderReset');await wait('$("timeline").children.length===2');await click('reviewAudio');
     await evaluate('$("audioPlayer").load()');await wait('$("audioPlayer").readyState>=3');
     await evaluate('$("timeline").querySelector("button").click()');await wait('$("audioPlayer").currentTime>=1');
     await evaluate('$("audioPlayer").pause();$("audioPlayer").currentTime=3.5;$("audioPlayer").dispatchEvent(new Event("timeupdate"))');
@@ -514,7 +516,7 @@ try {
     assert.equal(exports.at(-1).token,'native-save-selection');
     exportCanceled=true;const before=exports.length;await click('renderSave');await wait('$("exportDialog").open');await click('exportConfirm');await wait('!exporting && !$("exportDialog").open');assert.equal(exports.length,before);exportCanceled=false;await click('tabSettings');
   });
-  await check('Folder change cancel preserves folder and edits',async()=>{await input('folder draft');await evaluate('$("dirInput").value="/mock/other"; $("dirBtn").click()');await wait('$("dirtyDialog").open');await click('dirtyCancel');await wait('!$("dirtyDialog").open');assert.equal(audioDir,'/mock/audio');assert.equal(await evaluate('$("dirInput").value'),'/mock/audio');});
+  await check('Folder change cancel preserves folder and edits',async()=>{await select('b');await wait('editorBase==="b"');await input('folder draft');await evaluate('$("dirInput").value="/mock/other"; $("dirBtn").click()');await wait('$("dirtyDialog").open');await click('dirtyCancel');await wait('!$("dirtyDialog").open');assert.equal(audioDir,'/mock/audio');assert.equal(await evaluate('$("dirInput").value'),'/mock/audio');});
   await check('Dirty page requests unload warning',async()=>{
     assert.equal(await evaluate('(()=>{const e=new Event("beforeunload",{cancelable:true});window.dispatchEvent(e);return e.defaultPrevented})()'),true);
   });
@@ -523,7 +525,7 @@ try {
     await click('tabTranscript');failSave=true;await click('startBtn');await wait('$("dirtyDialog").open');await click('dirtySave');
     await wait('!saving && !$("uiNotice").hidden');assert.equal(await evaluate('currentTab'),'transcript');assert.equal(launches.length,n);failSave=false;
   });
-  await check('Run asks to save, then previews folder before launch',async()=>{const launchedBefore=launches.length;await click('startBtn');await wait('$("dirtyDialog").open');await click('dirtySave');await wait('$("previewDialog").open');assert.equal(launches.length,launchedBefore);assert.equal(saved.b.comment,'folder draft');assert.equal(await evaluate('$("previewTable").querySelectorAll("tbody tr").length'),1);const shot=await cdp('Page.captureScreenshot',{format:'png'});await fs.writeFile('/private/tmp/swhisper-run-preview.png',Buffer.from(shot.data,'base64'));await click('previewStart');await wait('lastStatus?.running && !runBusy');assert.equal(launches.at(-1).preview_token,'preview-1');assert.equal(await evaluate('$("dirMenuBtn").disabled'),true);});
+  await check('Run asks to save, then previews folder before launch',async()=>{const launchedBefore=launches.length;await click('startBtn');await wait('$("dirtyDialog").open');await click('dirtySave');await wait('$("previewDialog").open');assert.equal(launches.length,launchedBefore);assert.equal(saved.b.comment,'folder draft');assert.equal(await evaluate('$("previewTable").querySelectorAll("tbody tr").length'),1);const shot=await cdp('Page.captureScreenshot',{format:'png'});await fs.writeFile('/private/tmp/swhisper-run-preview.png',Buffer.from(shot.data,'base64'));await click('previewStart');await wait('lastStatus?.running && !runBusy');assert.equal(launches.at(-1).preview_token,'preview-false');assert.equal(await evaluate('$("dirMenuBtn").disabled'),true);});
   await check('Progress current file and stop outcome',async()=>{await evaluate('pollRun()');assert.match(await evaluate('$("progressStatus").textContent'),/a.wav.*file 1 of 2/);await click('stopBtn');await wait('lastStatus?.stop_requested && !runBusy');await evaluate('pollRun()');await wait('$("runStatus").textContent==="Stopped by you"');});
   await check('Disconnection disables launch and recovery restores it',async()=>{offline=true;await evaluate('pollRun()');await wait('!connected');assert.match(await evaluate('$("connectionStatus").textContent'),/Disconnected/);assert.equal(await evaluate('$("startBtn").disabled'),true);offline=false;await evaluate('pollRun()');await wait('connected');assert.equal(await evaluate('$("startBtn").disabled'),false);});
   await check('Exit zero with reported errors is not success',async()=>{status={...status,stop_requested:false,progress:{error_count:1,last_error:'Failed: 1',completed:{}}};await evaluate('pollRun()');await wait('$("runStatus").textContent.includes("reported errors")');});
@@ -597,6 +599,60 @@ try {
       assert.equal(await evaluate('$("setting-SWHISPER_VAD").disabled'),false);
       await evaluate('$("pipelineSel").value="scribe";filterSettings()');
     }
+  });
+  const reopen = async () => {
+    await cdp('Page.navigate',{url:'about:blank'});
+    await wait('location.href==="about:blank"');
+    await cdp('Page.navigate',{url:`http://127.0.0.1:${server.address().port}/`});
+    await wait('typeof initialized !== "undefined" && initialized && connected');
+  };
+  const showPreferences = {stats:true,preamble:false,disfluencies:false,pauses:false,pause_linebreaks:false,pause_linebreak_threshold:2.4,min_pause:0.6};
+  await check('Show choices survive files, versions, raw JSON, folders and tabs',async()=>{
+    await select('a');await wait('editorBase==="a"');await click('tabTranscript');
+    await wait('!$("versionSel").disabled && renderAvailable');
+    for (const [id,checked] of [['optStats',true],['optPreamble',false],['optDisfluencies',false],['optPauses',false],['optBreaks',false]]) {
+      if (await evaluate(`$(${JSON.stringify(id)}).checked!==${checked}`)) await click(id);
+    }
+    for (const [id,value] of [['optThreshold',2.4],['optMinPause',0.6]]) {
+      await evaluate(`$(${JSON.stringify(id)}).value=${value};$(${JSON.stringify(id)}).dispatchEvent(new Event('input'))`);
+    }
+    assert.deepEqual(await evaluate('JSON.parse(localStorage.getItem("swhisper_render_options"))'),showPreferences,'Numeric changes persist before the debounce fires');
+    for (const version of ['__raw_json__','v1']) {
+      await evaluate(`$("versionSel").value=${JSON.stringify(version)};$("versionSel").dispatchEvent(new Event("change"))`);
+      await wait(`!$("versionSel").disabled && $("versionSel").value===${JSON.stringify(version)}`);
+      assert.deepEqual(await evaluate('renderOptions()'),showPreferences);
+    }
+    await select('b');await wait('editorBase==="b" && !$("versionSel").disabled');
+    assert.deepEqual(await evaluate('renderOptions()'),showPreferences);
+    await click('tabCompare');await wait('COMPARE_PANES.left.result && !$("renderBar").classList.contains("busy")');
+    assert.deepEqual(await evaluate('renderOptions()'),showPreferences);
+    await click('tabTranscript');await wait('!$("versionSel").disabled');
+    await evaluate('$("dirInput").value="/mock/other";changeDir()');await wait('META.audio_dir==="/mock/other" && !changingDir');
+    await select('a');await wait('editorBase==="a"');await click('tabTranscript');await wait('!$("versionSel").disabled');
+    assert.deepEqual(await evaluate('renderOptions()'),showPreferences);
+  });
+  await check('Show choices restore in a fresh page and are used for rendering',async()=>{
+    await reopen();
+    assert.deepEqual(await evaluate('renderOptions()'),showPreferences);
+    await select('a');await wait('editorBase==="a"');await click('tabTranscript');
+    await wait('$("transcriptText").textContent==="Rendered 0.6"');
+    assert.deepEqual(await evaluate('renderOptions()'),showPreferences);
+  });
+  await check('Reset persists the original view as the new Show preference',async()=>{
+    await click('renderReset');await wait('!$("versionSel").disabled && !$("renderBar").classList.contains("busy")');
+    const reset = await evaluate('renderOptions()');
+    assert.deepEqual(reset,await evaluate('renderBaseline'));
+    assert.deepEqual(await evaluate('JSON.parse(localStorage.getItem("swhisper_render_options"))'),reset);
+    await reopen();
+    assert.deepEqual(await evaluate('renderOptions()'),reset);
+  });
+  await check('Invalid saved Show settings safely fall back to valid defaults',async()=>{
+    await evaluate('localStorage.setItem("swhisper_render_options", "broken JSON")');
+    await reopen();
+    assert.deepEqual(await evaluate('renderOptions()'),await evaluate('RENDER_DEFAULTS'));
+    await evaluate('localStorage.setItem("swhisper_render_options", JSON.stringify({stats:false,pauses:"false",min_pause:-1,pause_linebreak_threshold:100}))');
+    await reopen();
+    assert.deepEqual(await evaluate('renderOptions()'),await evaluate('({...RENDER_DEFAULTS,stats:false})'));
   });
   assert.deepEqual(errors,[],'No uncaught browser errors');
   console.log('All browser workflow checks passed.');
