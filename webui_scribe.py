@@ -10,7 +10,7 @@ NOTES = [
     'Scribe may upload the listed recordings to https://scribe.sunet.se. Confirm only if remote processing is permitted.',
     'BrowserOS Neo must be logged into Scribe. The server environment must supply the encryption password. Noninteractive authentication failures appear in the run log.',
     'SUNET controls the initial transcription. Whisper decoding and prompt settings affect local backfill only; language, task and VAD are fixed for recovery. Use Scribe language and scope controls for remote processing.',
-    'Local community-1 diarization, Whisper backfill and exports use saved settings. SenseVoice is optional for backfill snippets only. Scribe timestamp offset defaults to zero. Precision and parameter testing remain unavailable.',
+    'Local diarization (community-1, or Nemotron when selected), Whisper backfill and exports use saved settings. SenseVoice is optional for backfill snippets only. Scribe timestamp offset defaults to zero. Precision and parameter testing remain unavailable.',
     'Each start resumes validated remote transcription but repeats local diarization and exports. Uncertain uploads or queue requests are never automatically replayed.',
     'Stop cancels local waiting and processing only. Remote jobs continue. Start with the same selection and language to resume.',
     'Original recordings and local results are preserved. Scribe output, state and cache stay in scribe-webui.',
