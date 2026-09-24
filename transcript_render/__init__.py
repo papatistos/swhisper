@@ -32,6 +32,7 @@ from .formatters import (
     RTFFormatter,
     SPEAKER_STATS_WARNING,
 )
+from .anchors import anchors_from_txt
 
 __all__ = [
     'STATIC_MARKERS',
@@ -57,4 +58,5 @@ __all__ = [
     'TXTFormatter',
     'RTFFormatter',
     'SPEAKER_STATS_WARNING',
+    'anchors_from_txt',
 ]

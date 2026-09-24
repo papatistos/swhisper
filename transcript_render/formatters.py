@@ -7,7 +7,7 @@ re-exports them so existing call sites keep working.
 """
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .markers import (
     get_word_text,
@@ -673,14 +673,24 @@ class TXTFormatter(TranscriptFormatter):
 
         return lines
 
-    def render(self, segments: List[Dict], include_silence: bool = True, config=None, transcript_id: str = None, speaker_stats: Optional[Dict[str, Dict[str, Any]]] = None, stats: bool = True, **kwargs) -> str:
+    def render(self, segments: List[Dict], **kwargs) -> str:
         """Build a plain text transcript with speaker paragraphs."""
+        return self.render_with_anchors(segments, **kwargs)[0]
+
+    def render_with_anchors(self, segments: List[Dict], include_silence: bool = True, config=None, transcript_id: str = None, speaker_stats: Optional[Dict[str, Dict[str, Any]]] = None, stats: bool = True, **kwargs) -> Tuple[str, List[Dict[str, Any]]]:
+        """Build the plain text transcript and the time span of each paragraph.
+
+        Each anchor gives the line of a paragraph's header in the returned text
+        and the part of the recording the paragraph covers, so a view can find
+        the text for a moment in the recording.
+        """
         gap_threshold = getattr(config, 'silence_gap_linebreak_threshold', None) if config else None
 
         paragraphs: List[Dict[str, Any]] = []
         current_speaker = None
         current_paragraph: List[str] = []
         current_start_time = None
+        current_end_time = None
 
         for segment in segments:
             is_silence = segment.get('is_silence_marker', False)
@@ -710,6 +720,7 @@ class TXTFormatter(TranscriptFormatter):
                             'speaker': current_speaker,
                             'text': paragraph_text,
                             'start_time': current_start_time,
+                            'end_time': current_end_time,
                         }
                     )
 
@@ -718,6 +729,7 @@ class TXTFormatter(TranscriptFormatter):
                 current_start_time = segment.get('start', 0)
             else:
                 current_paragraph.append(text)
+            current_end_time = segment.get('end', current_start_time)
 
         if current_paragraph and current_speaker is not None:
             paragraph_text = smart_join(current_paragraph).strip('\n')
@@ -726,6 +738,7 @@ class TXTFormatter(TranscriptFormatter):
                     'speaker': current_speaker,
                     'text': paragraph_text,
                     'start_time': current_start_time,
+                    'end_time': current_end_time,
                 }
             )
 
@@ -751,6 +764,9 @@ class TXTFormatter(TranscriptFormatter):
             txt_content.extend(summary_lines)
             txt_content.append("")
 
+        anchors: List[Dict[str, Any]] = []
+        # Entries can hold several lines (the preamble, pause breaks).
+        line = sum(item.count('\n') + 1 for item in txt_content)
         for paragraph in paragraphs:
             speaker = paragraph['speaker']
             text = paragraph['text']
@@ -761,11 +777,17 @@ class TXTFormatter(TranscriptFormatter):
             seconds = int(start_time % 60)
             timestamp = f"[{hours:02d}:{minutes:02d}:{seconds:02d}]"
 
+            anchors.append({
+                'line': line,
+                'start': start_time,
+                'end': max(start_time, paragraph['end_time'] or start_time),
+            })
             txt_content.append(f"{speaker} {timestamp}:")
             txt_content.append(text)
             txt_content.append("")
+            line += text.count('\n') + 3
 
-        return '\n'.join(txt_content)
+        return '\n'.join(txt_content), anchors
 
     def format(self, segments: List[Dict], output_path: str, **kwargs) -> None:
         """Render and write to *output_path*."""
