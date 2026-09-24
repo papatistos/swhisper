@@ -4,6 +4,7 @@ import json
 import os
 import re
 from pathlib import Path
+from diarization_status import model_run_reason
 
 from sidecar import (SIDECAR_PARAMS, STAGE_DIARIZE, STAGE_TRANSCRIBE,
                      find_sidecar, parse_sidecar_file, sidecar_requests_reprocess)
@@ -46,6 +47,10 @@ def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False):
             return 'reprocess', 'Reprocessing requested for this run'
         if force:
             return 'reprocess', 'Force reprocessing enabled'
+        if stage == STAGE_DIARIZE:
+            reason = model_run_reason(artifact, getattr(dc, 'pipeline_model', None), stamp)
+            if reason:
+                return 'process', reason
         if stage == STAGE_DIARIZE and any(
                 f'# Backfill status: {status}' in artifact.read_text(encoding='utf-8')
                 for status in ('failed', 'partial')):
@@ -101,6 +106,11 @@ def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False):
              'This runs the folder. Selecting a file in the editor does not restrict the run.')
     notes = [scope,
              'Preview uses saved settings and current outputs. Conversion, model errors, and files changed during a run can affect the result.']
+    if rows and all(row['action'] == 'skip' for row in rows) and any(
+            row['reason'] == 'Existing output; no reprocessing requested' for row in rows):
+        notes.insert(0, 'Run is disabled because existing outputs are being skipped. '
+                     'To run them again, cancel this preview, enable "Reprocess existing outputs", '
+                     'then select Run again. Selecting a recording alone does not enable reprocessing.')
     if pipeline == 'transcribe5':
         notes.append('Diarization-first selects files using transcription JSON and transcription reprocessing rules; a diarization-only override does not select an already transcribed file.')
     if pipeline == 'transcribe4' and json_dir != diar_json:

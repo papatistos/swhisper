@@ -13,6 +13,7 @@ let status = {running:false, pipeline:null, returncode:null, run_id:null, progre
 const saved = {a:{values:{SWHISPER_NUM_SPEAKERS:'2',SWHISPER_CONDITION_ON_PREVIOUS:'yes'},comment:'original'}, b:{values:{},comment:'B'}};
 const writes = [], launches = [], errors = [], exports = [];
 let globalValues={}, globalRevision="g1", exportCanceled=false;
+let previewAllSkipped=false;
 let speakerNames={};
 // Two versions of one recording that split it into paragraphs differently:
 // v2 has short paragraphs every 10 s, v1 long ones every 25 s behind an introduction.
@@ -70,7 +71,16 @@ const server = http.createServer(async (req,res) => {
   if (u.pathname === '/api/history') return send({entries:[]});
   if (u.pathname === '/api/audio-dir') {audioDir=data.path;return send({audio_dir:audioDir,audio_paths:['/mock/audio','/mock/other']});}
   if (u.pathname === '/api/audio-dir/pick') {await delay(pickDelay);return send({path:'/mock/picked'});}
-  if (u.pathname === '/api/run/preview') {const only=u.searchParams.getAll('only');return send({audio_dir:audioDir,pipeline:'transcribe4',token:'preview-1',only:only.length?only:null,notes:['Folder scope'],files:[{file:'a.wav',stage:'Transcription',action:'process',reason:'No output'},{file:'b.wav',stage:'Transcription',action:'skip',reason:'Existing output'},{file:'c.wav',stage:'Transcription',action:'skip',reason:'Existing output'}]});}
+  if (u.pathname === '/api/run/preview') {
+    const only=u.searchParams.getAll('only'), reprocess=u.searchParams.get('reprocess')==='true';
+    const files=previewAllSkipped
+      ? [{file:'a.json',stage:'Diarization',action:reprocess?'reprocess':'skip',reason:reprocess?'Reprocessing requested for this run':'Existing output; no reprocessing requested'}]
+      : [{file:'a.wav',stage:'Transcription',action:'process',reason:'No output'},{file:'b.wav',stage:'Transcription',action:'skip',reason:'Existing output'},{file:'c.wav',stage:'Transcription',action:'skip',reason:'Existing output'}];
+    const notes=previewAllSkipped && !reprocess
+      ? ['Run is disabled because existing outputs are being skipped. To run them again, cancel this preview, enable "Reprocess existing outputs", then select Run again. Selecting a recording alone does not enable reprocessing.']
+      : ['Folder scope'];
+    return send({audio_dir:audioDir,pipeline:u.searchParams.get('pipeline'),token:`preview-${reprocess}`,diarization_model:u.searchParams.get('diarization_model'),reprocess,only:only.length?only:null,notes,files});
+  }
   if (u.pathname === '/api/run' && req.method === 'POST') {launches.push(data);status={running:true,pipeline:'transcribe4',run_id:'run1',started_at:Date.now()/1000,audio_dir:audioDir,progress:{stage:'Transcription',current_file:'a.wav',file_index:1,total_files:2,completed:{Transcription:0}}};return send(status);}
   if (u.pathname === '/api/run/stop') {status={...status,running:false,stop_requested:true,returncode:0};return send(status);}
   if (u.pathname.startsWith('/api/sidecar/')) {
@@ -257,6 +267,8 @@ try {
   });
   await check('Run preview separates what runs from what is skipped',async()=>{
     await click('startBtn');await wait('$("previewDialog").open');
+    assert.equal(await evaluate('$("previewTitle").textContent'),'Run');
+    assert.equal(await evaluate('$("previewStart").textContent'),'Run');
     assert.equal(await evaluate('$("previewTable").querySelectorAll("tbody tr").length'),1);
     assert.equal(await evaluate('$("previewSkipped").hidden'),false);
     assert.equal(await evaluate('$("previewSkipped").open'),false);
@@ -269,11 +281,32 @@ try {
     assert.equal(await evaluate('[...document.querySelectorAll(\'[data-base="b"] .badge\')].map(b=>b.textContent).includes("1 min")'),true);
     assert.equal(await evaluate('[...document.querySelectorAll(\'[data-base="<unsafe>"] .badge\')].some(b=>/min|h /.test(b.textContent))'),false);
   });
+  await check('Skipped output disables Run until reprocessing is requested',async()=>{
+    previewAllSkipped=true;
+    await evaluate('$("pipelineSel").value="diarize4";$("runModel").value="nemotron";$("runReprocess").checked=false');
+    await click('startBtn');await wait('$("previewDialog").open');
+    assert.equal(await evaluate('$("previewStart").disabled'),true);
+    assert.match(await evaluate('$("previewNotes").textContent'),/Reprocess existing outputs/);
+    if (process.env.SWHISPER_TEST_SCREENSHOT) {
+      const screenshot=await cdp('Page.captureScreenshot',{format:'png'});
+      await fs.writeFile(process.env.SWHISPER_TEST_SCREENSHOT,Buffer.from(screenshot.data,'base64'));
+    }
+    await click('previewCancel');await click('runReprocess');
+    await click('startBtn');await wait('$("previewDialog").open');
+    assert.equal(await evaluate('$("previewStart").disabled'),false);
+    assert.match(await evaluate('$("previewTable").textContent'),/Reprocessing requested/);
+    assert.equal(await evaluate('pendingPreview.reprocess'),true);
+    assert.equal(await evaluate('pendingPreview.diarization_model'),'nemotron');
+    await click('previewCancel');
+    await evaluate('$("pipelineSel").value="transcribe4";$("runModel").value="";$("runReprocess").checked=false');
+    previewAllSkipped=false;
+  });
   await check('Selected files narrow the run and reach the launch call',async()=>{
-    assert.equal(await evaluate('$("startBtn").textContent'),'Run folder…');
+    assert.equal(await evaluate('$("startBtn").textContent'),'Run');
     assert.equal(await evaluate('$("clearRunSelection").hidden'),true);
     await evaluate('document.querySelector(\'[data-base="b"] .runPick input\').click()');
-    await wait('$("startBtn").textContent==="Run 1 selected…"');
+    await wait('$("startBtn").title==="Run 1 selected file(s)"');
+    assert.equal(await evaluate('$("startBtn").textContent'),'Run');
     assert.equal(await evaluate('$("clearRunSelection").hidden'),false);
     const before=launches.length;
     await click('startBtn');await wait('$("previewDialog").open');
@@ -282,7 +315,7 @@ try {
     for(let i=0;i<200 && launches.length===before;i++) await delay(20);
     assert.deepEqual(launches.at(-1).only,['b']);
     await wait('lastStatus && lastStatus.running');await click('stopBtn');await wait('lastStatus && !lastStatus.running');
-    await click('clearRunSelection');await wait('$("startBtn").textContent==="Run folder…"');
+    await click('clearRunSelection');await wait('$("startBtn").title==="Run eligible files in this folder"');
     assert.equal(await evaluate('document.querySelector(\'[data-base="b"] .runPick input\').checked'),false);
   });
   await check('Folder moved by another window is reported, not applied silently',async()=>{

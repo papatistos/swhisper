@@ -43,9 +43,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from path_settings import (
     get_commented_audio_dirs,
+    get_last_webui_audio_dir,
     get_path_settings,
     normalize_path_value,
     remember_audio_dir,
+    remember_webui_audio_dir,
 )
 from sidecar import (
     BLOCKED_KEYS,
@@ -58,6 +60,7 @@ from sidecar import (
     sidecar_requests_reprocess,
 )
 from webui_run import preview_run, ProgressTracker
+from diarization_status import effective_v4_model
 from run_scope import DIARIZATION_MODELS, ENV_VAR as ONLY_FILES_ENV, REPROCESS_ENV_VAR as REPROCESS_ENV
 import webui_durations
 import webui_speakers
@@ -151,7 +154,7 @@ PIPELINES: Dict[str, Dict[str, str]] = {
 
 class AppState:
     def __init__(self, audio_dir: Optional[str] = None):
-        self.audio_dir_override = audio_dir
+        self.audio_dir_override = audio_dir if audio_dir is not None else get_last_webui_audio_dir()
         self.audio_dir_pinned = audio_dir is not None
         self.lock = threading.Lock()
         self.process: Optional[subprocess.Popen] = None
@@ -894,6 +897,10 @@ def api_set_audio_dir(body: Dict[str, str]) -> Dict[str, Any]:
         remember_audio_dir(path)
     except (OSError, ValueError) as exc:
         raise HTTPException(500, f"Could not update .swhisper.env: {exc}")
+    try:
+        remember_webui_audio_dir(path)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(500, f"Could not remember the selected audio directory: {exc}")
     state.audio_dir_override = path
     return {"audio_dir": path, "audio_paths": get_commented_audio_dirs()}
 
@@ -1696,8 +1703,12 @@ def api_run_preview(pipeline: str, only: Optional[List[str]] = Query(None),
             raise HTTPException(400, str(exc)) from None
     else:
         audio_dir = state.audio_dir()
+        diarization_config = _dconfig.DiarizationConfig()
+        if diarization_model:
+            diarization_config.pipeline_model = DIARIZATION_MODELS[diarization_model]
+        diarization_config.pipeline_model = effective_v4_model(diarization_config)
         preview = preview_run(audio_dir, pipeline, _tconfig.TranscriptionConfig(),
-                              _dconfig.DiarizationConfig(),
+                              diarization_config,
                               _validated_selection(audio_dir, only), reprocess)
         preview['diarization_model'] = diarization_model
     _, revision = env_snapshot(GLOBAL_ENV_PATH)

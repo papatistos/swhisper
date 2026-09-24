@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from diarize import DiarizationConfig
 from diarize.nemotron import is_nemotron_model
+from diarization_status import effective_v4_model
 
 
 def _invoke_legacy_main(config: DiarizationConfig) -> None:
@@ -98,10 +99,7 @@ def run(config: Optional[DiarizationConfig] = None, *, show_header: bool = True)
         return
 
     precision_pipeline_id = getattr(config_obj, "precision_pipeline_model", PRECISION_PIPELINE_ID)
-    use_precision = getattr(config_obj, "use_precision_service", False)
-
-    if use_precision and config_obj.pipeline_model != precision_pipeline_id:
-        config_obj.pipeline_model = precision_pipeline_id
+    config_obj.pipeline_model = effective_v4_model(config_obj)
 
     is_precision = config_obj.pipeline_model == precision_pipeline_id
 
@@ -117,8 +115,6 @@ def run(config: Optional[DiarizationConfig] = None, *, show_header: bool = True)
     elif is_nemotron_model(config_obj.pipeline_model):
         print("🎯 Using NVIDIA Nemotron 3 Diarization (runs in its own environment).")
     else:
-        if getattr(config_obj, "pipeline_model", "").strip() in {"", LEGACY_PIPELINE_ID}:
-            config_obj.pipeline_model = COMMUNITY_PIPELINE_ID
         config_obj.hugging_face_token = resolve_pyannote_token(config_obj.hugging_face_token)
         if not config_obj.hugging_face_token:
             print(

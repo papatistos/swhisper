@@ -7,8 +7,10 @@ environment variables or by creating a ``.swhisper.env`` file in the project roo
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -16,6 +18,7 @@ from typing import Dict, Optional
 from urllib.parse import unquote, urlsplit
 
 _ENV_FILE_NAME = ".swhisper.env"
+_WEBUI_STATE_FILE = ".swhisper-webui.json"
 _AUDIO_DIR_ASSIGNMENT_RE = re.compile(
     r"^\s*(?P<comment>#\s*)?SWHISPER_AUDIO_DIR\s*=(?P<value>.*)$"
 )
@@ -223,6 +226,36 @@ def remember_audio_dir(path_value: str) -> str:
     return key
 
 
+def get_last_webui_audio_dir() -> Optional[str]:
+    """Restore the UI's last folder, falling back if it is unavailable."""
+    state_path = Path(__file__).resolve().parent / _WEBUI_STATE_FILE
+    try:
+        saved = json.loads(state_path.read_text(encoding="utf-8"))
+        path = Path(saved["audio_dir"])
+        if path.is_absolute() and path.is_dir():
+            return str(path)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return None
+
+
+def remember_webui_audio_dir(path_value: str) -> None:
+    """Atomically save the UI selection without changing pipeline defaults."""
+    path = str(normalize_path_value(path_value))
+    state_path = Path(__file__).resolve().parent / _WEBUI_STATE_FILE
+    fd, temporary = tempfile.mkstemp(prefix=".swhisper-webui-", dir=state_path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"audio_dir": path}, handle, ensure_ascii=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, state_path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def _load_env_file() -> None:
     """Load key/value pairs from the optional ``.swhisper.env`` file."""
     env_path = Path(__file__).resolve().parent / _ENV_FILE_NAME
@@ -289,7 +322,9 @@ def get_path_settings() -> PathSettings:
 __all__ = [
     "PathSettings",
     "get_commented_audio_dirs",
+    "get_last_webui_audio_dir",
     "get_path_settings",
     "normalize_path_value",
     "remember_audio_dir",
+    "remember_webui_audio_dir",
 ]

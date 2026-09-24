@@ -60,6 +60,7 @@ from diarize.utils import logger_manager, BackfillTranscriber, BackfillCache, Wo
 from transcript_render import RenderOptions, derive_segments
 from transcribe import TranscriptionConfig, WhisperSettings
 from sidecar import apply_sidecar_to_diarization_config, sidecar_requests_reprocess, STAGE_DIARIZE
+from diarization_status import model_run_reason
 
 
 # Ensure progress messages appear immediately even when stdout is buffered
@@ -121,6 +122,7 @@ def create_completion_marker(config: DiarizationConfig, base_filename: str,
     backfill_status = (backfill_outcome or {}).get('status', 'unknown')
     completion_content = f"""# Diarization exported
 # Backfill status: {backfill_status}
+# Diarization model: {config.pipeline_model}
 # Start: {log_timestamp}
 # End: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 # Audio dir: {config.audio_dir}
@@ -176,7 +178,10 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             previous_status = handle.read()
         if any(f'# Backfill status: {status}' in previous_status for status in ('failed', 'partial')):
             sidecar_reprocess, sidecar_reason = True, 'Previous backfill incomplete; resuming saved gaps'
-        if sidecar_reprocess:
+        model_reason = model_run_reason(completion_marker, config.pipeline_model)
+        if model_reason:
+            print(f"🎯 {audio_basename}: {model_reason}")
+        elif sidecar_reprocess:
             print(f"📎 [sidecar] Reprocessing {audio_basename}: {sidecar_reason}")
         else:
             print("-" * 80)

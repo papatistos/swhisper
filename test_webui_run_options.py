@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 import webui
 import webui_scribe
+from diarization_status import COMMUNITY_MODEL
+from run_scope import DIARIZATION_MODELS
 
 
 class RunOptionTests(unittest.TestCase):
@@ -20,13 +22,13 @@ class RunOptionTests(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
-    def transcribed(self):
+    def transcribed(self, model=COMMUNITY_MODEL):
         json_dir = self.root / 'whisper-json-output'
         json_dir.mkdir()
         (json_dir / 'a.json').write_text('{}')
         output = Path(self.state.dirs()['output'])
         output.mkdir(parents=True)
-        (output / 'a.ok').write_text('')
+        (output / 'a.ok').write_text(f'# Diarization model: {model}\n')
 
     def test_local_preview_reprocesses_existing_outputs_only_when_asked(self):
         self.transcribed()
@@ -46,6 +48,34 @@ class RunOptionTests(unittest.TestCase):
         env = popen.call_args.kwargs['env']
         self.assertEqual(env['SWHISPER_PIPELINE_MODEL'], 'nvidia/Nemotron-3-Diarization')
         self.assertEqual(env['SWHISPER_RUN_REPROCESS'], 'true')
+
+    def test_selected_existing_diarization_explains_how_to_rerun(self):
+        self.transcribed(DIARIZATION_MODELS['nemotron'])
+        plain = webui.api_run_preview('diarize4', ['a'], diarization_model='nemotron')
+        self.assertEqual([r['action'] for r in plain['files']], ['skip'])
+        self.assertIn('Run is disabled', plain['notes'][0])
+        self.assertIn('Reprocess existing outputs', plain['notes'][0])
+        forced = webui.api_run_preview('diarize4', ['a'], diarization_model='nemotron', reprocess=True)
+        self.assertEqual([r['action'] for r in forced['files']], ['reprocess'])
+        self.assertFalse(any('Run is disabled' in note for note in forced['notes']))
+        self.assertNotEqual(plain['token'], forced['token'])
+
+    def test_first_run_with_new_model_does_not_require_reprocessing(self):
+        self.transcribed()
+        plan = webui.api_run_preview('diarize4', ['a'], diarization_model='nemotron')
+        self.assertEqual([r['action'] for r in plan['files']], ['process'])
+        self.assertIn(COMMUNITY_MODEL, plan['files'][0]['reason'])
+        self.assertFalse(plan['reprocess'])
+        with patch.object(self.state, 'start') as start:
+            webui.api_run(dict(pipeline='diarize4', only=['a'], preview_token=plan['token'],
+                               diarization_model='nemotron', reprocess=False))
+        self.assertEqual(start.call_args.kwargs['options'], {'diarization_model': 'nemotron', 'reprocess': False})
+
+    def test_model_change_in_standard_pipeline_reuses_transcription(self):
+        self.transcribed()
+        plan = webui.api_run_preview('transcribe4', ['a'], diarization_model='nemotron')
+        self.assertEqual([(r['stage'], r['action']) for r in plan['files']],
+                         [('Transcription', 'skip'), ('Diarization', 'process')])
 
     def test_run_without_options_keeps_the_saved_model_and_does_not_reprocess(self):
         with patch.dict('os.environ', {'SWHISPER_RUN_REPROCESS': 'true', 'SWHISPER_PIPELINE_MODEL': 'saved/model'}), \

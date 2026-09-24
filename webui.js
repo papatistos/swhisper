@@ -76,7 +76,8 @@ function runScope() {
 function updateRunControls() {
   const running = !!(lastStatus && lastStatus.running);
   const chosen = runScope().length;
-  $("startBtn").textContent = chosen ? `Run ${chosen} selected…` : "Run folder…";
+  $("startBtn").textContent = "Run";
+  $("startBtn").title = chosen ? `Run ${chosen} selected file(s)` : "Run eligible files in this folder";
   $("clearRunSelection").hidden = !chosen;
   const scribeGate = $("pipelineSel").value === "scribe" && !scribeSelectionReady();
   $("startBtn").disabled = !connected || !initialized || running || runBusy || changingDir || saving || editorLoading || scribeGate;
@@ -1309,11 +1310,11 @@ async function startRun() {
     // Consent is needed only when a recording has no saved Scribe transcript.
     const remote = scribe && data.remote;
     $("previewTitle").textContent = remote ? "Scribe remote upload preview"
-      : scribe ? "Scribe rerun preview (no upload)" : "Run folder preview";
+      : scribe ? "Scribe rerun preview (no upload)" : "Run";
     $("previewConsent").hidden = !remote;
     $("consentRow").hidden = !remote;
     $("scribeConsent").checked = false;
-    $("previewStart").textContent = remote ? "Upload to Scribe and run" : scribe ? "Rerun locally" : "Run folder";
+    $("previewStart").textContent = remote ? "Upload to Scribe and run" : scribe ? "Rerun locally" : "Run";
     $("previewFolder").textContent = `${label} · ${data.audio_dir}`
       + (scribe && selected ? ` · ${selected}` : "")
       + (data.only ? ` · ${data.only.length} selected file(s)` : "")

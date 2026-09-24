@@ -1,5 +1,6 @@
 # Local environment overrides
 .swhisper.env
+.swhisper-webui.json
 
 # Local context/notes
 CONTEXT.md
