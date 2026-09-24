@@ -49,6 +49,20 @@ class RunOptionTests(unittest.TestCase):
         self.assertEqual(env['SWHISPER_PIPELINE_MODEL'], 'nvidia/Nemotron-3-Diarization')
         self.assertEqual(env['SWHISPER_RUN_REPROCESS'], 'true')
 
+    def test_run_reprocessing_does_not_persist_in_file_settings(self):
+        self.transcribed()
+        sidecar = self.root / 'a.swhisper'
+        sidecar.write_text('# Keep this comment\nSWHISPER_FORCE_REPROCESS=false\n')
+        before = (sidecar.read_bytes(), sidecar.stat().st_mtime_ns)
+        preview = webui.api_run_preview('transcribe4', ['a'], reprocess=True)
+        self.assertEqual({r['action'] for r in preview['files']}, {'reprocess'})
+        with patch('webui.subprocess.Popen', **{'return_value.pid': 12345}), patch.object(self.state, '_watch_process'):
+            webui.api_run(dict(pipeline='transcribe4', only=['a'],
+                               preview_token=preview['token'], reprocess=True))
+        self.assertEqual((sidecar.read_bytes(), sidecar.stat().st_mtime_ns), before)
+        next_preview = webui.api_run_preview('transcribe4', ['a'], reprocess=False)
+        self.assertEqual({r['action'] for r in next_preview['files']}, {'skip'})
+
     def test_selected_existing_diarization_explains_how_to_rerun(self):
         self.transcribed(DIARIZATION_MODELS['nemotron'])
         plain = webui.api_run_preview('diarize4', ['a'], diarization_model='nemotron')

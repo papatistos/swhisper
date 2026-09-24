@@ -35,8 +35,8 @@ GLOBAL_EXTRAS = {
 
 def parameter_ui(key):
     labels = {'NUM_SPEAKERS': 'Number of speakers', 'MIN_SPEAKERS': 'Minimum speakers',
-              'MAX_SPEAKERS': 'Maximum speakers', 'FORCE_REPROCESS': 'Reprocess transcription',
-              'DIARIZE_FORCE_REPROCESS': 'Reprocess diarization', 'VAD': 'Voice activity detection',
+              'MAX_SPEAKERS': 'Maximum speakers', 'FORCE_REPROCESS': 'Always reprocess transcription',
+              'DIARIZE_FORCE_REPROCESS': 'Always reprocess diarization', 'VAD': 'Voice activity detection',
               'INITIAL_PROMPT': 'Transcription context', 'CONDITION_ON_PREVIOUS': 'Use previous text as context',
               'OUTPUT_PREAMBLE': 'Transcript introduction'}
     short = key.removeprefix('SWHISPER_')
@@ -132,8 +132,8 @@ PARAM_HELP: Dict[str, str] = {
     "SWHISPER_NUM_SPEAKERS": "Exact number of speakers for this file — sets both min and max. Tip from the README: specifying 1–2 more speakers than actually present often works better.",
     "SWHISPER_MIN_SPEAKERS": "Lower bound for the number of speakers pyannote may detect (default 1).",
     "SWHISPER_MAX_SPEAKERS": "Upper bound for the number of speakers. The README recommends 1–2 more than the real number; post-processing often removes the excess.",
-    "SWHISPER_FORCE_REPROCESS": "Re-run transcription for this file even though whisper JSON output already exists.",
-    "SWHISPER_DIARIZE_FORCE_REPROCESS": "Re-run diarization for this file even though its .ok completion marker exists.",
+    "SWHISPER_FORCE_REPROCESS": "Re-run transcription on every applicable run until this saved option is turned off. For a single rerun, use Reprocess existing outputs in the run controls instead.",
+    "SWHISPER_DIARIZE_FORCE_REPROCESS": "Re-run speaker identification on every applicable run until this saved option is turned off. For a single rerun, use Reprocess existing outputs in the run controls instead.",
     "SWHISPER_LANGUAGE": "Language code passed to Whisper (global default: sv). Use e.g. 'en' for an English recording.",
     "SWHISPER_TASK": "'transcribe' keeps the source language; 'translate' translates to English.",
     "SWHISPER_INITIAL_PROMPT": "Text used to prime Whisper — e.g. names, places, or terminology that occur in this recording. Improves spelling of rare words.",

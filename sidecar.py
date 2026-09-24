@@ -468,8 +468,16 @@ def sidecar_requests_reprocess(
         param = SIDECAR_PARAMS.get(key)
         if param is None:
             return False
+        # Turning a force option off does not change the generated output.
+        # Its presence alone must not make a newer sidecar look stale.
+        if param.attr == "force_reprocess":
+            try:
+                if not param.parse(overrides[key]):
+                    return False
+            except ValueError:
+                return False
         if stage == STAGE_DIARIZE:
-            return True  # any allowed key implies this stage must rerun
+            return True  # transcription changes also affect diarization
         return param.stage == stage
 
     if not any(_relevant(k) for k in overrides):
