@@ -189,6 +189,28 @@ assert 'diarize.utils' not in sys.modules
             with self.assertRaises(webui.HTTPException):
                 webui.api_run(body)
 
+    def test_rerun_of_saved_transcript_needs_no_upload_consent(self):
+        work = Path(webui.api_run_preview('scribe', selected='a')['files'][0]['work_dir'])
+        saved = work / 'whisper-json-output' / 'audio.json'
+        saved.parent.mkdir(parents=True)
+        saved.write_text('{}')
+        preview = webui.api_run_preview('scribe', selected='a')
+        self.assertFalse(preview['remote'])
+        self.assertFalse(preview['files'][0]['remote'])
+        self.assertIn('no upload', preview['files'][0]['reason'])
+        with patch.object(self.state, 'start') as start:
+            webui.api_run(dict(pipeline='scribe', selected='a', language=preview['language'],
+                               preview_token=preview['token']))
+            start.assert_called_once()
+        # Without a saved transcript the same request needs consent again.
+        saved.unlink()
+        preview = webui.api_run_preview('scribe', selected='a')
+        self.assertTrue(preview['remote'])
+        with patch.object(self.state, 'start') as start, self.assertRaises(webui.HTTPException):
+            webui.api_run(dict(pipeline='scribe', selected='a', language=preview['language'],
+                               preview_token=preview['token']))
+        start.assert_not_called()
+
     def test_selected_scope_validates_identity_before_remote_start(self):
         selected = webui.api_run_preview('scribe', selected='a', language='Swedish')
         self.assertEqual([r['file'] for r in selected['files']], ['a.wav'])

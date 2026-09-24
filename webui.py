@@ -1677,14 +1677,17 @@ def api_run_preview(pipeline: str, only: Optional[List[str]] = Query(None),
 def api_run(body: Dict[str, Any]) -> Dict[str, Any]:
     pipeline = body.get("pipeline", "")
     if pipeline == 'scribe':
-        if body.get('remote_upload') is not True or not body.get('preview_token'):
-            raise HTTPException(400, 'Scribe requires a reviewed preview and explicit remote upload consent.')
+        if not body.get('preview_token'):
+            raise HTTPException(400, 'Scribe requires a reviewed preview.')
         selected, language = body.get('selected', ''), body.get('language', 'Swedish (verbatim)')
         if not isinstance(selected, str) or not isinstance(language, str):
             raise HTTPException(400, 'Invalid Scribe selection or language')
         preview = api_run_preview(pipeline, selected=selected, language=language)
         if preview['token'] != body['preview_token']:
             raise HTTPException(409, 'Folder or settings changed. Review a new run preview before starting.')
+        # Reruns that reuse saved Scribe transcripts contact no remote service.
+        if preview['remote'] and body.get('remote_upload') is not True:
+            raise HTTPException(400, 'Scribe requires explicit remote upload consent for recordings without a saved transcript.')
         if not preview['files']:
             raise HTTPException(400, 'No recordings selected')
         state.start(pipeline, plan=preview)

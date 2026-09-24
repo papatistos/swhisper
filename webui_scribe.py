@@ -59,11 +59,14 @@ def preview_scribe(audio_dir, selected='', language=LANGUAGES[0]):
             fingerprint = hashlib.sha256(json.dumps(evidence).encode()).hexdigest()
             settings = local_settings(source, work)
             recovery = f"local Whisper backfill {settings['backfill_model']}" if settings['backfill_missing_turns'] else "backfill off"
+            # transcribe_scribe contacts SUNET only when no saved transcript exists.
+            remote = not (work / 'whisper-json-output' / 'audio.json').is_file()
             rows.append(dict(local_settings=settings, file=source.name, base=source.stem, work_dir=str(work), fingerprint=fingerprint,
-                             stage='Scribe + local diarization', action='process',
-                             reason=f'Resume or upload; {recovery}; SenseVoice {"on" if settings["backfill_enable_sensevoice"] else "off"}; offset {settings["whisper_timestamp_offset"]:g}s; local exports in {work / "transcripts"}'))
+                             stage='Scribe + local diarization' if remote else 'Local diarization of saved Scribe transcript',
+                             action='process', remote=remote,
+                             reason=f'{"Resume or upload" if remote else "Reuses the saved Scribe transcript; no upload or SUNET login"}; {recovery}; SenseVoice {"on" if settings["backfill_enable_sensevoice"] else "off"}; offset {settings["whisper_timestamp_offset"]:g}s; local exports in {work / "transcripts"}'))
     result = dict(audio_dir=str(audio), pipeline='scribe', language=language, selected=selected,
-                  files=rows, notes=NOTES)
+                  files=rows, notes=NOTES, remote=any(row['remote'] for row in rows))
     result['token'] = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
     return result
 

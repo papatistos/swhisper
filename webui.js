@@ -1071,11 +1071,14 @@ async function startRun() {
     const { data } = await api(`/api/run/preview?${query}`);
     pendingPreview = data;
     const label = META.pipelines.find(p => p.id === pipeline).label;
-    $("previewTitle").textContent = scribe ? "Scribe remote upload preview" : "Run folder preview";
-    $("previewConsent").hidden = !scribe;
-    $("consentRow").hidden = !scribe;
+    // Consent is needed only when a recording has no saved Scribe transcript.
+    const remote = scribe && data.remote;
+    $("previewTitle").textContent = remote ? "Scribe remote upload preview"
+      : scribe ? "Scribe rerun preview (no upload)" : "Run folder preview";
+    $("previewConsent").hidden = !remote;
+    $("consentRow").hidden = !remote;
     $("scribeConsent").checked = false;
-    $("previewStart").textContent = scribe ? "Upload to Scribe and run" : "Run folder";
+    $("previewStart").textContent = remote ? "Upload to Scribe and run" : scribe ? "Rerun locally" : "Run folder";
     $("previewFolder").textContent = `${label} · ${data.audio_dir}`
       + (scribe && selected ? ` · ${selected}` : "")
       + (data.only ? ` · ${data.only.length} selected file(s)` : "");
@@ -1116,8 +1119,10 @@ async function launchPreview() {
   try {
     const body = { pipeline: pendingPreview.pipeline, preview_token: pendingPreview.token };
     if (pendingPreview.pipeline === "scribe") {
-      if (!$("scribeConsent").checked) { $("previewSummary").textContent = "Consent to the remote upload first, or cancel."; return; }
-      body.remote_upload = true;
+      if (pendingPreview.remote) {
+        if (!$("scribeConsent").checked) { $("previewSummary").textContent = "Consent to the remote upload first, or cancel."; return; }
+        body.remote_upload = true;
+      }
       body.selected = pendingPreview.selected || "";
       body.language = pendingPreview.language;
     } else if (pendingPreview.only) {
