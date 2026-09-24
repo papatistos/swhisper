@@ -1,6 +1,7 @@
 """Output formatters for various transcript formats."""
 
 import os
+import re
 import json
 import csv
 from typing import Any, Dict, List, Optional
@@ -67,6 +68,15 @@ class VTTFormatter(TranscriptFormatter):
 
 class RTTMFormatter(TranscriptFormatter):
     """Formats transcripts in RTTM format."""
+
+    @staticmethod
+    def _file_id(audio_basename: str) -> str:
+        """Return the RTTM file id: the audio name without extension, whitespace replaced by underscores.
+
+        RTTM fields are whitespace-separated, so a file id containing spaces breaks standard parsers.
+        """
+        base_name = os.path.splitext(audio_basename)[0] if audio_basename else "audio"
+        return re.sub(r"\s", "_", base_name)
     
     def format(self, segments: List[Dict], output_path: str, audio_basename: str = "", **kwargs) -> int:
         """
@@ -76,8 +86,7 @@ class RTTMFormatter(TranscriptFormatter):
         """
         rttm_lines = []
         
-        # Get base filename without extension for RTTM
-        base_name = os.path.splitext(audio_basename)[0] if audio_basename else "audio"
+        base_name = self._file_id(audio_basename)
         
         for segment in segments:
             speaker = segment.get('speaker', 'UNKNOWN')
@@ -106,8 +115,7 @@ class RTTMFormatter(TranscriptFormatter):
         """
         rttm_lines = []
         
-        # Get base filename without extension for RTTM
-        base_name = os.path.splitext(audio_basename)[0] if audio_basename else "audio"
+        base_name = self._file_id(audio_basename)
         
         for segment in segments:
             words = segment.get('words', [])
