@@ -605,6 +605,28 @@ class WordProcessor:
         return segments
 
     @staticmethod
+    def rescale_legacy_disfluency_markers(whisper_result: Dict) -> int:
+        """Scale [*] markers in a transcription JSON by their duration.
+
+        TEMPORARY: transcription JSONs written before 2025-10-21 (commit
+        11150b4) contain only single-asterisk markers, because the transcription
+        step did not scale them yet. Remove this function and its call in
+        diarize.py once every such transcription has been diarized again.
+        """
+        before = [
+            WordProcessor._get_word_text(word)
+            for segment in whisper_result.get('segments', [])
+            for word in segment.get('words', [])
+        ]
+        TranscriptionWorker._scale_disfluency_markers(whisper_result)
+        after = [
+            WordProcessor._get_word_text(word)
+            for segment in whisper_result.get('segments', [])
+            for word in segment.get('words', [])
+        ]
+        return sum(1 for old, new in zip(before, after) if old != new)
+
+    @staticmethod
     def annotate_disfluency_overlap_markers(
         segments: List[Dict],
         diarization_result

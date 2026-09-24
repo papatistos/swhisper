@@ -244,7 +244,12 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                         vad_span['start'] += config.whisper_timestamp_offset
                     if 'end' in vad_span:
                         vad_span['end'] += config.whisper_timestamp_offset
-            
+
+            # TEMPORARY: see WordProcessor.rescale_legacy_disfluency_markers.
+            rescaled_markers = WordProcessor.rescale_legacy_disfluency_markers(whisper_result)
+            if rescaled_markers:
+                print(f"  -> Rescaled {rescaled_markers} legacy [*] markers by duration")
+
             endtime = datetime.now()
             duration = endtime - starttime
             print(f"{endtime.strftime('%Y-%m-%d %H:%M:%S')} - Transcription loaded. (Duration: {duration})")
