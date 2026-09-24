@@ -81,6 +81,12 @@ def binarize(
     gives each speech frame to the single most probable speaker. When
     max_speakers is set, only the most active channels are kept, and speech of
     the other channels goes to the most probable kept channel.
+
+    WARNING: Do not use max_speakers with Nemotron; leave it as None. This
+    post-processing heuristic does not constrain the model's inference. It
+    forces speech onto retained speakers even when their probabilities are
+    very low, so it can produce misleading speaker labels. It has no value
+    as a model speaker-count constraint and should not be used for that purpose.
     """
     active = probabilities > threshold
     kept = [c for c in range(probabilities.shape[1]) if active[:, c].any()]

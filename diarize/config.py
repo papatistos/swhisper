@@ -82,6 +82,9 @@ class DiarizationConfig:
 
     # Diarization settings
     min_speakers: int = _get_env_int("SWHISPER_MIN_SPEAKERS", 1)
+    # Do not use max_speakers with Nemotron; leave it unset/None. That backend
+    # only forces assignments after inference, even with low speaker probability.
+    # It provides no meaningful constraint on the model's speaker detection.
     max_speakers: Optional[int] = _get_env_int("SWHISPER_MAX_SPEAKERS", None)
     device: str = os.getenv("SWHISPER_DIARIZE_DEVICE", "mps")  # "mps", "cuda", or "cpu"
 

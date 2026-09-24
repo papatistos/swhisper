@@ -226,7 +226,7 @@ To use Nemotron for one run only, leave `.swhisper.env` as it is:
 
 Diarization checks which model produced the current output. Choosing a different model runs diarization and preserves the previous timestamped transcripts. Older outputs are identified from the saved JSON metadata; if their model cannot be verified, diarization runs again. To repeat a run with the same model, tick "Reprocess existing outputs" in the web UI, or set `SWHISPER_RUN_REPROCESS=true` for the command. This applies to one run only and overrides per-recording reprocess settings. For Scribe the checkbox reads "Transcribe again with Scribe" and matches `--retranscribe`: it uploads the recording again, asks for upload consent, and moves the previous SUNET transcript to `superseded/` in the recording's Scribe folder. Without it, a Scribe run reuses the saved SUNET transcript and needs no credentials.
 
-Nemotron honours `SWHISPER_MAX_SPEAKERS`. It keeps the most active speakers and gives the speech of the others to whichever kept speaker the model finds most likely. It ignores `SWHISPER_MIN_SPEAKERS`, and the pyannote tuning settings (`SWHISPER_VBX_*`, `SWHISPER_CLUSTERING_*`, …) do not apply to it.
+Do not use `SWHISPER_MAX_SPEAKERS` with Nemotron; leave it unset. The current implementation only limits the output after inference. It keeps the most active speakers and forces the others' speech onto a retained speaker, even when that speaker's probability is very low. This can produce misleading labels and provides no meaningful constraint on the model's speaker detection. Nemotron ignores `SWHISPER_MIN_SPEAKERS`, and the pyannote tuning settings (`SWHISPER_VBX_*`, `SWHISPER_CLUSTERING_*`, …) do not apply to it.
 
 ### Configuration priority
 
