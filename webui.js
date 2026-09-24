@@ -75,6 +75,14 @@ function runScope() {
 }
 function updateRunControls() {
   const running = !!(lastStatus && lastStatus.running);
+  const pipeline = $("pipelineSel");
+  // A reload or another tab can attach to a run with a different pipeline.
+  // Show the server's active pipeline before locking the selector.
+  if (running && pipeline.value !== lastStatus.pipeline &&
+      [...pipeline.options].some(option => option.value === lastStatus.pipeline)) {
+    pipeline.value = lastStatus.pipeline;
+    filterSettings();
+  }
   const chosen = runScope().length;
   $("startBtn").textContent = "Run";
   $("startBtn").title = chosen ? `Run ${chosen} selected file(s)` : "Run eligible files in this folder";
