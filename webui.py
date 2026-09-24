@@ -138,11 +138,11 @@ PIPELINES: Dict[str, Dict[str, str]] = {
     },
     "transcribe5": {
         "script": "transcribe5.py",
-        "label": "Diarization-first pipeline",
+        "label": "Diarization first + full transcription",
     },
     "diarize4": {
         "script": "diarize4.py",
-        "label": "Diarization only (existing whisper JSON)",
+        "label": "Diarization only (reuse existing transcription)",
     },
     "scribe": {
         "script": "webui_scribe.py",

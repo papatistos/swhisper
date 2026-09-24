@@ -17,14 +17,12 @@ import json
 import re
 import math
 from typing import Any, Dict, List, Optional, Tuple
-from contextlib import contextmanager
-
-import whisper_timestamped as whisper
 
 from .config import TranscriptionConfig, WhisperSettings
 from .audio_utils import AudioProcessor
 from .memory_utils import ResourceManager
 from .transcription import fix_zero_duration_words
+from .chunk_process import transcribe_chunk_in_subprocess
 from transcript_render.markers import marker_asterisk_count
 from .speaker_chunking import (
     extract_speaker_segments,
@@ -252,19 +250,15 @@ class DiarizationFirstPipeline:
         print(f"   📊 VAD: {len(vad_segments)} segments covering {vad_coverage:.1f}s / {total_chunk_duration:.1f}s ({coverage_pct:.1f}%)")
         print(f"   📊 Gap merge threshold: {merge_gap_threshold}s (merging speaker segments with small gaps)")
         
-        # Load audio chunk
-        audio_data, sample_rate = self.audio_processor.load_audio_chunk(
-            audio_path, chunk_start, chunk_end
-        )
-        
         # Create modified whisper settings with VAD segments
         whisper_params = self.whisper_settings.to_dict()
         whisper_params['vad'] = vad_segments  # Use speaker segments as VAD
         
-        # Transcribe with Whisper model
-        with self._safe_whisper_model() as model:
-            print(f"   🔄 Transcribing with {len(vad_segments)} speaker segments as VAD...")
-            result = whisper.transcribe(model, audio_data, **whisper_params)
+        print(f"   🔄 Transcribing with {len(vad_segments)} speaker segments as VAD in a fresh worker...")
+        result = transcribe_chunk_in_subprocess(
+            self.config, audio_path, chunk_start, chunk_end, whisper_params,
+            self.resource_manager,
+        )
         
         # Fix zero-duration words
         result = fix_zero_duration_words(result, min_duration=self.whisper_settings.min_word_duration)
@@ -421,30 +415,14 @@ class DiarizationFirstPipeline:
         """
         print("   ⚠️  Processing without speaker segmentation")
         
-        audio_data, _ = self.audio_processor.load_audio_chunk(
-            audio_path, 0, float('inf')
+        result = transcribe_chunk_in_subprocess(
+            self.config, audio_path, 0, float('inf'),
+            self.whisper_settings.to_dict(), self.resource_manager,
         )
-        
-        with self._safe_whisper_model() as model:
-            result = whisper.transcribe(model, audio_data, **self.whisper_settings.to_dict())
         
         result = fix_zero_duration_words(result, min_duration=self.whisper_settings.min_word_duration)
         
         return result
-    
-    @contextmanager
-    def _safe_whisper_model(self):
-        """Context manager for safe whisper model handling."""
-        model = None
-        try:
-            model = whisper.load_model(self.config.model_str, device=self.config.device)
-            self.resource_manager.current_whisper_model = model
-            yield model
-        finally:
-            if model is not None:
-                del model
-                self.resource_manager.current_whisper_model = None
-            self.resource_manager.clear_device_memory()
     
     def _add_silence_markers(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """

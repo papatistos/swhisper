@@ -93,3 +93,42 @@ def test_analyze_chunk_distribution():
     assert stats['total_chunks'] == len(chunks)
     assert stats['total_duration'] > 0
     assert stats['min_chunk_duration'] <= stats['avg_chunk_duration'] <= stats['max_chunk_duration']
+
+
+def test_speaker_guided_transcription_uses_isolated_worker(monkeypatch):
+    from transcribe.config import WhisperSettings
+    from transcribe import diarization_first
+
+    config = TranscriptionConfig()
+    settings = WhisperSettings()
+    pipeline = diarization_first.DiarizationFirstPipeline(config, settings)
+    calls = []
+
+    def transcribe(*args):
+        calls.append(args)
+        return {"segments": [{"start": 0.0, "end": 2.0, "text": "hello", "words": [
+            {"start": 0.2, "end": 0.8, "text": "hello"},
+        ]}]}
+
+    monkeypatch.setattr(diarization_first, "transcribe_chunk_in_subprocess", transcribe)
+    speakers = [{"start": 10.0, "end": 12.0, "speaker": "SPEAKER_00"}]
+    result = pipeline._process_chunk_with_speakers("unused.wav", 10, 12, speakers, "test")
+    assert calls[0][:4] == (config, "unused.wav", 10, 12)
+    expected = settings.to_dict()
+    expected["vad"] = [(0.0, 2.0)]
+    assert calls[0][4] == expected
+    assert result["segments"][0]["words"][0]["speaker"] == "SPEAKER_00"
+    assert result["speaker_segments"] == speakers
+
+
+def test_unsegmented_fallback_also_uses_isolated_worker(monkeypatch):
+    from transcribe.config import WhisperSettings
+    from transcribe import diarization_first
+
+    pipeline = diarization_first.DiarizationFirstPipeline(TranscriptionConfig(), WhisperSettings())
+    calls = []
+    monkeypatch.setattr(diarization_first, "transcribe_chunk_in_subprocess",
+                        lambda *args: calls.append(args) or {"segments": []})
+    assert pipeline._process_single_chunk_no_diarization("unused.wav", "test") == {"segments": []}
+    assert calls[0][1:4] == ("unused.wav", 0, float("inf"))
+    assert calls[0][4] == pipeline.whisper_settings.to_dict()
