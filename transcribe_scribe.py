@@ -16,11 +16,7 @@ from datetime import datetime, timezone
 
 from scribe_api import ScribeClient, ScribeError, atomic_json, normalize_result
 from audio_integrity import pcm_checksum, checksum_without_jpr_metadata
-
-DIARIZATION_MODELS = {
-    "community-1": "pyannote/speaker-diarization-community-1",
-    "nemotron": "nvidia/Nemotron-3-Diarization",
-}
+from run_scope import DIARIZATION_MODELS
 # State of the finished remote job; a retranscription starts a new one.
 REMOTE_JOB_KEYS = ("job_id", "upload_started", "queue_started", "adopted_job", "output_sha256")
 

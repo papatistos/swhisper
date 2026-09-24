@@ -17,6 +17,12 @@ import os
 ENV_VAR = "SWHISPER_ONLY_FILES"
 REPROCESS_ENV_VAR = "SWHISPER_RUN_REPROCESS"
 
+# Diarization models a single run can choose, by short name.
+DIARIZATION_MODELS = {
+    "community-1": "pyannote/speaker-diarization-community-1",
+    "nemotron": "nvidia/Nemotron-3-Diarization",
+}
+
 
 def _base(name):
     return os.path.splitext(os.path.basename(name))[0]
