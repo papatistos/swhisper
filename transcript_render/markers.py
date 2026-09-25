@@ -64,6 +64,18 @@ BACKFILL_FAILURE_LEGEND = (
     "in [*] markers. These gaps may contain recoverable speech."
 )
 
+# diarize/backfill_decoding.py words its low-confidence rejections this way.
+LOW_CONFIDENCE_PREFIX = "Backfill rejected: avg_logprob"
+
+
+def is_low_confidence(reason) -> bool:
+    """A low-confidence rejection is an untranscribable sound, not a failed backfill.
+
+    Listening showed that these gaps are mostly short backchannels ("mm") that
+    Whisper will not transcribe, so retrying them does not help.
+    """
+    return isinstance(reason, str) and reason.startswith(LOW_CONFIDENCE_PREFIX)
+
 
 def with_backfill_legend(preamble: str) -> str:
     if not preamble or BACKFILL_FAILURE_LEGEND in preamble:

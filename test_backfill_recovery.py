@@ -10,7 +10,7 @@ import pytest
 import soundfile as sf
 
 from diarize import utils
-from diarize.backfill_results import BackfillResults, failure_segment, turn_key, word_count
+from diarize.backfill_results import BackfillResults, failure_segment, summarize, turn_key, word_count
 from transcript_render import RenderOptions, derive_segments
 from transcript_render.markers import is_marker_token, with_backfill_legend
 from transcript_render.formatters import TXTFormatter, RTFFormatter
@@ -18,6 +18,23 @@ from transcript_render.formatters import TXTFormatter, RTFFormatter
 
 def turn(start=1, end=1.21):
     return dict(start=start, end=end, speaker='SPEAKER_00')
+
+
+LOW = 'Backfill rejected: avg_logprob -1.4 below threshold -1 (no_speech_prob 0.00); rejected text: "ah"'
+
+
+def test_low_confidence_rejections_do_not_make_backfill_incomplete():
+    recovered = {'segments': [{'words': []}], 'word_count': 1}
+    low = dict(recovered, failed_turns=[dict(turn(), backfill_error=LOW)])
+    assert summarize(low, 2) == dict(status='completed', attempted_turns=2, failed_turns=0,
+                                     low_confidence_turns=1, recovered_words=1)
+    only_low = {'segments': [], 'failed_turns': [dict(turn(), backfill_error=LOW)]}
+    assert summarize(only_low, 1)['status'] == 'no_words_recovered'
+    timeout = dict(low, failed_turns=low['failed_turns'] + [dict(turn(2, 2.3), backfill_error='Timed out')])
+    assert summarize(timeout, 3)['status'] == 'partial'
+    assert summarize(timeout, 3)['failed_turns'] == 1
+    assert summarize(dict(recovered, failed_turns=[turn()]), 2)['status'] == 'partial'
+    assert summarize(only_low, 1, error_occurred=True)['status'] == 'failed'
 
 
 def recovered(t, text='hej'):

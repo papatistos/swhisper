@@ -541,15 +541,9 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     backfill_transcriber.close()
 
                 recovered_segments = backfill_outcome.get('segments', [])
-                backfill_incomplete = (backfill_error_occurred or backfill_outcome.get('error')
-                                       or backfill_outcome.get('failed_turns')
-                                       or backfill_outcome.get('enrichment_errors'))
-                backfill_report.update(
-                    status=('partial' if recovered_segments else 'failed') if backfill_incomplete else
-                           'completed' if recovered_segments else 'no_words_recovered',
-                    attempted_turns=len(unmatched_turns),
-                    failed_turns=len(backfill_outcome.get('failed_turns', [])),
-                    recovered_words=backfill_outcome.get('word_count', 0))
+                from diarize.backfill_results import summarize
+                backfill_report.update(summarize(backfill_outcome, len(unmatched_turns), backfill_error_occurred))
+                backfill_incomplete = backfill_report['status'] in {'failed', 'partial'}
                 if backfill_outcome.get('error'):
                     backfill_report['error'] = backfill_outcome['error']
                 if backfill_outcome.get('enrichment_errors'):
@@ -593,7 +587,8 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     segments = BackfillMerger.merge_backfilled_words(segments, failure_markers)
                     alignment_result['segments'] = segments
                     segment_stats['total'] = len(segments)
-                    print(f"  -> Marked {len(failed_turns)} failed backfill gaps with [-] markers")
+                    print(f"  -> Marked {len(failed_turns)} backfill gaps with [-] markers"
+                          f" ({backfill_report['low_confidence_turns']} rejected for low confidence)")
                 if backfill_incomplete:
                     print(f"  -> Backfill incomplete; preserved {backfill_outcome.get('word_count', 0)} recovered words")
 

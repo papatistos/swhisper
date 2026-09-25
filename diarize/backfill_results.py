@@ -1,6 +1,6 @@
 """Checkpointed backfill results, independent of model runtimes."""
 
-from transcript_render.markers import get_word_text, is_marker_token, marker_asterisk_count
+from transcript_render.markers import get_word_text, is_low_confidence, is_marker_token, marker_asterisk_count
 
 
 def turn_key(turn):
@@ -23,6 +23,26 @@ def failure_segment(turn, reason):
                 is_backfill=True, is_backfill_failure=True, backfill_error=reason)
     return dict(start=start, end=end, text=text, speaker=word['speaker'],
                 words=[word], is_backfill=True, is_backfill_failure=True)
+
+
+def summarize(outcome, attempted, error_occurred=False):
+    """The backfill report fields for an outcome.
+
+    Gaps rejected for low confidence keep their [-] markers but do not make the
+    backfill incomplete.
+    """
+    failed = outcome.get('failed_turns', [])
+    unconfident = sum(is_low_confidence(t.get('backfill_error')) for t in failed)
+    recovered = outcome.get('segments', [])
+    incomplete = (error_occurred or outcome.get('error') or len(failed) > unconfident
+                  or outcome.get('enrichment_errors'))
+    return dict(
+        status=('partial' if recovered else 'failed') if incomplete else
+               'completed' if recovered else 'no_words_recovered',
+        attempted_turns=attempted,
+        failed_turns=len(failed) - unconfident,
+        low_confidence_turns=unconfident,
+        recovered_words=outcome.get('word_count', 0))
 
 
 class BackfillResults:
