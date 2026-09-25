@@ -351,7 +351,7 @@ def main() -> None:
 
     # Print banner
     print("=" * 60)
-    print("🎯 swhisper - Diarization-First Pipeline (pyannote 4)")
+    print("🎯 swhisper - Diarization-First Pipeline")
     print("=" * 60)
     print("This pipeline runs speaker diarization BEFORE transcription")
     print("to provide more accurate speaker attribution.")

@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from diarize import DiarizationConfig
 from diarize.nemotron import is_nemotron_model
-from diarization_status import effective_v4_model
+from diarization_status import diarization_model_label, effective_v4_model
 
 
 def _invoke_legacy_main(config: DiarizationConfig) -> None:
@@ -80,17 +80,19 @@ def ensure_pyannote_v4() -> None:
 
 
 def run(config: Optional[DiarizationConfig] = None, *, show_header: bool = True) -> None:
-    """Execute diarization using the community pipeline."""
+    """Execute diarization using the configured model."""
     try:
         config_obj = config or DiarizationConfig()
     except Exception as exc:  # pragma: no cover - config validation guard
         print(f"❌ Unable to initialize diarization config: {exc}")
         return
 
+    config_obj.pipeline_model = effective_v4_model(config_obj)
+
     if show_header:
         print(f"📂 Audio directory: {config_obj.audio_dir}")
         print("\n" + "=" * 60)
-        print("🎯 Launching diarization pipeline (pyannote.audio 4)...")
+        print(f"🎯 Launching diarization pipeline ({diarization_model_label(config_obj)})...")
 
     try:
         ensure_pyannote_v4()
@@ -99,7 +101,6 @@ def run(config: Optional[DiarizationConfig] = None, *, show_header: bool = True)
         return
 
     precision_pipeline_id = getattr(config_obj, "precision_pipeline_model", PRECISION_PIPELINE_ID)
-    config_obj.pipeline_model = effective_v4_model(config_obj)
 
     is_precision = config_obj.pipeline_model == precision_pipeline_id
 

@@ -48,11 +48,9 @@ class TranscriptionAppV4(_transcribe_module.TranscriptionApp):
         super().__init__(config, whisper_settings)
 
     def _run_diarization_pipeline(self) -> None:  # noqa: D401 - keep legacy wording
-        print("\n" + "=" * 60)
-        print("🎯 Launching diarization pipeline (pyannote.audio 4)...")
-
         try:
-            diarize4_run(show_header=False)
+            # The diarization entry point resolves the model before printing its header.
+            diarize4_run()
         finally:
             resource_manager.clear_device_memory()
 

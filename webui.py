@@ -146,7 +146,7 @@ MAX_HISTORY_ENTRIES = 500   # run history lines kept per audio folder
 PIPELINES: Dict[str, Dict[str, str]] = {
     "transcribe4": {
         "script": "transcribe4.py",
-        "label": "Standard pipeline (transcribe → diarize, pyannote 4)",
+        "label": "Standard pipeline (transcribe → diarize)",
         "choice": "Local Whisper",
     },
     "transcribe5": {
