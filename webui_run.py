@@ -12,7 +12,7 @@ from sidecar import (SIDECAR_PARAMS, STAGE_DIARIZE, STAGE_TRANSCRIBE,
 FORMATS = AUDIO_EXTENSIONS
 
 
-def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False):
+def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False, rediarize=False):
     """Mirror FileManager and diarize.process_file selection, without conversion.
 
     Stage two is conditional on stage one's outputs. Actual conversion/model
@@ -20,7 +20,10 @@ def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False):
 
     *only* is a set of basenames the run is restricted to, or None for the
     whole folder; it mirrors what SWHISPER_ONLY_FILES does inside the pipeline.
-    *reprocess* mirrors SWHISPER_RUN_REPROCESS: redo existing outputs in this run.
+    *reprocess* mirrors SWHISPER_RUN_REPROCESS=true: redo existing outputs of
+    every stage in this run. *rediarize* mirrors SWHISPER_RUN_REPROCESS=diarization.
+    Each row's *reusable* says whether an existing output would satisfy the
+    stage if the run forced nothing, which is when a force option matters.
     """
     audio = Path(audio_dir)
     json_dir = audio / tc.json_dir
@@ -38,26 +41,29 @@ def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False):
             evidence.append((str(path), None))
 
     def decision(base, artifact, stage, force):
+        """(action, reason, reusable) for one stage of one recording."""
         stamp(artifact)
         sidecar = find_sidecar(str(audio), base)
         if sidecar:
             stamp(Path(sidecar))
         if not artifact.exists():
-            return 'process', 'No existing output'
-        if reprocess:
-            return 'reprocess', 'Reprocessing requested for this run'
+            return 'process', 'No existing output', False
         if force:
-            return 'reprocess', 'Force reprocessing enabled'
+            return 'reprocess', 'Force reprocessing enabled', False
         if stage == STAGE_DIARIZE:
             reason = model_run_reason(artifact, getattr(dc, 'pipeline_model', None), stamp)
             if reason:
-                return 'process', reason
+                return 'process', reason, False
         if stage == STAGE_DIARIZE and any(
                 f'# Backfill status: {status}' in artifact.read_text(encoding='utf-8')
                 for status in ('failed', 'partial')):
-            return 'reprocess', 'Previous backfill was incomplete; resume from saved gaps'
+            return 'reprocess', 'Previous backfill was incomplete; resume from saved gaps', False
         redo, reason = sidecar_requests_reprocess(str(audio), base, str(artifact), stage)
-        return ('reprocess', reason) if redo else ('skip', 'Existing output; no reprocessing requested')
+        if redo:
+            return 'reprocess', reason, False
+        if reprocess or (rediarize and stage == STAGE_DIARIZE):
+            return 'reprocess', 'Reprocessing requested for this run', True
+        return 'skip', 'Existing output; no reprocessing requested', True
 
     if pipeline != 'diarize4':
         for name in entries:
@@ -67,8 +73,9 @@ def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False):
                 continue
             stamp(audio / name)
             base = Path(name).stem
-            action, reason = decision(base, json_dir / (base + '.json'), STAGE_TRANSCRIBE, tc.force_reprocess)
-            row = dict(file=name, base=base, stage='Diarization + transcription' if pipeline == 'transcribe5' else 'Transcription', action=action, reason=reason)
+            action, reason, reusable = decision(base, json_dir / (base + '.json'), STAGE_TRANSCRIBE, tc.force_reprocess)
+            row = dict(file=name, base=base, stage='Diarization + transcription' if pipeline == 'transcribe5' else 'Transcription',
+                       action=action, reason=reason, reusable=reusable)
             rows.append(row)
             if action != 'skip':
                 candidates.append(row)
@@ -94,14 +101,15 @@ def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False):
                         force = SIDECAR_PARAMS['SWHISPER_DIARIZE_FORCE_REPROCESS'].parse(raw)
                     except ValueError:
                         pass
-            action, reason = decision(base, output / (base + '.ok'), STAGE_DIARIZE, force)
+            action, reason, reusable = decision(base, output / (base + '.ok'), STAGE_DIARIZE, force)
             stamp(diar_json / (base + '.json'))
             stamp(audio / (base + '.wav'))
             if base not in new_bases and not (audio / (base + '.wav')).exists() and action != 'skip':
                 action, reason = 'blocked', 'Required WAV audio is missing'
             elif base in new_bases:
                 reason += '; depends on transcription/conversion succeeding'
-            rows.append(dict(file=source_labels.get(base, base), base=base, stage='Diarization', action=action, reason=reason))
+            rows.append(dict(file=source_labels.get(base, base), base=base, stage='Diarization', action=action,
+                             reason=reason, reusable=reusable))
 
     scope = (f'This run is restricted to {len(only)} selected file(s).' if only is not None else
              'This runs the folder. Selecting a file in the editor does not restrict the run.')
@@ -110,8 +118,9 @@ def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False):
     if rows and all(row['action'] == 'skip' for row in rows) and any(
             row['reason'] == 'Existing output; no reprocessing requested' for row in rows):
         notes.insert(0, 'Run is disabled because existing outputs are being skipped. '
-                     'To run them again, cancel this preview, enable "Reprocess existing outputs", '
-                     'then select Run again. Selecting a recording alone does not enable reprocessing.')
+                     'To run them again, cancel this preview, tick "Force reprocessing" under the '
+                     'transcription or diarization model, then select Run again. '
+                     'Selecting a recording alone does not enable reprocessing.')
     if pipeline == 'transcribe5':
         notes.append('Diarization-first selects files using transcription JSON and transcription reprocessing rules; a diarization-only override does not select an already transcribed file.')
     if pipeline == 'transcribe4' and json_dir != diar_json:
@@ -121,7 +130,9 @@ def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False):
     if len({r['base'] for r in rows if r['stage'] != 'Diarization'}) < len([r for r in rows if r['stage'] != 'Diarization']):
         notes.append('Multiple audio files share a basename and therefore share outputs; the pipeline may process that basename more than once.')
     result = dict(audio_dir=str(audio), pipeline=pipeline, files=rows, notes=notes,
-                  only=sorted(only) if only is not None else None, reprocess=reprocess)
+                  only=sorted(only) if only is not None else None, reprocess=reprocess, rediarize=rediarize,
+                  reusable=dict(transcription=sum(r['reusable'] for r in rows if r['stage'] == 'Transcription'),
+                                diarization=sum(r['reusable'] for r in rows if r['stage'] == 'Diarization')))
     payload = json.dumps([result, evidence], sort_keys=True).encode()
     result['token'] = hashlib.sha256(payload).hexdigest()
     return result

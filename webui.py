@@ -63,7 +63,8 @@ from sidecar import (
 )
 from webui_run import preview_run, ProgressTracker
 from diarization_status import effective_v4_model
-from run_scope import DIARIZATION_MODELS, ENV_VAR as ONLY_FILES_ENV, REPROCESS_ENV_VAR as REPROCESS_ENV
+from run_scope import (DIARIZATION_MODELS, ENV_VAR as ONLY_FILES_ENV, REPROCESS_ENV_VAR as REPROCESS_ENV,
+                       STAGE_DIARIZATION)
 import webui_durations
 import webui_waveform
 import webui_speakers
@@ -134,10 +135,15 @@ ACTIVE_RUN_FILENAME = "ui-run-active.json"
 MAX_RUN_LOGS = 50           # persisted console logs kept per audio folder
 MAX_HISTORY_ENTRIES = 500   # run history lines kept per audio folder
 
+# Pipelines with a "choice" label are the transcription models offered in the
+# run controls. The others remain valid for the API and for run history:
+# diarize4 is what transcribe4 does when every transcript is reused, and the
+# diarization-first transcribe5 is an experiment kept out of the controls.
 PIPELINES: Dict[str, Dict[str, str]] = {
     "transcribe4": {
         "script": "transcribe4.py",
         "label": "Standard pipeline (transcribe → diarize, pyannote 4)",
+        "choice": "Local Whisper",
     },
     "transcribe5": {
         "script": "transcribe5.py",
@@ -150,6 +156,7 @@ PIPELINES: Dict[str, Dict[str, str]] = {
     "scribe": {
         "script": "webui_scribe.py",
         "label": "Scribe remote upload + local diarization",
+        "choice": "SUNET Scribe (remote)",
     },
 }
 
@@ -484,12 +491,20 @@ class AppState:
             # Scribe receives its options through the reviewed plan instead.
             options = options or {}
             env.pop(REPROCESS_ENV, None)
-            if pipeline != 'scribe' and options.get('diarization_model'):
-                env['SWHISPER_PIPELINE_MODEL'] = DIARIZATION_MODELS[options['diarization_model']]
-                header += f" — diarization {options['diarization_model']}"
+            model = options.get('diarization_model')
+            if pipeline != 'scribe' and model:
+                # The chosen model wins over the saved Precision switch, which
+                # only decides whether Precision is offered.
+                env['SWHISPER_USE_PRECISION'] = 'true' if model == PRECISION_CHOICE else 'false'
+                if model != PRECISION_CHOICE:
+                    env['SWHISPER_PIPELINE_MODEL'] = DIARIZATION_MODELS[model]
+                header += f" — diarization {model}"
             if pipeline != 'scribe' and options.get('reprocess'):
                 env[REPROCESS_ENV] = 'true'
                 header += " — reprocessing existing outputs"
+            elif pipeline != 'scribe' and options.get('rediarize'):
+                env[REPROCESS_ENV] = STAGE_DIARIZATION
+                header += " — reprocessing existing diarization"
             with open(run_log_path, "w", encoding="utf-8", buffering=1) as log_file:
                 log_file.write(header + "\n")
                 log_file.flush()
@@ -811,7 +826,8 @@ def api_meta() -> Dict[str, Any]:
     return {
         "audio_dir": dirs["audio"],
         "audio_paths": get_commented_audio_dirs(),
-        "pipelines": [{"id": k, "label": v["label"]} for k, v in PIPELINES.items()],
+        "pipelines": [{"id": k, "label": v["label"], "choice": v.get("choice")} for k, v in PIPELINES.items()],
+        **_diarization_choices(),
         "groups": groups,
         "params": params,
     }
@@ -1797,46 +1813,79 @@ def api_scribe_artifact(path: str):
     return FileResponse(Path(state.audio_dir()).resolve() / path)
 
 
+PRECISION_CHOICE = 'precision'
+
+
+def _diarization_choices() -> Dict[str, Any]:
+    """Diarization models for the run controls, and the one saved settings select.
+
+    Precision is offered only while the saved SWHISPER_USE_PRECISION switch is on.
+    """
+    config = _dconfig.DiarizationConfig()
+    choices = [{'id': 'community-1', 'label': 'pyannote community-1'},
+               {'id': 'nemotron', 'label': 'Nemotron 3 (up to 8 speakers)'}]
+    if config.use_precision_service:
+        choices.append({'id': PRECISION_CHOICE, 'label': 'pyannote Precision-2 (hosted)'})
+    config.use_precision_service = False
+    saved = effective_v4_model(config).casefold()
+    default = next((name for name, model in DIARIZATION_MODELS.items() if model.casefold() == saved), 'community-1')
+    return {'diarization_models': choices, 'diarization_default': default}
+
+
+def _check_diarization_model(model: Any, pipeline: str) -> None:
+    # '' keeps the saved SWHISPER_PIPELINE_MODEL and Precision switch.
+    offered = {choice['id'] for choice in _diarization_choices()['diarization_models']}
+    if not isinstance(model, str) or model not in ('', *DIARIZATION_MODELS, *(offered & {PRECISION_CHOICE})):
+        raise HTTPException(400, 'Unknown diarization model')
+    if pipeline == 'scribe' and model == PRECISION_CHOICE:
+        raise HTTPException(400, 'Scribe runs local community-1 or Nemotron diarization; Precision is not available.')
+
+
 @app.get("/api/run/preview")
 def api_run_preview(pipeline: str, only: Optional[List[str]] = Query(None),
                     selected: str = '', language: str = 'Swedish (verbatim)',
-                    diarization_model: str = '', reprocess: bool = False) -> Dict[str, Any]:
+                    diarization_model: str = '', reprocess: bool = False,
+                    rediarize: bool = False) -> Dict[str, Any]:
     if pipeline not in PIPELINES:
         raise HTTPException(400, "Unknown pipeline")
-    # Per-run options: '' keeps the saved SWHISPER_PIPELINE_MODEL.
-    if diarization_model and diarization_model not in DIARIZATION_MODELS:
-        raise HTTPException(400, "Unknown diarization model")
+    _check_diarization_model(diarization_model, pipeline)
     # Scribe carries its own single-recording selection and language; the local
     # pipelines take a set of basenames from the ticked files in the list.
     if pipeline == 'scribe':
         from webui_scribe import preview_scribe
         try:
-            preview = preview_scribe(state.audio_dir(), selected, language, diarization_model, reprocess)
+            preview = preview_scribe(state.audio_dir(), selected, language, diarization_model, reprocess, rediarize)
         except (ValueError, OSError) as exc:
             raise HTTPException(400, str(exc)) from None
+        preview['reusable'] = {stage: sum(row['reusable'][stage] for row in preview['files'])
+                               for stage in ('transcription', 'diarization')}
     else:
         audio_dir = state.audio_dir()
         diarization_config = _dconfig.DiarizationConfig()
         if diarization_model:
-            diarization_config.pipeline_model = DIARIZATION_MODELS[diarization_model]
+            diarization_config.use_precision_service = diarization_model == PRECISION_CHOICE
+            if diarization_model != PRECISION_CHOICE:
+                diarization_config.pipeline_model = DIARIZATION_MODELS[diarization_model]
         diarization_config.pipeline_model = effective_v4_model(diarization_config)
         preview = preview_run(audio_dir, pipeline, _tconfig.TranscriptionConfig(),
                               diarization_config,
-                              _validated_selection(audio_dir, only), reprocess)
+                              _validated_selection(audio_dir, only), reprocess, rediarize)
         preview['diarization_model'] = diarization_model
     _, revision = env_snapshot(GLOBAL_ENV_PATH)
-    options = json.dumps([diarization_model, reprocess])
+    options = json.dumps([diarization_model, reprocess, rediarize])
     preview['token'] = hashlib.sha256((preview['token'] + revision + options).encode()).hexdigest()
     return preview
 
 
-def _run_options(body: Dict[str, Any]) -> Dict[str, Any]:
-    model, reprocess = body.get('diarization_model', ''), body.get('reprocess', False)
-    if not isinstance(model, str) or model not in ('', *DIARIZATION_MODELS):
-        raise HTTPException(400, 'Unknown diarization model')
-    if not isinstance(reprocess, bool):
-        raise HTTPException(400, 'reprocess must be true or false')
-    return {'diarization_model': model, 'reprocess': reprocess}
+def _run_options(body: Dict[str, Any], pipeline: str) -> Dict[str, Any]:
+    model = body.get('diarization_model', '')
+    _check_diarization_model(model, pipeline)
+    options = {'diarization_model': model}
+    for key in ('reprocess', 'rediarize'):
+        if not isinstance(body.get(key, False), bool):
+            raise HTTPException(400, f'{key} must be true or false')
+        options[key] = body.get(key, False)
+    return options
 
 
 @app.post("/api/run")
@@ -1848,7 +1897,7 @@ def api_run(body: Dict[str, Any]) -> Dict[str, Any]:
         selected, language = body.get('selected', ''), body.get('language', 'Swedish (verbatim)')
         if not isinstance(selected, str) or not isinstance(language, str):
             raise HTTPException(400, 'Invalid Scribe selection or language')
-        preview = api_run_preview(pipeline, selected=selected, language=language, **_run_options(body))
+        preview = api_run_preview(pipeline, selected=selected, language=language, **_run_options(body, pipeline))
         if preview['token'] != body['preview_token']:
             raise HTTPException(409, 'Folder or settings changed. Review a new run preview before starting.')
         # Reruns that reuse saved Scribe transcripts contact no remote service.
@@ -1864,7 +1913,7 @@ def api_run(body: Dict[str, Any]) -> Dict[str, Any]:
     # An empty list is an empty selection, never "run everything".
     if isinstance(only, list) and not only:
         raise HTTPException(400, "Select at least one file, or run the whole folder")
-    options = _run_options(body)
+    options = _run_options(body, pipeline)
     if body.get("preview_token"):
         preview = api_run_preview(pipeline, only, **options)
         if preview["token"] != body["preview_token"]:

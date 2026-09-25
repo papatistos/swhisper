@@ -35,7 +35,9 @@ class RunOptionTests(unittest.TestCase):
         plain = webui.api_run_preview('transcribe4', None)
         self.assertEqual({r['action'] for r in plain['files']}, {'skip'})
         forced = webui.api_run_preview('transcribe4', None, reprocess=True, diarization_model='nemotron')
-        self.assertEqual({r['action'] for r in forced['files']}, {'reprocess'})
+        # A different model already explains the diarization rerun.
+        self.assertEqual([(r['stage'], r['action']) for r in forced['files']],
+                         [('Transcription', 'reprocess'), ('Diarization', 'process')])
         self.assertIn('requested for this run', forced['files'][0]['reason'])
         self.assertEqual(forced['diarization_model'], 'nemotron')
         self.assertNotEqual(plain['token'], forced['token'])
@@ -68,7 +70,7 @@ class RunOptionTests(unittest.TestCase):
         plain = webui.api_run_preview('diarize4', ['a'], diarization_model='nemotron')
         self.assertEqual([r['action'] for r in plain['files']], ['skip'])
         self.assertIn('Run is disabled', plain['notes'][0])
-        self.assertIn('Reprocess existing outputs', plain['notes'][0])
+        self.assertIn('Force reprocessing', plain['notes'][0])
         forced = webui.api_run_preview('diarize4', ['a'], diarization_model='nemotron', reprocess=True)
         self.assertEqual([r['action'] for r in forced['files']], ['reprocess'])
         self.assertFalse(any('Run is disabled' in note for note in forced['notes']))
@@ -83,7 +85,58 @@ class RunOptionTests(unittest.TestCase):
         with patch.object(self.state, 'start') as start:
             webui.api_run(dict(pipeline='diarize4', only=['a'], preview_token=plan['token'],
                                diarization_model='nemotron', reprocess=False))
-        self.assertEqual(start.call_args.kwargs['options'], {'diarization_model': 'nemotron', 'reprocess': False})
+        self.assertEqual(start.call_args.kwargs['options'],
+                         {'diarization_model': 'nemotron', 'reprocess': False, 'rediarize': False})
+
+    def test_rediarize_forces_only_diarization_and_reaches_the_pipeline(self):
+        self.transcribed()
+        plan = webui.api_run_preview('transcribe4', ['a'], diarization_model='community-1', rediarize=True)
+        self.assertEqual([(r['stage'], r['action']) for r in plan['files']],
+                         [('Transcription', 'skip'), ('Diarization', 'reprocess')])
+        self.assertTrue(plan['rediarize'])
+        with patch('webui.subprocess.Popen', **{'return_value.pid': 12345}) as popen, patch.object(self.state, '_watch_process'):
+            webui.api_run(dict(pipeline='transcribe4', only=['a'], preview_token=plan['token'],
+                               diarization_model='community-1', rediarize=True))
+        self.assertEqual(popen.call_args.kwargs['env']['SWHISPER_RUN_REPROCESS'], 'diarization')
+
+    def test_preview_counts_outputs_that_a_force_option_would_redo(self):
+        self.transcribed()
+        for rediarize in (False, True):
+            plan = webui.api_run_preview('transcribe4', ['a'], diarization_model='community-1', rediarize=rediarize)
+            self.assertEqual(plan['reusable'], {'transcription': 1, 'diarization': 1})
+        other = webui.api_run_preview('transcribe4', ['a'], diarization_model='nemotron')
+        self.assertEqual(other['reusable'], {'transcription': 1, 'diarization': 0})
+
+    def precision_switch(self, on):
+        original = webui._dconfig.DiarizationConfig
+        def config():
+            made = original()
+            made.use_precision_service = on
+            return made
+        return patch.object(webui._dconfig, 'DiarizationConfig', config)
+
+    def test_precision_is_offered_only_by_the_saved_switch_and_wins_when_chosen(self):
+        with self.precision_switch(False):
+            self.assertNotIn('precision', [m['id'] for m in webui.api_meta()['diarization_models']])
+            with self.assertRaises(webui.HTTPException):
+                webui.api_run_preview('transcribe4', None, diarization_model='precision')
+        with self.precision_switch(True):
+            meta = webui.api_meta()
+            self.assertIn('precision', [m['id'] for m in meta['diarization_models']])
+            self.assertEqual(meta['diarization_default'], 'community-1')
+            with self.assertRaises(webui.HTTPException):
+                webui.api_run_preview('scribe', selected='a', diarization_model='precision')
+            with patch('webui.subprocess.Popen', **{'return_value.pid': 12345}) as popen, patch.object(self.state, '_watch_process'):
+                webui.api_run(dict(pipeline='transcribe4', diarization_model='nemotron'))
+            self.assertEqual(popen.call_args.kwargs['env']['SWHISPER_USE_PRECISION'], 'false')
+            self.state.process = None
+            with patch('webui.subprocess.Popen', **{'return_value.pid': 12345}) as popen, patch.object(self.state, '_watch_process'):
+                webui.api_run(dict(pipeline='transcribe4', diarization_model='precision'))
+            self.assertEqual(popen.call_args.kwargs['env']['SWHISPER_USE_PRECISION'], 'true')
+
+    def test_meta_offers_local_whisper_and_scribe_as_transcription_choices(self):
+        choices = [p['id'] for p in webui.api_meta()['pipelines'] if p['choice']]
+        self.assertEqual(choices, ['transcribe4', 'scribe'])
 
     def test_model_change_in_standard_pipeline_reuses_transcription(self):
         self.transcribed()
