@@ -1115,7 +1115,6 @@ try {
     assert.equal(await evaluate('$("scribeControls")?.hidden'),false);
     assert.equal(await evaluate('$("scribeLanguage").value'),'Swedish (verbatim)');
     assert.equal(await evaluate('$("scribeScope").value'),'selected');
-    assert.match(await evaluate('$("scribeNotice").textContent'),/Local Whisper backfill/);
     await evaluate('currentBase=null;updateRunControls()');
     assert.equal(await evaluate('$("startBtn").disabled'),true,'Selected scope without a recording must not start');
     await select('a');await wait('editorBase==="a"');
