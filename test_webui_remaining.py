@@ -255,6 +255,75 @@ class RemainingTests(unittest.TestCase):
         self.assertEqual(response.status_code, 500, response.text)
         self.assertIn('Could not export transcript: disk full', response.json()['detail'])
 
+    def bulk_transcripts(self):
+        """Recording ``a`` has two versions, ``b`` one, and ``c`` has no transcript."""
+        self.transcript()
+        segments = json.dumps({'segments': [{'start': 1.0, 'end': 2.0, 'speaker': 'S01', 'text': 'Newest',
+                                             'words': [{'start': 1.0, 'end': 2.0, 'word': 'Newest'}]}]})
+        self.write('transcripts/txt/a_20260914-120000.txt', 'Newer original')
+        self.write('transcripts/json/a_20260914-120000_diarized.json', segments)
+        self.write('b.wav', 'mock audio')
+        self.write('transcripts/txt/b_20260913-130000.txt', 'Original b')
+        self.write('transcripts/json/b_20260913-130000_diarized.json', segments)
+        self.write('c.wav', 'mock audio')
+
+    def bulk_choose(self, folder, body):
+        def fake_run(argv, **kwargs):
+            self.assertIn('choose folder', argv[-1])
+            return subprocess.CompletedProcess(argv, 0, stdout=str(folder) + '/\n', stderr='')
+        with patch.object(webui.subprocess, 'run', fake_run):
+            return self.client.post('/api/render-bulk/save-as', json=body)
+
+    def test_bulk_export_writes_the_newest_version_of_each_selected_file(self):
+        self.bulk_transcripts()
+        folder = self.root / 'bulk'; folder.mkdir()
+        body = {'bases': ['a', 'b', 'c'], 'format': 'txt', 'options': {'stats': False, 'preamble': False}}
+        choice = self.bulk_choose(folder, body)
+        self.assertEqual(choice.status_code, 200, choice.text)
+        plan = choice.json()
+        self.assertEqual([Path(p).name for p in plan['paths']],
+                         ['a_20260914-120000_nostats_view.txt', 'b_20260913-130000_nostats_view.txt'])
+        self.assertEqual([item['base'] for item in plan['skipped']], ['c'])
+        self.assertEqual(plan['existing'], [])
+        saved = self.client.post('/api/render-bulk/save-selected', json={'token': plan['token']})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json()['written'], plan['paths'])
+        for path in plan['paths']:
+            self.assertIn('Newest', Path(path).read_text())
+        self.assertEqual((self.root / 'transcripts/txt/a_20260914-120000.txt').read_text(), 'Newer original')
+
+    def test_bulk_export_replaces_only_the_files_confirmed_at_folder_choice(self):
+        self.bulk_transcripts()
+        folder = self.root / 'bulk'; folder.mkdir()
+        body = {'bases': ['a', 'b'], 'format': 'rtf', 'options': {'stats': False}}
+        first = self.bulk_choose(folder, body).json()
+        existing = self.write('bulk/' + Path(first['paths'][0]).name, 'Earlier export')
+        refused = self.client.post('/api/render-bulk/save-selected', json={'token': first['token'], 'overwrite': True})
+        self.assertEqual(refused.status_code, 409, refused.text)
+        self.assertEqual(existing.read_text(), 'Earlier export')
+        self.assertFalse(Path(first['paths'][1]).exists())
+        second = self.bulk_choose(folder, body).json()
+        self.assertEqual(second['existing'], [str(existing)])
+        without = self.client.post('/api/render-bulk/save-selected', json={'token': second['token']})
+        self.assertEqual(without.status_code, 409, without.text)
+        third = self.bulk_choose(folder, body).json()
+        replaced = self.client.post('/api/render-bulk/save-selected', json={'token': third['token'], 'overwrite': True})
+        self.assertEqual(replaced.status_code, 200, replaced.text)
+        self.assertNotEqual(existing.read_text(), 'Earlier export')
+
+    def test_bulk_export_cancel_nothing_to_export_and_token_separation(self):
+        self.bulk_transcripts()
+        def cancel(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 1, stdout='', stderr='execution error: User canceled. (-128)')
+        with patch.object(webui.subprocess, 'run', cancel):
+            response = self.client.post('/api/render-bulk/save-as', json={'bases': ['a'], 'format': 'txt'})
+        self.assertEqual(response.json(), {'canceled': True})
+        self.assertEqual(self.client.post('/api/render-bulk/save-as', json={'bases': ['c'], 'format': 'txt'}).status_code, 409)
+        self.assertEqual(self.client.post('/api/render-bulk/save-as', json={'bases': ['../a'], 'format': 'txt'}).status_code, 400)
+        folder = self.root / 'bulk'; folder.mkdir()
+        token = self.bulk_choose(folder, {'bases': ['a'], 'format': 'txt'}).json()['token']
+        self.assertEqual(self.client.post('/api/render/a/save-selected', json={'token': token}).status_code, 409)
+
     def test_view_options_do_not_modify_original(self):
         original=self.transcript();response=self.client.post('/api/render/a',json={'options':{'stats':False,'preamble':False}})
         self.assertEqual(response.status_code,200,response.text)

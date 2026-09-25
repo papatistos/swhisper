@@ -1518,6 +1518,110 @@ def api_render_save_selected(basename: str, body: Dict[str, Any]) -> Dict[str, A
     return {'written': [str(target)]}
 
 
+def _native_folder_path(prompt: str) -> Optional[Path]:
+    """Return the folder from macOS's folder dialog, or ``None`` on cancel."""
+    if sys.platform != "darwin":
+        raise HTTPException(501, "The folder dialog is only available on macOS")
+    script = ('tell application "System Events" to activate\n'
+              f'set chosen to choose folder with prompt {_apple_script_string(prompt)}\n'
+              'return POSIX path of chosen')
+    try:
+        result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(500, "The folder dialog timed out") from None
+    if result.returncode != 0:
+        message = (result.stderr or "").strip()
+        if "-128" in message or "User canceled" in message:
+            return None
+        raise HTTPException(500, f"Folder dialog failed: {message or 'unknown osascript error'}")
+    folder = Path(os.path.expanduser(result.stdout.strip()))
+    if not folder.is_absolute() or not folder.is_dir():
+        raise HTTPException(500, f"The folder dialog did not return a folder: {folder}")
+    return folder
+
+
+@app.post('/api/render-bulk/save-as')
+def api_render_bulk_save_as(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Ask macOS for one folder to hold the newest transcript of every selected file.
+
+    Every file is rendered with the same view options. A file without a
+    re-renderable transcript is skipped and reported instead of failing the batch.
+    """
+    bases = body.get('bases')
+    if not isinstance(bases, list) or not bases or not all(isinstance(b, str) for b in bases):
+        raise HTTPException(400, 'Select at least one file to export')
+    fmt = body.get('format')
+    if fmt not in ('txt', 'rtf'):
+        raise HTTPException(400, 'Choose TXT or RTF')
+    items, skipped = [], []
+    for basename in dict.fromkeys(bases):
+        try:
+            dirs, base, selected, segments, options, metadata = _render(basename, {'options': body.get('options')})
+        except HTTPException as exc:
+            if exc.status_code == 400:
+                raise
+            skipped.append({'base': basename, 'reason': exc.detail})
+            continue
+        items.append(dict(dirs=dirs, base=base, selected=selected, segments=segments,
+                          options=options, metadata=metadata))
+    if not items:
+        raise HTTPException(409, 'None of the selected files has a transcript that can be exported')
+    folder = _native_folder_path(f"Choose a folder for {len(items)} {fmt.upper()} transcript exports")
+    if folder is None:
+        return {'canceled': True}
+    for item in items:
+        item['target'] = folder / (Path(item['selected']['id']).stem + item['options'].suffix() + '_view.' + fmt)
+        _validate_export_targets(item['dirs'], item['base'], [item['target']])
+    existing = [str(item['target']) for item in items if item['target'].exists()]
+    token = uuid.uuid4().hex
+    with state.lock:
+        # ``base`` stays None so a bulk token can never complete a single-file export.
+        state.export_selections[token] = {'created_at': time.monotonic(), 'base': None, 'format': fmt,
+                                          'items': items, 'existing': set(existing)}
+        expired = [key for key, value in state.export_selections.items()
+                   if time.monotonic() - value['created_at'] > 600]
+        for key in expired:
+            del state.export_selections[key]
+    return {'token': token, 'folder': str(folder), 'format': fmt,
+            'paths': [str(item['target']) for item in items], 'existing': existing, 'skipped': skipped}
+
+
+@app.post('/api/render-bulk/save-selected')
+def api_render_bulk_save_selected(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Write the batch chosen by ``api_render_bulk_save_as``.
+
+    Existing files are replaced only when ``overwrite`` confirms exactly the
+    files that already existed when the folder was chosen.
+    """
+    token = body.get('token')
+    if not isinstance(token, str):
+        raise HTTPException(400, 'Choose an export folder first')
+    with state.lock:
+        selection = state.export_selections.pop(token, None)
+    if not selection or 'items' not in selection:
+        raise HTTPException(409, 'Choose the export folder again before saving')
+    items = selection['items']
+    for item in items:
+        _validate_export_targets(item['dirs'], item['base'], [item['target']])
+    confirmed = selection['existing'] if body.get('overwrite') else set()
+    unexpected = [item['target'].name for item in items
+                  if item['target'].exists() and str(item['target']) not in confirmed]
+    if unexpected:
+        raise HTTPException(409, 'These export files already exist: ' + ', '.join(unexpected)
+                            + '. Choose the folder again to replace them or pick another folder.')
+    # Render every file before writing any, so a formatting error leaves the folder untouched.
+    contents = [_export_content(selection['format'], item) for item in items]
+    written = []
+    for item, content in zip(items, contents):
+        try:
+            _write_export_file(item['target'], content)
+        except OSError as exc:
+            done = f" Already written: {', '.join(written)}." if written else ''
+            raise HTTPException(500, f"Could not export {item['target'].name}: {exc}.{done}") from None
+        written.append(str(item['target']))
+    return {'written': written}
+
+
 @app.post('/api/render/{basename}/export-preview')
 def api_export_preview(basename: str, body: Dict[str, Any]):
     return _export_plan(basename, body)[0]
