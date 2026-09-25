@@ -23,7 +23,7 @@ GLOBAL_EXTRAS = {
     'SWHISPER_PRESERVE_CHECKPOINTS': ('transcription', 'preserve_checkpoints', 'bool', 'Preserve checkpoints'),
     'SWHISPER_SPEAKER_VAD': ('transcription', 'use_speaker_segments_as_vad', 'bool', 'Use speaker segments for voice detection'),
     'SWHISPER_SPEAKER_CHUNKING': ('transcription', 'speaker_aware_chunking', 'bool', 'Split audio at speaker boundaries'),
-    'SWHISPER_USE_PRECISION': ('diarization', 'use_precision_service', 'bool', 'Use Precision diarization service'),
+    'SWHISPER_USE_PRECISION': ('diarization', 'use_precision_service', 'bool', 'Offer Precision diarization service'),
     'SWHISPER_PRECISION_MODEL': ('diarization', 'precision_pipeline_model', 'str', 'Precision model'),
     'SWHISPER_BACKFILL_MODEL': ('diarization', 'backfill_model', 'str', 'Backfill model'),
     'SWHISPER_BACKFILL_DEVICE': ('diarization', 'backfill_device', 'str', 'Backfill device'),
@@ -132,6 +132,7 @@ PARAM_GROUPS: List[Dict[str, Any]] = [
 
 # Mouseover help texts for the sidecar form
 PARAM_HELP: Dict[str, str] = {
+    "SWHISPER_USE_PRECISION": "Adds the hosted pyannote Precision-2 service to the diarization models in the run controls; the model chosen there is used. Command-line runs use Precision whenever this is on. Needs PYANNOTEAI_API_KEY.",
     "RECORDING_TYPE": "Interview enables automatic speaker naming by word count after diarization and name suggestions in the Speaker names dialog. Not specified disables both.",
     "INTERVIEWER_NAME": "Name for the speaker with the second-highest word count when recording type is Interview. Default: INTERVIEWER.",
     "INTERVIEWEE_NAME": "Name for the speaker with the highest word count when recording type is Interview. Default: INTERVIEWEE.",
