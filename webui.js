@@ -1188,17 +1188,40 @@ async function saveSpeakerNames() {
   }
 }
 
+const EXPORT_NOTES = {
+  current: "The system Save As dialog lets you name the file and choose or create a destination folder.",
+  selected: "Every file uses the view settings shown here. The system folder dialog lets you choose or create a destination folder, and each export is named after its transcript version.",
+};
+function exportScope() {
+  return $("exportScope").hidden ? "current" : document.querySelector('input[name="exportScope"]:checked').value;
+}
+function showExportScope() {
+  const selected = exportScope() === "selected";
+  $("exportNote").textContent = EXPORT_NOTES[selected ? "selected" : "current"];
+  $("exportConfirm").textContent = selected ? "Choose folder and export…" : "Export copy…";
+  $("exportPaths").textContent = selected ? "" : "Choose a format, then select Export copy to choose the filename and location.";
+}
 async function saveRenderedView() {
   if (!renderAvailable || !currentBase) return;
-  exportContext = {base:currentBase, version:$("versionSel").value, options:renderOptions()};
-  $("exportPaths").textContent = "Choose a format, then select Export copy to choose the filename and location.";
+  const bases = runScope();
+  exportContext = {base:currentBase, version:$("versionSel").value, options:renderOptions(), bases};
+  // Bulk export only differs from a single export when other files are ticked.
+  $("exportScope").hidden = !bases.length || (bases.length === 1 && bases[0] === currentBase);
+  $("exportScopeSelected").textContent = `Most recent transcript of each of the ${bases.length} selected files`;
+  document.querySelector('input[name="exportScope"][value="current"]').checked = true;
+  $("exportCancel").textContent = "Cancel";
+  showExportScope();
   $("exportDialog").showModal();
+}
+function setExporting(busy) {
+  exporting = busy;
+  for (const el of [$("exportConfirm"), $("exportFormat"), $("exportCancel"), ...$("exportScope").querySelectorAll("input")]) el.disabled = busy;
 }
 async function confirmExport() {
   if (!exportContext || exporting) return;
-  exporting=true;$("exportConfirm").disabled=true;
-  for (const id of ["exportFormat","exportCancel"]) $(id).disabled=true;
+  setExporting(true);
   try {
+    if (exportScope() === "selected") { await confirmBulkExport(); return; }
     const body = {...exportContext, format: $("exportFormat").value};
     const {data: choice}=await api(`/api/render/${encodeURIComponent(exportContext.base)}/save-as`,{method:"POST",timeout:DIALOG_TIMEOUT_MS,headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     if (choice.canceled) { $("exportDialog").close(); exportContext=null; return; }
@@ -1206,7 +1229,22 @@ async function confirmExport() {
     $("exportPaths").textContent="Exported:\n"+data.written.join("\n");
     $("exportDialog").close(); exportContext=null;
   } catch(e) {$("exportPaths").textContent=e.message;}
-  finally {exporting=false;$("exportConfirm").disabled=false;for (const id of ["exportFormat","exportCancel"]) $(id).disabled=false;}
+  finally {setExporting(false);}
+}
+// The dialog stays open after a bulk export so the written and skipped files remain visible.
+async function confirmBulkExport() {
+  const body = {bases: exportContext.bases, options: exportContext.options, format: $("exportFormat").value};
+  const {data: choice} = await api("/api/render-bulk/save-as", {method:"POST", timeout:DIALOG_TIMEOUT_MS, headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+  if (choice.canceled) { $("exportPaths").textContent = "Export canceled. No files were written."; return; }
+  const fileName = path => path.split("/").pop();
+  if (choice.existing.length && !confirm(`${choice.existing.length} of these export files already exist in ${choice.folder}:\n\n${choice.existing.map(fileName).join("\n")}\n\nReplace them?`)) {
+    $("exportPaths").textContent = "Export canceled. No files were written."; return;
+  }
+  const {data} = await api("/api/render-bulk/save-selected", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({token: choice.token, overwrite: choice.existing.length > 0})});
+  const skipped = choice.skipped.map(item => `${item.base}: ${item.reason}`);
+  $("exportPaths").textContent = `Exported ${data.written.length} transcripts to ${choice.folder}:\n` + data.written.map(fileName).join("\n")
+    + (skipped.length ? `\n\nSkipped ${skipped.length} files:\n` + skipped.join("\n") : "");
+  $("exportCancel").textContent = "Close";
 }
 /* ---------- waveform playback ---------- */
 
@@ -2588,6 +2626,7 @@ $("runModel").addEventListener("change", updateRunControls);
 for(const id of ["fileSearch","fileFilter","fileSort"]) $(id).addEventListener(id==="fileSearch"?"input":"change",renderFiles);
 $("exportConfirm").onclick=handle(confirmExport);
 $("exportCancel").onclick=()=>{$("exportDialog").close();exportContext=null;};
+for (const radio of $("exportScope").querySelectorAll("input")) radio.onchange = showExportScope;
 $("exportDialog").addEventListener("cancel",e=>{if(exporting)e.preventDefault();else exportContext=null;});
 $("reviewAudio").onchange = updateReviewView;
 $("audioPlayer").addEventListener("timeupdate",()=>{

@@ -167,9 +167,14 @@
 <dialog id="exportDialog" aria-labelledby="exportTitle">
   <h2 id="exportTitle">Export transcript view</h2>
   <p class="settingsNote">Creates a copy. Pipeline transcript versions are preserved.</p>
+  <fieldset id="exportScope" hidden>
+    <legend>Transcripts</legend>
+    <label><input type="radio" name="exportScope" value="current" checked> This transcript version</label>
+    <label><input type="radio" name="exportScope" value="selected"> <span id="exportScopeSelected"></span></label>
+  </fieldset>
   <label for="exportFormat">Format</label>
   <select id="exportFormat"><option value="txt">Plain text (TXT)</option><option value="rtf">Rich Text (RTF)</option></select>
-  <p class="settingsNote">The system Save As dialog lets you name the file and choose or create a destination folder.</p>
+  <p class="settingsNote" id="exportNote"></p>
   <p id="exportPaths" role="status"></p>
   <div class="dialogActions"><button id="exportCancel" autofocus>Cancel</button><button id="exportConfirm" class="primary">Export copy…</button></div>
 </dialog>

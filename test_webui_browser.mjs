@@ -13,7 +13,8 @@ const speakerCSS = await fs.readFile(new URL('./webui_waveform_speakers.css', im
 let audioDir = '/mock/audio', serverFolder = null, offline = false, failSave = false, sidecarDelay = {}, versionDelay = {}, renderDelay = {}, logDelay = {}, pickDelay = 0;
 let status = {running:false, pipeline:null, returncode:null, run_id:null, progress:{completed:{}}};
 const saved = {a:{values:{SWHISPER_NUM_SPEAKERS:'2',SWHISPER_CONDITION_ON_PREVIOUS:'yes'},comment:'original'}, b:{values:{},comment:'B'}};
-const writes = [], launches = [], errors = [], exports = [];
+const writes = [], launches = [], errors = [], exports = [], bulkRequests = [];
+let bulkExisting = [];
 let globalValues={}, globalRevision="g1", exportCanceled=false, consentFixture=false;
 let reusableFixture={a:{transcription:true,diarization:true},b:{transcription:true,diarization:false}};
 let previewAllSkipped=false;
@@ -95,6 +96,8 @@ const server = http.createServer(async (req,res) => {
     const pcm=Buffer.alloc(44+160000);pcm.write('RIFF');pcm.writeUInt32LE(pcm.length-8,4);pcm.write('WAVEfmt ',8);pcm.writeUInt32LE(16,16);pcm.writeUInt16LE(1,20);pcm.writeUInt16LE(1,22);pcm.writeUInt32LE(8000,24);pcm.writeUInt32LE(16000,28);pcm.writeUInt16LE(2,32);pcm.writeUInt16LE(16,34);pcm.write('data',36);pcm.writeUInt32LE(160000,40);
     const range=/bytes=(\d+)-(\d*)/.exec(req.headers.range||'');const start=range?Number(range[1]):0,end=range&&range[2]?Number(range[2]):pcm.length-1;res.writeHead(range?206:200,{'Content-Type':'audio/wav','Accept-Ranges':'bytes','Content-Length':end-start+1,...(range?{'Content-Range':`bytes ${start}-${end}/${pcm.length}`}:{})});res.end(pcm.subarray(start,end+1));return;
   }
+  if (u.pathname === '/api/render-bulk/save-as') {bulkRequests.push(data);return send(exportCanceled ? {canceled:true} : {token:'bulk-selection',folder:'/mock/chosen',format:data.format,paths:['/mock/chosen/a_view.txt'],existing:bulkExisting,skipped:[{base:'b',reason:'No transcript found for this file'}]});}
+  if (u.pathname === '/api/render-bulk/save-selected') {exports.push(data);return send({written:['/mock/chosen/a_view.txt']});}
   if (u.pathname.endsWith('/save-as')) return send(exportCanceled ? {canceled:true} : {token:'native-save-selection',path:'/mock/chosen/review.txt',format:data.format});
   if (u.pathname.endsWith('/save-selected')) {exports.push(data);return send({written:['/mock/chosen/review.txt']});}
   if (u.pathname.startsWith('/api/render/') && u.pathname.endsWith('/save')) {exports.push(data);return send({written:['/mock/audio/exports/review.txt']});}
@@ -1061,6 +1064,29 @@ try {
     await click('exportConfirm');await wait('!exporting && !$("exportDialog").open');
     assert.equal(exports.at(-1).token,'native-save-selection');
     exportCanceled=true;const before=exports.length;await click('renderSave');await wait('$("exportDialog").open');await click('exportConfirm');await wait('!exporting && !$("exportDialog").open');assert.equal(exports.length,before);exportCanceled=false;await click('tabSettings');
+  });
+  await check('Bulk export sends the ticked files with the view options and asks before replacing',async()=>{
+    await click('tabTranscript');await wait('!$("versionSel").disabled && renderAvailable');
+    await evaluate('runSelection.add("a")');await click('renderSave');await wait('$("exportDialog").open');
+    assert.equal(await evaluate('$("exportScope").hidden'),true,'Ticking only the open file offers no bulk export');
+    await click('exportCancel');
+    await evaluate('runSelection.add("b")');await click('renderSave');await wait('$("exportDialog").open');
+    assert.equal(await evaluate('$("exportScope").hidden'),false);
+    assert.match(await evaluate('$("exportScopeSelected").textContent'),/2 selected files/);
+    await evaluate('document.querySelector(\'input[name="exportScope"][value="selected"]\').click()');
+    assert.equal(await evaluate('$("exportConfirm").textContent'),'Choose folder and export…');
+    bulkExisting=['/mock/chosen/a_view.txt'];await evaluate('window.confirm=()=>false');
+    const before=exports.length;await click('exportConfirm');await wait('!exporting && $("exportPaths").textContent.includes("canceled")');
+    assert.equal(exports.length,before,'Declining the replacement writes nothing');
+    await evaluate('window.confirm=()=>true');
+    await click('exportConfirm');await wait('!exporting && $("exportPaths").textContent.includes("Exported")');
+    assert.deepEqual(bulkRequests.at(-1).bases.sort(),['a','b']);
+    assert.deepEqual(bulkRequests.at(-1).options,await evaluate('renderOptions()'));
+    assert.deepEqual(exports.at(-1),{token:'bulk-selection',overwrite:true});
+    assert.match(await evaluate('$("exportPaths").textContent'),/Skipped 1 files:\nb: No transcript/);
+    assert.equal(await evaluate('$("exportDialog").open && $("exportCancel").textContent'),'Close');
+    await click('exportCancel');bulkExisting=[];
+    await evaluate('runSelection.clear();updateRunControls()');await click('tabSettings');
   });
   await check('Folder change cancel preserves folder and edits',async()=>{await select('b');await wait('editorBase==="b"');await input('folder draft');await evaluate('$("dirInput").value="/mock/other"; $("dirBtn").click()');await wait('$("dirtyDialog").open');await click('dirtyCancel');await wait('!$("dirtyDialog").open');assert.equal(audioDir,'/mock/audio');assert.equal(await evaluate('$("dirInput").value'),'/mock/audio');});
   await check('Dirty page requests unload warning',async()=>{
