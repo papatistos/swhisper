@@ -145,7 +145,10 @@ class FileManager:
             unprocessed_files = []
             for audio_file in audio_files:
                 base_name = os.path.splitext(audio_file)[0]
-                if base_name in existing_json_basenames:
+                if base_name in existing_json_basenames and reprocess_requested(STAGE_TRANSCRIPTION, base_name):
+                    print(f"  🔁 {audio_file} (transcribing again as requested for this run)")
+                    unprocessed_files.append(audio_file)
+                elif base_name in existing_json_basenames:
                     # A per-file sidecar can still request reprocessing
                     # (force flag, or sidecar modified after the JSON output).
                     json_path = os.path.join(source_output_dir, f"{base_name}.json")

@@ -14,11 +14,18 @@ redoes diarization only and reuses existing transcriptions. Unlike the saved
 force settings, it applies to this run only and wins over per-recording sidecar
 settings. There is no transcription-only value, because diarization is aligned
 to the transcript and must follow a new one.
+
+``SWHISPER_RUN_RETRANSCRIBE`` and ``SWHISPER_RUN_REDIARIZE`` name recordings
+to redo in this run only, in the same newline separated form as
+``SWHISPER_ONLY_FILES``. A recording that is transcribed again is diarized
+again too.
 """
 import os
 
 ENV_VAR = "SWHISPER_ONLY_FILES"
 REPROCESS_ENV_VAR = "SWHISPER_RUN_REPROCESS"
+RETRANSCRIBE_ENV_VAR = "SWHISPER_RUN_RETRANSCRIBE"
+REDIARIZE_ENV_VAR = "SWHISPER_RUN_REDIARIZE"
 STAGE_TRANSCRIPTION = "transcription"
 STAGE_DIARIZATION = "diarization"
 
@@ -33,11 +40,14 @@ def _base(name):
     return os.path.splitext(os.path.basename(name))[0]
 
 
+def _listed(var):
+    raw = os.getenv(var, "")
+    return {_base(line.strip()) for line in raw.splitlines() if line.strip()}
+
+
 def selected_bases():
     """Basenames the run is restricted to, or None to run the whole folder."""
-    raw = os.getenv(ENV_VAR, "")
-    bases = {_base(line.strip()) for line in raw.splitlines() if line.strip()}
-    return bases or None
+    return _listed(ENV_VAR) or None
 
 
 def keep_selected(names):
@@ -48,12 +58,23 @@ def keep_selected(names):
     return [name for name in names if _base(name) in bases]
 
 
-def reprocess_requested(stage=None):
-    """True when this run must redo files that already have output in *stage*."""
+def reprocess_requested(stage=None, base=None):
+    """True when this run must redo existing output in *stage*.
+
+    Without *base* only the whole-run setting counts; with it, the recordings
+    named for this run count too.
+    """
     value = os.getenv(REPROCESS_ENV_VAR, "").strip().lower()
     if value in ("1", "true", "yes", "on"):
         return True
-    return value == STAGE_DIARIZATION and stage == STAGE_DIARIZATION
+    if value == STAGE_DIARIZATION and stage == STAGE_DIARIZATION:
+        return True
+    if base is None:
+        return False
+    base = _base(base)
+    if base in _listed(RETRANSCRIBE_ENV_VAR):
+        return True
+    return stage == STAGE_DIARIZATION and base in _listed(REDIARIZE_ENV_VAR)
 
 
 def describe():

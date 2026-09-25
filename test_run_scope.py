@@ -74,6 +74,18 @@ class RunReprocessTests(unittest.TestCase):
         self.assertFalse(run_scope.reprocess_requested(run_scope.STAGE_TRANSCRIPTION))
         self.assertFalse(run_scope.reprocess_requested())
 
+    def test_named_recordings_are_redone_in_their_stages_only(self):
+        os.environ[run_scope.RETRANSCRIBE_ENV_VAR] = 'a.wav'
+        os.environ[run_scope.REDIARIZE_ENV_VAR] = 'b\n'
+        self.addCleanup(os.environ.pop, run_scope.RETRANSCRIBE_ENV_VAR, None)
+        self.addCleanup(os.environ.pop, run_scope.REDIARIZE_ENV_VAR, None)
+        T, D = run_scope.STAGE_TRANSCRIPTION, run_scope.STAGE_DIARIZATION
+        # A new transcript needs a new diarization.
+        self.assertEqual([run_scope.reprocess_requested(s, 'a') for s in (T, D)], [True, True])
+        self.assertEqual([run_scope.reprocess_requested(s, 'b') for s in (T, D)], [False, True])
+        self.assertEqual([run_scope.reprocess_requested(s, 'c') for s in (T, D)], [False, False])
+        self.assertFalse(run_scope.reprocess_requested(D))
+
     def test_true_forces_every_stage(self):
         os.environ[run_scope.REPROCESS_ENV_VAR] = 'true'
         self.assertTrue(run_scope.reprocess_requested(run_scope.STAGE_DIARIZATION))
@@ -99,5 +111,10 @@ class RunReprocessTests(unittest.TestCase):
                 self.assertEqual(manager.get_audio_files_to_process(str(audio), str(output)), [])
                 os.environ[run_scope.REPROCESS_ENV_VAR] = 'diarization'
                 self.assertEqual(manager.get_audio_files_to_process(str(audio), str(output)), [])
+                os.environ[run_scope.REPROCESS_ENV_VAR] = ''
+                os.environ[run_scope.RETRANSCRIBE_ENV_VAR] = 'a'
+                self.addCleanup(os.environ.pop, run_scope.RETRANSCRIBE_ENV_VAR, None)
+                self.assertEqual(manager.get_audio_files_to_process(str(audio), str(output)), ['a.wav'])
+                os.environ.pop(run_scope.RETRANSCRIBE_ENV_VAR)
                 os.environ[run_scope.REPROCESS_ENV_VAR] = 'true'
                 self.assertEqual(manager.get_audio_files_to_process(str(audio), str(output)), ['a.wav'])
