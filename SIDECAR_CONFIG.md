@@ -63,7 +63,7 @@ Settings that are global by nature are rejected with a warning explaining why: a
 
 When a file has already been processed, its sidecar can still trigger reprocessing:
 
-1. **Force flags** set to `true` persist until removed or turned off. They request reprocessing on every applicable run, even after a successful run. For a single rerun, select the recordings and tick **Force reprocessing** beside the transcription or diarization selector in the web UI run controls. That option applies only to the launched run and does not write force flags into sidecars.
+1. **Force flags** set to `true` persist until removed or turned off. They request reprocessing on every applicable run, even after a successful run. For a single rerun, tick **Re-transcribe** or **Re-diarize** under the recording in the web UI file list. Those options apply only to the launched run and do not write force flags into sidecars.
 2. **Staleness**: if the sidecar was modified *after* the file's output was written (the whisper JSON for the transcription stage, the `.ok` marker for diarization), the file is reprocessed automatically. This is stage-aware: a sidecar containing only diarization keys (e.g. `SWHISPER_MAX_SPEAKERS`) will re-run diarization but **not** re-run the expensive transcription step. Changed transcription keys re-run both stages (new JSON invalidates the diarized transcript). Disable auto-reprocessing globally with `SWHISPER_SIDECAR_AUTOREPROCESS=false` in `.swhisper.env`.
 
 Force flags set to `false` do not by themselves trigger timestamp-based reprocessing. Other relevant settings in a newer sidecar can still trigger it.
