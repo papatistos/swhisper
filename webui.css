@@ -262,7 +262,38 @@ details.group > summary { cursor: pointer; font-size: .9rem; padding: 8px 0; bor
 #audioBar { padding: 8px 16px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 #audioBar[hidden], #timeline[hidden] { display: none; }
 #audioPlayer { max-width: 100%; height: 36px; }
-#timeline { overflow-y: auto; flex: 1; min-height: 0; padding: 12px 20px; }
+.waveform { flex: 0 0 100%; min-width: 0; font-size: .72rem; }
+.waveformTrack { position: relative; height: 64px; background: var(--panel); border: 1px solid var(--border);
+                 border-radius: 5px; overflow: hidden; cursor: crosshair; touch-action: none; user-select: none; }
+.waveformTrack[aria-disabled="true"] { cursor: wait; }
+.waveformTrack svg { display: block; width: 100%; height: 100%; color: var(--accent); }
+.waveformTrack path { stroke: currentColor; stroke-width: 1; }
+.waveformRange { position: absolute; top: 0; bottom: 0; background: var(--accent); opacity: .23;
+                 border-inline: 2px solid var(--accent); pointer-events: none; }
+.waveformPlayhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--text);
+                    transform: translateX(-1px); pointer-events: none; }
+.waveformPlayhead::before { content: ""; position: absolute; left: -4px; top: 0;
+                           border: 5px solid transparent; border-top: 7px solid var(--text); }
+.waveformScale { display: flex; justify-content: space-between; min-height: 1.45em; color: var(--muted); font-variant-numeric: tabular-nums; }
+.waveformFooter { display: flex; align-items: center; gap: 6px 12px; flex-wrap: wrap; margin-top: 3px; }
+.waveformStatus { font-variant-numeric: tabular-nums; }
+.waveformHint { color: var(--muted); flex: 1; }
+.waveformFooter button { font-size: inherit; padding: 3px 8px; }
+.waveformZoom, .waveformPan { display: flex; align-items: center; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
+.waveformZoom button, .waveformPan button { font-size: inherit; padding: 3px 8px; }
+.waveformZoomLevel { min-width: 3.3em; text-align: center; font-variant-numeric: tabular-nums; }
+.waveformDetailStatus { color: var(--muted); }
+.waveformPan { flex-wrap: nowrap; }
+.waveformPosition { flex: 1; min-width: 0; padding: 0; accent-color: var(--accent); }
+/* When controls and the console fill a short window, scroll the tab rather
+   than squeezing its transcript to a few pixels. */
+#transcriptView, #compareView { overflow-y: auto; }
+#audioBar, #compareAudioBar, #compareBar, #transcriptBar, #renderBar, .compareHead { flex-shrink: 0; }
+#audioBar label, #compareAudioBar label { font-size: .8rem; }
+#audioMsg:empty, #compareAudioMsg:empty { display: none; }
+#comparePanes { min-height: 180px; }
+#transcriptText, #timeline { min-height: 120px; }
+#timeline { overflow-y: auto; flex: 1; min-height: 120px; padding: 12px 20px; }
 .segment { padding: 8px; border-bottom: 1px solid var(--border); }
 .segment.active { background: var(--panel2); border-left: 3px solid var(--accent); }
 .segment button { font-size: .7rem; margin-right: 8px; }

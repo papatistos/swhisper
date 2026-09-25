@@ -746,6 +746,7 @@ async function selectFile(base, force = false) {
   if (!force && base === editorBase && base === currentBase) return true;
   if (!force && !await resolveUnsaved()) return false;
   resetAudioReview();
+  if (base !== currentBase) setCompareAudio(null);
   const seq = ++editorSeq, folder = folderSeq;
   transcriptSeq++; renderSeq++; logSeq++; logListSeq++;
   currentBase = base;
@@ -995,6 +996,7 @@ async function openSpeakerNames() {
 
 async function saveSpeakerNames() {
   if (!speakerContext) return;
+  const context = {...speakerContext, folder: folderSeq};
   const names = {};
   for (const field of $("speakerRows").querySelectorAll("input")) names[field.dataset.label] = field.value;
   try {
@@ -1007,6 +1009,9 @@ async function saveSpeakerNames() {
   } catch (e) { $("speakerMsg").textContent = e.message; return; }
   $("speakerDialog").close(); speakerContext = null;
   await applyRenderOptions();
+  if (context.folder === folderSeq && context.base === currentBase && context.version === $("versionSel").value) {
+    await loadAudioReview(context.base, context.version, true);
+  }
 }
 
 async function saveRenderedView() {
@@ -1029,21 +1034,397 @@ async function confirmExport() {
   } catch(e) {$("exportPaths").textContent=e.message;}
   finally {exporting=false;$("exportConfirm").disabled=false;for (const id of ["exportFormat","exportCancel"]) $(id).disabled=false;}
 }
-function resetAudioReview() {
-  timelineSeq++; $("audioPlayer").pause(); $("audioPlayer").removeAttribute("src");$("audioPlayer").load();
+/* ---------- waveform playback ---------- */
+
+function waveformTime(seconds) {
+  const tenths = Math.round(Math.max(0, seconds || 0) * 10);
+  const hours = Math.floor(tenths / 36000), minutes = Math.floor(tenths / 600) % 60;
+  return `${hours ? hours + ":" + String(minutes).padStart(2, "0") : minutes}:${String(Math.floor(tenths / 10) % 60).padStart(2, "0")}.${tenths % 10}`;
+}
+
+// Each tab owns a player; both use the same interaction and stop logic.
+class WaveformPlayer {
+  constructor(host, audio) {
+    this.host = host;
+    this.audio = audio;
+    this.sequence = 0;
+    this.duration = 0;
+    this.viewStart = this.viewEnd = 0;
+    this.detailSequence = 0;
+    this.detailCache = new Map();
+    this.range = null;
+    host.innerHTML = `<div class="waveformTrack" role="slider" tabindex="0" aria-label="Audio playhead"
+        aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-disabled="true" aria-describedby="${host.id}Hint"
+        title="Arrow keys seek; Shift + arrows select. Space plays or pauses. Escape clears the selection.">
+        <svg viewBox="0 0 2048 100" preserveAspectRatio="none" aria-hidden="true"><path></path></svg>
+        <div class="waveformRange" hidden></div><div class="waveformPlayhead" hidden></div>
+      </div>
+      <div class="waveformSpeakers"></div>
+      <div class="waveformScale" aria-hidden="true"></div>
+      <div class="waveformZoom" role="group" aria-label="Waveform zoom">
+        <button class="waveformZoomOut" aria-label="Zoom out waveform" title="Zoom out">−</button>
+        <output class="waveformZoomLevel" aria-label="Waveform zoom level">1×</output>
+        <button class="waveformZoomIn" aria-label="Zoom in waveform" title="Zoom in around the playhead">+</button>
+        <button class="waveformFit">Fit selection</button><button class="waveformFull">Full audio</button>
+        <span class="waveformDetailStatus" role="status"></span>
+      </div>
+      <div class="waveformPan" hidden>
+        <button class="waveformEarlier" aria-label="Show earlier audio">‹</button>
+        <input class="waveformPosition" type="range" min="0" max="0" step="any" value="0" aria-label="Waveform position">
+        <button class="waveformLater" aria-label="Show later audio">›</button>
+      </div>
+      <div class="waveformFooter"><span class="waveformStatus" role="status"></span>
+        <button class="waveformClear" hidden>Clear selection</button><button class="waveformRetry" hidden>Retry waveform</button>
+        <span class="waveformHint" id="${host.id}Hint">Click to seek. Drag to select, then press Play.</span></div>`;
+    const find = selector => host.querySelector(selector);
+    this.track = find(".waveformTrack");
+    this.path = find("path");
+    this.overlay = find(".waveformRange");
+    this.playhead = find(".waveformPlayhead");
+    this.status = find(".waveformStatus");
+    this.clear = find(".waveformClear");
+    this.retry = find(".waveformRetry");
+    this.speakers = new WaveformSpeakers(find(".waveformSpeakers"));
+    this.zoomIn = find(".waveformZoomIn");
+    this.zoomOut = find(".waveformZoomOut");
+    this.fit = find(".waveformFit");
+    this.full = find(".waveformFull");
+    this.position = find(".waveformPosition");
+    this.detailStatus = find(".waveformDetailStatus");
+    this.zoomIn.onclick = () => this.zoomBy(2);
+    this.zoomOut.onclick = () => this.zoomBy(.5);
+    this.full.onclick = () => this.setViewport(0, this.duration);
+    this.fit.onclick = () => { if (this.range) this.setViewport(this.range.start, this.range.end - this.range.start); };
+    this.position.oninput = () => this.setViewport(Number(this.position.value), this.viewEnd - this.viewStart);
+    find(".waveformEarlier").onclick = () => this.pan(-.75);
+    find(".waveformLater").onclick = () => this.pan(.75);
+    this.clear.onclick = () => { this.clearRange(); this.track.focus(); };
+    this.retry.onclick = () => this.load(this.base, true);
+    this.track.onpointerdown = e => this.pointerDown(e);
+    this.track.onpointermove = e => this.pointerMove(e);
+    this.track.onpointerup = e => this.pointerUp(e);
+    this.track.onpointercancel = this.track.onlostpointercapture = () => this.cancelDrag();
+    this.track.onkeydown = e => this.keyDown(e);
+    audio.addEventListener("play", () => {
+      if (this.range && (audio.currentTime < this.range.start || audio.currentTime >= this.range.end - .01)) {
+        audio.currentTime = this.range.start;
+      }
+      this.followView = true;
+      this.revealTime(audio.currentTime);
+      this.armStop();
+      this.animate();
+    });
+    for (const type of ["pause", "ended"]) audio.addEventListener(type, () => {
+      clearTimeout(this.stopTimer); cancelAnimationFrame(this.frame); this.paint();
+    });
+    audio.addEventListener("timeupdate", () => {
+      this.enforceEnd();
+      if (!audio.paused && this.followView) this.revealTime(audio.currentTime);
+      this.paint();
+    });
+    audio.addEventListener("seeking", () => {
+      // Native controls may seek outside a selected range. That starts a new seek.
+      if (this.range && (audio.currentTime < this.range.start - .01 || audio.currentTime > this.range.end + .01)) this.clearRange();
+      this.armStop(); this.paint();
+    });
+    for (const type of ["seeked", "ratechange", "playing"]) audio.addEventListener(type, () => this.armStop());
+  }
+
+  async load(base, retry = false) {
+    const src = base ? `/api/audio/${encodeURIComponent(base)}?folder=${folderSeq}` : "";
+    if (src === this.source && !retry) return;
+    const sameSource = src === this.source;
+    const sequence = ++this.sequence;
+    this.abort?.abort();
+    this.detailAbort?.abort();
+    clearTimeout(this.detailTimer);
+    this.detailSequence++;
+    this.detailCache.clear();
+    this.cancelDrag();
+    this.audio.pause();
+    this.base = base;
+    this.source = src;
+    this.duration = 0;
+    this.viewStart = this.viewEnd = 0;
+    this.overview = null;
+    this.detailStatus.textContent = "";
+    if (!sameSource) this.speakers.clear();
+    else this.speakers.setViewport(0, 0);
+    this.range = null;
+    this.keyAnchor = null;
+    this.path.setAttribute("d", "");
+    this.host.querySelector(".waveformScale").replaceChildren();
+    this.retry.hidden = true;
+    if (src) this.audio.src = src; else this.audio.removeAttribute("src");
+    this.audio.load();
+    this.paint();
+    this.status.textContent = base ? "Loading waveform…" : "";
+    if (!base) return;
+    const controller = this.abort = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 130000);
+    try {
+      const {data} = await api(`/api/waveform/${encodeURIComponent(base)}?folder=${folderSeq}`, {signal: this.abort.signal});
+      if (sequence !== this.sequence) return;
+      if (!(data.duration > 0) || !Number.isFinite(data.duration) || !Array.isArray(data.peaks) || !data.peaks.length
+          || !data.peaks.every(p => Number.isFinite(p) && p >= 0 && p <= 1)) throw Error("Invalid waveform");
+      this.duration = data.duration;
+      this.overview = {...data, start: 0, end: data.duration};
+      // A single gain across the whole file keeps quiet passages proportionally quiet.
+      this.gain = 44 / Math.max(.01, ...data.peaks);
+      this.setViewport(0, data.duration);
+    } catch (e) {
+      if (sequence !== this.sequence) return;
+      this.status.textContent = "Waveform unavailable. Audio controls still work.";
+      this.retry.hidden = false;
+    } finally { clearTimeout(timeout); }
+  }
+
+  get minimumSpan() { return Math.min(this.duration, Math.max(.25, this.duration / 4096)); }
+
+  setSpeakerTracks(tracks) {
+    this.speakers.setTracks(tracks);
+    this.speakers.setViewport(this.viewStart, this.viewEnd);
+  }
+
+  zoomBy(factor) {
+    if (!this.duration) return;
+    const span = this.viewEnd - this.viewStart;
+    const time = this.audio.currentTime;
+    const anchor = time >= this.viewStart && time <= this.viewEnd ? time : (this.viewStart + this.viewEnd) / 2;
+    const fraction = (anchor - this.viewStart) / span;
+    const next = Math.max(this.minimumSpan, Math.min(this.duration, span / factor));
+    this.setViewport(anchor - next * fraction, next);
+  }
+
+  pan(fraction) {
+    const span = this.viewEnd - this.viewStart;
+    this.setViewport(this.viewStart + span * fraction, span);
+  }
+
+  revealTime(time) {
+    if (!this.duration || (time >= this.viewStart - .001 && time < this.viewEnd) || (time === this.duration && this.viewEnd === this.duration)) return;
+    const span = this.viewEnd - this.viewStart;
+    this.setViewport(time - span * .1, span, true);
+  }
+
+  setViewport(start, span, follow = false) {
+    if (!this.duration) return;
+    span = Math.max(this.minimumSpan, Math.min(this.duration, span));
+    start = Math.max(0, Math.min(this.duration - span, start));
+    this.cancelDrag();
+    this.followView = follow;
+    this.viewStart = start;
+    this.viewEnd = start + span;
+    this.track.querySelector("svg").setAttribute("viewBox", `${start} 0 ${span} 100`);
+    this.path.style.strokeWidth = span / 2048;
+    const scale = this.host.querySelector(".waveformScale");
+    scale.replaceChildren();
+    for (let i = 0; i <= 4; i++) {
+      const tick = document.createElement("span");
+      tick.textContent = waveformTime(start + span * i / 4);
+      scale.append(tick);
+    }
+    this.speakers.setViewport(start, this.viewEnd);
+    this.position.max = this.duration - span;
+    this.position.value = start;
+    this.position.setAttribute("aria-valuetext", `${waveformTime(start)} to ${waveformTime(this.viewEnd)}`);
+    this.host.querySelector(".waveformPan").hidden = span >= this.duration - .000001;
+    const zoom = this.duration / span;
+    this.host.querySelector(".waveformZoomLevel").textContent = `${Number(zoom.toFixed(1))}×`;
+    this.host.querySelector(".waveformEarlier").disabled = start <= 0;
+    this.host.querySelector(".waveformLater").disabled = this.viewEnd >= this.duration;
+    this.drawPeaks(this.overview);
+    this.paint();
+    clearTimeout(this.detailTimer);
+    this.detailAbort?.abort();
+    const seq = ++this.detailSequence;
+    if (span >= this.duration - .000001) { this.detailStatus.textContent = ""; return; }
+    this.detailStatus.textContent = "Loading detail…";
+    this.detailTimer = setTimeout(() => this.loadDetail(seq), 100);
+  }
+
+  drawPeaks(data) {
+    if (!data) return;
+    const width = (data.end - data.start) / data.peaks.length;
+    this.path.setAttribute("d", data.peaks.map((peak, i) => {
+      const x = data.start + (i + .5) * width, height = Math.max(.35, Math.min(48, peak * this.gain));
+      return `M${x.toFixed(6)},${(50 - height).toFixed(2)}V${(50 + height).toFixed(2)}`;
+    }).join(""));
+  }
+
+  async loadDetail(sequence) {
+    const key = `${this.viewStart.toFixed(6)},${this.viewEnd.toFixed(6)}`;
+    const controller = this.detailAbort = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 130000);
+    try {
+      let data = this.detailCache.get(key);
+      if (!data) {
+        ({data} = await api(`/api/waveform/${encodeURIComponent(this.base)}?folder=${folderSeq}&start=${this.viewStart}&end=${this.viewEnd}`, {signal: controller.signal}));
+      }
+      if (sequence !== this.detailSequence) return;
+      if (!Number.isFinite(data.start) || !Number.isFinite(data.end) || data.end <= data.start || !Array.isArray(data.peaks)
+          || !data.peaks.length || !data.peaks.every(p => Number.isFinite(p) && p >= 0 && p <= 1)) throw Error("Invalid waveform detail");
+      this.detailCache.set(key, data);
+      if (this.detailCache.size > 16) this.detailCache.delete(this.detailCache.keys().next().value);
+      this.drawPeaks(data);
+      this.detailStatus.textContent = "";
+    } catch (e) {
+      if (sequence === this.detailSequence) this.detailStatus.textContent = "Detail unavailable; showing overview.";
+    } finally { clearTimeout(timeout); }
+  }
+
+  paint() {
+    const duration = this.duration, time = Math.min(duration, this.audio.currentTime || 0);
+    const span = this.viewEnd - this.viewStart;
+    this.track.setAttribute("aria-disabled", String(!duration));
+    this.track.setAttribute("aria-valuemax", String(duration));
+    this.track.setAttribute("aria-valuenow", String(time));
+    this.track.setAttribute("aria-valuetext", waveformTime(time));
+    this.playhead.hidden = !span || time < this.viewStart - .001 || time > this.viewEnd + .001;
+    this.playhead.style.left = `${span ? Math.max(0, Math.min(1, (time - this.viewStart) / span)) * 100 : 0}%`;
+    this.clear.hidden = !this.range;
+    const left = Math.max(this.viewStart, this.range?.start ?? 0), right = Math.min(this.viewEnd, this.range?.end ?? 0);
+    this.overlay.hidden = !this.range || right <= left;
+    if (this.range && span) {
+      this.overlay.style.left = `${(left - this.viewStart) / span * 100}%`;
+      this.overlay.style.width = `${Math.max(0, right - left) / span * 100}%`;
+    }
+    this.zoomIn.disabled = !duration || span <= this.minimumSpan + .000001;
+    this.zoomOut.disabled = this.full.disabled = !duration || span >= duration - .000001;
+    this.fit.disabled = !duration || !this.range;
+    if (!duration) {
+      this.host.querySelector(".waveformPan").hidden = true;
+      this.host.querySelector(".waveformZoomLevel").textContent = "1×";
+    }
+    if (duration) {
+      const message = this.range
+        ? `Selected ${waveformTime(this.range.start)} – ${waveformTime(this.range.end)} · ${waveformTime(this.range.end - this.range.start)}`
+        : `Duration ${waveformTime(duration)}`;
+      if (this.status.textContent !== message) this.status.textContent = message;
+    }
+  }
+
+  clearRange() {
+    this.range = null; this.keyAnchor = null;
+    clearTimeout(this.stopTimer);
+    this.paint();
+  }
+
+  seek(time) {
+    this.clearRange();
+    this.audio.currentTime = time;
+    this.revealTime(time);
+    this.paint();
+  }
+
+  select(start, end) {
+    this.range = {start: Math.min(start, end), end: Math.max(start, end)};
+    if (this.range.end - this.range.start < .001) this.range = null;
+    this.paint();
+  }
+
+  pointerTime(e) {
+    const box = this.track.getBoundingClientRect();
+    return this.viewStart + Math.max(0, Math.min(1, (e.clientX - box.left) / box.width)) * (this.viewEnd - this.viewStart);
+  }
+
+  pointerDown(e) {
+    if (!this.duration || e.button !== 0 || this.drag) return;
+    e.preventDefault();
+    this.track.focus(); this.audio.pause(); this.keyAnchor = null;
+    this.drag = {id: e.pointerId, x: e.clientX, start: this.pointerTime(e), range: this.range, moved: false};
+    this.track.setPointerCapture(e.pointerId);
+  }
+
+  pointerMove(e) {
+    if (!this.drag || this.drag.id !== e.pointerId) return;
+    this.drag.moved ||= Math.abs(e.clientX - this.drag.x) >= 4;
+    if (this.drag.moved) this.select(this.drag.start, this.pointerTime(e));
+  }
+
+  pointerUp(e) {
+    if (!this.drag || this.drag.id !== e.pointerId) return;
+    this.pointerMove(e);
+    const drag = this.drag;
+    this.drag = null;
+    this.track.releasePointerCapture(e.pointerId);
+    if (drag.moved && this.range) this.audio.currentTime = this.range.start;
+    else this.seek(this.pointerTime(e));
+    this.paint();
+  }
+
+  cancelDrag() {
+    if (!this.drag) return;
+    const drag = this.drag;
+    this.drag = null;
+    this.range = drag.range;
+    if (this.track.hasPointerCapture(drag.id)) this.track.releasePointerCapture(drag.id);
+    this.paint();
+  }
+
+  keyDown(e) {
+    if (e.key === "Escape") { e.preventDefault(); this.cancelDrag(); this.clearRange(); return; }
+    if (!this.duration || !["ArrowLeft", "ArrowRight", "Home", "End", " "].includes(e.key)) return;
+    e.preventDefault();
+    if (e.key === " ") {
+      if (this.audio.paused) this.audio.play().catch(() => {}); else this.audio.pause();
+      return;
+    }
+    this.audio.pause();
+    const step = Math.min(.1, (this.viewEnd - this.viewStart) / 10) || .1;
+    const position = e.shiftKey && this.keyAnchor != null ? this.keyEnd : this.audio.currentTime;
+    const target = e.key === "Home" ? 0 : e.key === "End" ? this.duration
+      : Math.max(0, Math.min(this.duration, position + (e.key === "ArrowLeft" ? -step : step)));
+    if (e.shiftKey) {
+      this.keyAnchor ??= this.audio.currentTime;
+      this.keyEnd = target;
+      this.select(this.keyAnchor, target);
+      this.audio.currentTime = this.range?.start ?? target;
+      this.revealTime(target);
+    } else this.seek(target);
+    this.paint();
+  }
+
+  enforceEnd() {
+    if (!this.range || this.audio.paused || this.audio.currentTime < this.range.end) return;
+    this.audio.pause();
+    this.audio.currentTime = this.range.end;
+  }
+
+  armStop() {
+    clearTimeout(this.stopTimer);
+    if (!this.range || this.audio.paused) return;
+    this.enforceEnd();
+    if (!this.audio.paused) this.stopTimer = setTimeout(() => this.armStop(),
+      Math.max(10, (this.range.end - this.audio.currentTime) / this.audio.playbackRate * 1000));
+  }
+
+  animate() {
+    cancelAnimationFrame(this.frame);
+    this.enforceEnd(); this.paint();
+    if (!this.audio.paused) this.frame = requestAnimationFrame(() => this.animate());
+  }
+}
+
+function resetAudioReview(keepAudio = false) {
+  timelineSeq++;
+  transcriptWaveform.speakers.clear();
+  if (!keepAudio) transcriptWaveform.load(null);
   $("audioBar").hidden=true;$("timeline").hidden=true;$("timeline").replaceChildren();$("transcriptText").style.display="";
 }
-async function loadAudioReview(base, version) {
+async function loadAudioReview(base, version, speakersOnly = false) {
   const seq=++timelineSeq, folder=folderSeq, renderAtLoad=renderSeq;
   try {
     const {data}=await api(`/api/timeline/${encodeURIComponent(base)}?version=${encodeURIComponent(version)}`);
     if(seq!==timelineSeq||base!==currentBase||folder!==folderSeq)return;
-    $("audioPlayer").src=`/api/audio/${encodeURIComponent(base)}?folder=${folderSeq}`;
+    transcriptWaveform.setSpeakerTracks([{label: "Speakers", segments: data.segments}]);
+    if (speakersOnly) return;
+    transcriptWaveform.load(base);
     $("audioBar").hidden=false;$("reviewAudio").disabled=!data.segments.length;
-    $("audioMsg").textContent=data.segments.length ? "Select a timestamp to play that segment." : "No timestamped segments for this version.";
+    $("audioMsg").textContent=data.segments.length ? "" : "No timestamped segments for this version.";
     if (renderAtLoad === renderSeq) renderTimeline(data.segments);
 
-  }catch(e){if(seq===timelineSeq){$("audioBar").hidden=false;$("audioMsg").textContent=e.message;$("reviewAudio").disabled=true;}}
+  }catch(e){if(seq===timelineSeq && !speakersOnly){$("audioBar").hidden=false;$("audioMsg").textContent=e.message;$("reviewAudio").disabled=true;}}
 }
 
 function renderTimeline(segments) {
@@ -1053,7 +1434,7 @@ function renderTimeline(segments) {
       const row=document.createElement("div");row.className="segment";row.dataset.start=segment.start;row.dataset.end=segment.end;
       const button=document.createElement("button");const seconds=Math.floor(segment.start);
       button.textContent=`${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,"0")} ${segment.speaker}`;
-      button.onclick=()=>{$("audioPlayer").currentTime=segment.start;$("audioPlayer").play().catch(()=>{$("audioMsg").textContent="Press Play to start audio, or choose a browser-supported audio format.";});};
+      button.onclick=()=>{transcriptWaveform.seek(segment.start);$("audioPlayer").play().catch(()=>{$("audioMsg").textContent="Press Play to start audio, or choose a browser-supported audio format.";});};
       const text=document.createElement("p");text.textContent=segment.text;row.append(button,text);$("timeline").appendChild(row);
     }
   updateReviewView();
@@ -1067,7 +1448,11 @@ function updateReviewView() {
 
 async function loadTranscript(base, version) {
   const seq = ++transcriptSeq, folder = folderSeq;
-  resetAudioReview();
+  resetAudioReview(true);
+  transcriptWaveform.load(base);
+  $("audioBar").hidden = !base;
+  $("reviewAudio").disabled = true;
+  $("audioMsg").textContent = "";
   renderSeq++;
   $("renderBar").classList.remove("busy", "dirty");
   clearTimeout(renderTimer);
@@ -1182,6 +1567,7 @@ async function loadComparison(base) {
     setCompareAudio(null);
     return;
   }
+  setCompareAudio(base);
   $("compareMsg").textContent = "Loading…";
   let versions;
   try { versions = (await api(`/api/transcript/${encodeURIComponent(base)}`)).data.versions || []; }
@@ -1191,13 +1577,12 @@ async function loadComparison(base) {
   const previous = compareBase === base ? [comparePane("left").sel.value, comparePane("right").sel.value] : [];
   compareBase = base;
   if (!versions.length) {
+    comparisonWaveform.speakers.clear();
     for (const side of ["left", "right"]) { comparePane(side).sel.innerHTML = ""; comparePane(side).sel.disabled = true; }
     comparePlaceholder("No transcript yet — run a pipeline first.");
-    setCompareAudio(null);
     $("compareMsg").textContent = "";
     return;
   }
-  setCompareAudio(base);
   ["left", "right"].forEach((side, index) => {
     const sel = comparePane(side).sel;
     sel.innerHTML = "";
@@ -1240,13 +1625,24 @@ async function refreshComparison() {
   const seq = ++compareSeq, folder = folderSeq;
   const options = renderOptions();
   const position = compareCoordinate(comparePane("left"));
+  comparisonWaveform.speakers.clear();
   const bar = $("renderBar");
   bar.classList.add("busy");
   bar.classList.toggle("dirty", !renderIsDefault(options));
   $("compareMsg").textContent = "Loading…";
   try {
-    const results = await Promise.all(["left", "right"].map(side => renderComparePane(side, base, options)));
+    const [results, speakerTracks] = await Promise.all([
+      Promise.all(["left", "right"].map(side => renderComparePane(side, base, options))),
+      Promise.all(["left", "right"].map(async side => {
+        const version = comparePane(side).sel.value;
+        try {
+          const {data} = await api(`/api/timeline/${encodeURIComponent(base)}?version=${encodeURIComponent(version)}`);
+          return {label: side === "left" ? "Left" : "Right", segments: data.segments || []};
+        } catch { return {label: side, segments: []}; }
+      })),
+    ]);
     if (seq !== compareSeq || folder !== folderSeq || base !== currentBase) return;
+    comparisonWaveform.setSpeakerTracks(speakerTracks);
     ["left", "right"].forEach((side, index) => { comparePane(side).result = results[index]; });
     showComparePanes(position);
     bar.style.display = results.some(r => r.rendered) ? "" : "none";
@@ -1341,7 +1737,7 @@ let compareFollowSuspended = false;
 function compareSeek(time) {
   const audio = $("compareAudio");
   compareFollowSuspended = false;
-  audio.currentTime = time;
+  comparisonWaveform.seek(time);
   audio.play().catch(() => {
     $("compareAudioMsg").textContent = "Press Play to start audio, or choose a browser-supported audio format.";
   });
@@ -1369,15 +1765,10 @@ function followComparePlayback() {
 }
 
 function setCompareAudio(base) {
-  const audio = $("compareAudio");
-  const src = base ? `/api/audio/${encodeURIComponent(base)}?folder=${folderSeq}` : "";
-  if (audio.getAttribute("src") === (src || null)) return;   // keep playing across re-renders
-  audio.pause();
-  if (src) audio.src = src; else audio.removeAttribute("src");
-  audio.load();
+  comparisonWaveform.load(base);
   compareFollowSuspended = false;
   $("compareAudioBar").hidden = !base;
-  $("compareAudioMsg").textContent = "Select a speaker heading or a timestamp to play from there.";
+  $("compareAudioMsg").textContent = "";
 }
 
 /* The position in the middle of a pane, as a moment in the recording
@@ -1862,6 +2253,9 @@ function initConsoleResize() {
 
 /* ---------- init ---------- */
 
+const transcriptWaveform = new WaveformPlayer($("transcriptWaveform"), $("audioPlayer"));
+const comparisonWaveform = new WaveformPlayer($("comparisonWaveform"), $("compareAudio"));
+
 $("saveBtn").onclick = handle(saveSidecar);
 $("deleteBtn").onclick = handle(deleteSidecar);
 $("tabSettings").onclick = () => showTab("settings", true);
@@ -1917,7 +2311,7 @@ $("compareAudio").addEventListener("timeupdate", followComparePlayback);
 // Playing again, or moving the playhead, asks for the view to follow once more.
 for (const type of ["play", "seeked"]) $("compareAudio").addEventListener(type, () => {
   compareFollowSuspended = false;
-  $("compareAudioMsg").textContent = "Select a speaker heading or a timestamp to play from there.";
+  $("compareAudioMsg").textContent = "";
   followComparePlayback();
 });
 for (const side of ["left", "right"]) comparePane(side).text.addEventListener("scroll", () => onCompareScroll(side));

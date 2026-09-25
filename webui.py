@@ -65,6 +65,7 @@ from webui_run import preview_run, ProgressTracker
 from diarization_status import effective_v4_model
 from run_scope import DIARIZATION_MODELS, ENV_VAR as ONLY_FILES_ENV, REPROCESS_ENV_VAR as REPROCESS_ENV
 import webui_durations
+import webui_waveform
 import webui_speakers
 from env_settings import env_snapshot, parse_env, update_env
 from scribe_processing import capability as scribe_capability
@@ -738,7 +739,7 @@ def _global_defaults() -> Dict[str, Any]:
 # asking, so the directive is given here.
 NO_STORE = {"Cache-Control": "no-store"}
 
-ASSETS = ("webui.css", "webui.js")
+ASSETS = ("webui.css", "webui.js", "webui_waveform_speakers.css", "webui_waveform_speakers.js")
 
 
 def asset_version(name: str) -> str:
@@ -770,6 +771,16 @@ def webui_css() -> FileResponse:
 @app.get("/webui.js")
 def webui_js() -> FileResponse:
     return FileResponse(PROJECT_ROOT / "webui.js", media_type="text/javascript", headers=NO_STORE)
+
+
+@app.get("/webui_waveform_speakers.js")
+def webui_waveform_speakers_js() -> FileResponse:
+    return FileResponse(PROJECT_ROOT / "webui_waveform_speakers.js", media_type="text/javascript", headers=NO_STORE)
+
+
+@app.get("/webui_waveform_speakers.css")
+def webui_waveform_speakers_css() -> FileResponse:
+    return FileResponse(PROJECT_ROOT / "webui_waveform_speakers.css", media_type="text/css", headers=NO_STORE)
 
 
 @app.get("/api/meta")
@@ -1520,6 +1531,15 @@ def _timeline_segments(segments, threshold=1.0):
 @app.get('/api/audio/{basename}')
 def api_audio(basename: str):
     return FileResponse(_audio_file(basename))
+
+
+@app.get('/api/waveform/{basename}')
+def api_waveform(basename: str, start: float = 0, end: Optional[float] = None):
+    path = _audio_file(basename)
+    try:
+        return webui_waveform.waveform(path, start, end)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(422, 'Could not generate a waveform for this audio file.') from exc
 
 
 @app.get('/api/timeline/{basename}')

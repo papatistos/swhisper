@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>swhisper</title>
 <link rel="stylesheet" href="/webui.css">
+<link rel="stylesheet" href="/webui_waveform_speakers.css">
 </head>
 <body>
 <header>
@@ -107,7 +108,9 @@
         <button id="renderReset" title="Back to the view the pipeline produced">Reset</button>
         <button id="renderSave" title="Export a copy of this view">Export…</button>
       </div>
-      <div id="audioBar" hidden><audio id="audioPlayer" controls preload="none"></audio>
+      <div id="audioBar" hidden>
+        <div id="transcriptWaveform" class="waveform"></div>
+        <audio id="audioPlayer" controls preload="metadata"></audio>
         <label><input id="reviewAudio" type="checkbox"> Review with timestamps</label>
         <span id="audioMsg" class="settingsNote"></span>
       </div>
@@ -120,11 +123,13 @@
           <input type="checkbox" id="compareSync" checked> Sync scrolling</label>
         <span class="msg" id="compareMsg" role="status"></span>
       </div>
-      <div id="compareAudioBar" hidden><audio id="compareAudio" controls preload="none"></audio>
+      <div id="compareAudioBar" hidden>
+        <div id="comparisonWaveform" class="waveform"></div>
+        <audio id="compareAudio" controls preload="metadata"></audio>
         <label title="Keep the moment being played in the middle of both transcripts. Scrolling by hand pauses this until you press Play or select a timestamp.">
           <input id="compareFollow" type="checkbox" checked> Follow playback</label>
         <label><input id="compareReview" type="checkbox"> Review with timestamps</label>
-        <span id="compareAudioMsg" class="settingsNote" role="status">Select a speaker heading or a timestamp to play from there.</span>
+        <span id="compareAudioMsg" class="settingsNote" role="status"></span>
       </div>
       <div id="comparePanes">
         <section class="comparePane" aria-label="Left transcript">
@@ -221,6 +226,7 @@
   <div class="dialogActions"><button id="previewCancel" autofocus>Cancel</button><button id="previewStart" class="primary">Run</button></div>
 </dialog>
 
+<script src="/webui_waveform_speakers.js"></script>
 <script src="/webui.js"></script>
 </body>
 </html>

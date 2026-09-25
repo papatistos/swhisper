@@ -8,6 +8,8 @@ import {setTimeout as delay} from 'node:timers/promises';
 const html = await fs.readFile(new URL('./webui.html', import.meta.url), 'utf8');
 const css = await fs.readFile(new URL('./webui.css', import.meta.url), 'utf8');
 const js = await fs.readFile(new URL('./webui.js', import.meta.url), 'utf8');
+const speakerJS = await fs.readFile(new URL('./webui_waveform_speakers.js', import.meta.url), 'utf8');
+const speakerCSS = await fs.readFile(new URL('./webui_waveform_speakers.css', import.meta.url), 'utf8');
 let audioDir = '/mock/audio', serverFolder = null, offline = false, failSave = false, sidecarDelay = {}, versionDelay = {}, renderDelay = {}, logDelay = {}, pickDelay = 0;
 let status = {running:false, pipeline:null, returncode:null, run_id:null, progress:{completed:{}}};
 const saved = {a:{values:{SWHISPER_NUM_SPEAKERS:'2',SWHISPER_CONDITION_ON_PREVIOUS:'yes'},comment:'original'}, b:{values:{},comment:'B'}};
@@ -16,6 +18,8 @@ let globalValues={}, globalRevision="g1", exportCanceled=false;
 let previewAllSkipped=false;
 let speakerNames={};
 let speakerSuggestions={};
+let waveformDelay = {}, waveformFailure = false, noTranscript = false, detailDelay = 0;
+const waveformRequests = [];
 // Two versions of one recording that split it into paragraphs differently:
 // v2 has short paragraphs every 10 s, v1 long ones every 25 s behind an introduction.
 let compareFixture=null;const compareRenders=[];
@@ -46,6 +50,8 @@ const server = http.createServer(async (req,res) => {
   if (u.pathname === '/') {res.writeHead(200, {'Content-Type':'text/html','Cache-Control':'no-store'});res.end(html);return;}
   if (u.pathname === '/webui.css') {res.writeHead(200, {'Content-Type':'text/css','Cache-Control':'no-store'});res.end(css);return;}
   if (u.pathname === '/webui.js') {res.writeHead(200, {'Content-Type':'text/javascript','Cache-Control':'no-store'});res.end(js);return;}
+  if (u.pathname === '/webui_waveform_speakers.js') {res.writeHead(200, {'Content-Type':'text/javascript'});res.end(speakerJS);return;}
+  if (u.pathname === '/webui_waveform_speakers.css') {res.writeHead(200, {'Content-Type':'text/css'});res.end(speakerCSS);return;}
   if (u.pathname === '/api/meta') return send(meta());
   if (u.pathname === '/api/files') return send({files:['a','b','<unsafe>'].map(base=>({base,transcribed:base!=='<unsafe>',diarized:base!=='<unsafe>',has_transcript:base!=='<unsafe>',has_logs:true,will_reprocess:base==='b',mtime:base==='b'?20:10,duration:base==='a'?3202:base==='b'?95:null}))});
   if (u.pathname === '/api/run/status') return offline ? send({detail:'Offline'},503) : send({...status, folder:serverFolder??audioDir});
@@ -60,7 +66,21 @@ const server = http.createServer(async (req,res) => {
     if(req.method==='PUT') {if(data.revision!==globalRevision)return send({detail:'stale'},409);globalValues=data.values;globalRevision+='x';}
     const gm=meta();gm.params.SWHISPER_MIN_SPEAKERS=gm.params.SWHISPER_NUM_SPEAKERS;delete gm.params.SWHISPER_NUM_SPEAKERS;gm.groups=gm.groups.map(g=>({...g,keys:g.keys.map(k=>k==='SWHISPER_NUM_SPEAKERS'?'SWHISPER_MIN_SPEAKERS':k)}));return send({...gm,values:globalValues,revision:globalRevision,path:'/mock/.swhisper.env'});
   }
-  if (u.pathname.startsWith('/api/timeline/')) return send({audio:'a.wav',segments:[{start:1,end:3,speaker:'S01',text:'Hello'},{start:3,end:6,speaker:'S02',text:'World'}]});
+  if (u.pathname.startsWith('/api/timeline/')) {
+    if (noTranscript) return send({detail:'No transcript'},404);
+    const version=u.searchParams.get('version') || 'v2';
+    return send({audio:'a.wav',segments:compareFixture
+      ? version===compareFixture.stored ? [] : compareDoc(version).timeline
+      : [{start:1,end:3,speaker:speakerNames.S01 || 'S01',text:'Hello'},{start:3,end:6,speaker:speakerNames.S02 || 'S02',text:'World'}]});
+  }
+  if (u.pathname.startsWith('/api/waveform/')) {
+    const base = decodeURIComponent(u.pathname.split('/').at(-1));
+    const start = Number(u.searchParams.get('start') || 0), end = Number(u.searchParams.get('end') || 10);
+    waveformRequests.push({base,start,end});
+    await delay(u.searchParams.has('start') ? detailDelay : waveformDelay[base] || 0);
+    if (waveformFailure) return send({detail:'Cannot decode fixture'},422);
+    return send({duration:10,start,end,peaks:Array.from({length:2048},(_,i)=>i%400>300?.01:(.2+.6*Math.abs(Math.sin(i*.032)))*(.3+.7*Math.abs(Math.sin(i*.37))))});
+  }
   if (u.pathname.startsWith('/api/audio/')) {
     const pcm=Buffer.alloc(44+160000);pcm.write('RIFF');pcm.writeUInt32LE(pcm.length-8,4);pcm.write('WAVEfmt ',8);pcm.writeUInt32LE(16,16);pcm.writeUInt16LE(1,20);pcm.writeUInt16LE(1,22);pcm.writeUInt32LE(8000,24);pcm.writeUInt32LE(16000,28);pcm.writeUInt16LE(2,32);pcm.writeUInt16LE(16,34);pcm.write('data',36);pcm.writeUInt32LE(160000,40);
     const range=/bytes=(\d+)-(\d*)/.exec(req.headers.range||'');const start=range?Number(range[1]):0,end=range&&range[2]?Number(range[2]):pcm.length-1;res.writeHead(range?206:200,{'Content-Type':'audio/wav','Accept-Ranges':'bytes','Content-Length':end-start+1,...(range?{'Content-Range':`bytes ${start}-${end}/${pcm.length}`}:{})});res.end(pcm.subarray(start,end+1));return;
@@ -113,6 +133,7 @@ const server = http.createServer(async (req,res) => {
   }
   if (u.pathname.startsWith('/api/json-transcript/')) return send({base:'a',path:'whisper-json-output/a.json',content:'{"raw": true}'});
   if (u.pathname.startsWith('/api/transcript/')) {
+    if (noTranscript) return send({detail:'No transcript'},404);
     const version=u.searchParams.get('version')||'v2';
     await delay(versionDelay[version]||0);
     if (compareFixture) return send({versions:[{id:'v2',filename:'new'},{id:'v1',filename:'old'}],selected:version,
@@ -141,10 +162,25 @@ try {
     for(const type of ['mousePressed','mouseReleased'])
       await cdp('Input.dispatchMouseEvent',{type,x:at.x,y:at.y,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});
   };
+  const waveformDrag = async (id, from, to = from) => {
+    await wait(`$(${JSON.stringify(id)}).offsetWidth>0`);
+    await evaluate(`$(${JSON.stringify(id)}).querySelector('.waveformTrack').scrollIntoView({block:'nearest'})`);
+    const rect = await evaluate(`(()=>{const r=$(${JSON.stringify(id)}).querySelector('.waveformTrack').getBoundingClientRect();return {x:r.left,y:r.top+r.height/2,width:r.width}})()`);
+    await cdp('Input.dispatchMouseEvent',{type:'mousePressed',x:rect.x+rect.width*from,y:rect.y,button:'left',buttons:1,clickCount:1});
+    if (to !== from) await cdp('Input.dispatchMouseEvent',{type:'mouseMoved',x:rect.x+rect.width*to,y:rect.y,button:'left',buttons:1});
+    await cdp('Input.dispatchMouseEvent',{type:'mouseReleased',x:rect.x+rect.width*to,y:rect.y,button:'left',buttons:0,clickCount:1});
+  };
   const select=async base=>evaluate(`document.querySelector('[data-base="${base}"] .fileSelect').click()`);
   const input=async value=>evaluate(`document.getElementById('commentField').value=${JSON.stringify(value)};document.getElementById('commentField').dispatchEvent(new Event('input',{bubbles:true}))`);
   const key=async(key,code)=>{await cdp('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode:({Escape:27,Enter:13,ArrowLeft:37,ArrowRight:39,ArrowUp:38,ArrowDown:40})[key]});await cdp('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:({Escape:27,Enter:13,ArrowLeft:37,ArrowRight:39,ArrowUp:38,ArrowDown:40})[key]});};
-  const check=async(name,fn)=>{await fn();console.log('PASS '+name);};
+  const check=async(name,fn)=>{
+    try { await fn(); console.log('PASS '+name); }
+    catch (error) {
+      const shot=await cdp('Page.captureScreenshot',{format:'png'});
+      await fs.writeFile('/private/tmp/swhisper-browser-failure.png',Buffer.from(shot.data,'base64'));
+      throw error;
+    }
+  };
   await cdp('Runtime.enable');await cdp('Page.enable');
   await cdp('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
   await cdp('Page.navigate',{url:`http://127.0.0.1:${server.address().port}/`});
@@ -280,6 +316,8 @@ try {
     await click('speakerSave');await wait('!$("speakerDialog").open');
     assert.deepEqual(speakerNames,{S01:'Interviewer',S02:'Christoph'});
     await wait('$("transcriptText").textContent.startsWith("Rendered")');
+    await wait('$("transcriptWaveform").querySelector(".waveformSpeakerLegend")?.textContent.includes("Interviewer")');
+    assert.equal(await evaluate('$("timeline").children.length'),1,'Renaming preserves the filtered review list');
     speakerNames={};
   });
   await check('Interview suggestions fill the naming modal and remain editable',async()=>{
@@ -645,6 +683,223 @@ try {
     await evaluate('$("audioPlayer").pause();$("audioPlayer").currentTime=3.5;$("audioPlayer").dispatchEvent(new Event("timeupdate"))');
     await wait('$("timeline").querySelector(".segment.active")?.dataset.start==="3"');
     await click('reviewAudio');
+  });
+  for (const [tab, host, controller, audio] of [
+    ['tabTranscript','transcriptWaveform','transcriptWaveform','audioPlayer'],
+    ['tabCompare','comparisonWaveform','comparisonWaveform','compareAudio'],
+  ]) {
+    await check(`${tab}: waveform click seeks and forward/reverse drags select`,async()=>{
+      await click(tab);await wait(`${controller}.duration===10 && $(${JSON.stringify(audio)}).readyState>=3`);
+      await waveformDrag(host,.3);
+      assert.ok(Math.abs(await evaluate(`$(${JSON.stringify(audio)}).currentTime`)-3)<.04);
+      assert.equal(await evaluate(`${controller}.range`),null);
+      for (const [from,to] of [[.2,.6],[.6,.2]]) {
+        await waveformDrag(host,from,to);
+        const range = await evaluate(`${controller}.range`);
+        assert.ok(Math.abs(range.start-2)<.04 && Math.abs(range.end-6)<.04,JSON.stringify(range));
+        assert.ok(Math.abs(await evaluate(`$(${JSON.stringify(audio)}).currentTime`)-2)<.04);
+        assert.equal(await evaluate(`$(${JSON.stringify(audio)}).paused`),true);
+      }
+      const shot=await cdp('Page.captureScreenshot',{format:'png'});
+      await fs.writeFile(`/private/tmp/swhisper-${host}.png`,Buffer.from(shot.data,'base64'));
+    });
+    await check(`${tab}: selected audio stops, replays, and honors playback speed`,async()=>{
+      await waveformDrag(host,.15,.21);
+      const end = await evaluate(`${controller}.range.end`);
+      for (const rate of [1,2]) {
+        await evaluate(`$(${JSON.stringify(audio)}).playbackRate=${rate};$(${JSON.stringify(audio)}).play()`);
+        await wait(`!$(${JSON.stringify(audio)}).paused`);
+        await wait(`$(${JSON.stringify(audio)}).paused`);
+        assert.ok(Math.abs(await evaluate(`$(${JSON.stringify(audio)}).currentTime`)-end)<.035);
+      }
+      await evaluate(`$(${JSON.stringify(audio)}).playbackRate=1`);
+      await waveformDrag(host,.5);
+      assert.equal(await evaluate(`${controller}.range`),null,'Click clears the previous stop boundary');
+      await evaluate(`$(${JSON.stringify(audio)}).play()`);
+      await wait(`$(${JSON.stringify(audio)}).currentTime>5.3`);
+      await evaluate(`$(${JSON.stringify(audio)}).pause()`);
+    });
+    await check(`${tab}: keyboard selection and clear control`,async()=>{
+      await waveformDrag(host,.3);
+      for (let i=0;i<3;i++) await cdp('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowRight',code:'ArrowRight',modifiers:8,windowsVirtualKeyCode:39});
+      const range=await evaluate(`${controller}.range`);
+      assert.ok(Math.abs(range.end-range.start-.3)<.01);
+      await evaluate(`$(${JSON.stringify(host)}).querySelector('.waveformClear').click()`);
+      assert.equal(await evaluate(`${controller}.range`),null);
+      await waveformDrag(host,.2,.4);await key('Escape','Escape');
+      assert.equal(await evaluate(`${controller}.range`),null);
+    });
+    await check(`${tab}: canceled drag restores selection and native seek clears it`,async()=>{
+      await waveformDrag(host,.2,.4);
+      const original=await evaluate(`${controller}.range`);
+      const rect=await evaluate(`(()=>{const r=$(${JSON.stringify(host)}).querySelector('.waveformTrack').getBoundingClientRect();return {x:r.left,y:r.top+20,width:r.width}})()`);
+      await cdp('Input.dispatchMouseEvent',{type:'mousePressed',x:rect.x+rect.width*.6,y:rect.y,button:'left',buttons:1,clickCount:1});
+      await cdp('Input.dispatchMouseEvent',{type:'mouseMoved',x:rect.x+rect.width*.8,y:rect.y,button:'left',buttons:1});
+      await evaluate(`${controller}.track.dispatchEvent(new PointerEvent('pointercancel'))`);
+      await cdp('Input.dispatchMouseEvent',{type:'mouseReleased',x:rect.x+rect.width*.8,y:rect.y,button:'left',buttons:0,clickCount:1});
+      assert.deepEqual(await evaluate(`${controller}.range`),original);
+      await evaluate(`$(${JSON.stringify(audio)}).currentTime=8`);
+      await wait(`${controller}.range===null`);
+    });
+    await check(`${tab}: zoom loads detail, preserves time and maps selection correctly`,async()=>{
+      await waveformDrag(host,.4);
+      const time=await evaluate(`$(${JSON.stringify(audio)}).currentTime`);
+      await evaluate(`${controller}.zoomIn.click()`);
+      await wait(`${controller}.detailStatus.textContent===""`);
+      let [start,end]=await evaluate(`[${controller}.viewStart,${controller}.viewEnd]`);
+      assert.ok(Math.abs(start-2)<.02 && Math.abs(end-7)<.02);
+      assert.equal(await evaluate(`$(${JSON.stringify(audio)}).currentTime`),time,'Zoom does not seek');
+      assert.ok(waveformRequests.some(r=>Math.abs(r.start-start)<.001 && Math.abs(r.end-end)<.001),'Server receives the visible interval');
+      await waveformDrag(host,.2,.6);
+      let range=await evaluate(`${controller}.range`);
+      assert.ok(Math.abs(range.start-3)<.03 && Math.abs(range.end-5)<.03);
+      await evaluate(`${controller}.fit.click()`);await wait(`${controller}.detailStatus.textContent===""`);
+      [start,end]=await evaluate(`[${controller}.viewStart,${controller}.viewEnd]`);
+      assert.ok(Math.abs(start-range.start)<.001 && Math.abs(end-range.end)<.001);
+      assert.deepEqual(await evaluate(`${controller}.range`),range);
+      assert.equal(await evaluate(`${controller}.overlay.style.width`),'100%');
+      const screenshot=await cdp('Page.captureScreenshot',{format:'png'});
+      await fs.writeFile(`/private/tmp/swhisper-${host}-zoom.png`,Buffer.from(screenshot.data,'base64'));
+      await waveformDrag(host,.1,.35);
+      range=await evaluate(`${controller}.range`);
+      await evaluate(`$(${JSON.stringify(audio)}).play()`);
+      await wait(`$(${JSON.stringify(audio)}).paused`);
+      assert.ok(Math.abs(await evaluate(`$(${JSON.stringify(audio)}).currentTime`)-range.end)<.035,'Zoomed selection stops at its own end');
+      await evaluate(`${controller}.full.click()`);
+      assert.deepEqual(await evaluate(`[${controller}.viewStart,${controller}.viewEnd]`),[0,10]);
+      assert.deepEqual(await evaluate(`${controller}.range`),range,'Full audio retains selection');
+    });
+    await check(`${tab}: panning, clipping and stale detail cannot move the playhead`,async()=>{
+      await waveformDrag(host,.2,.4);
+      const selected=await evaluate(`${controller}.range`);
+      await evaluate(`${controller}.zoomIn.click()`);await wait(`${controller}.detailStatus.textContent===""`);
+      await evaluate(`${controller}.position.value=5;${controller}.position.dispatchEvent(new Event('input'))`);
+      assert.deepEqual(await evaluate(`[${controller}.viewStart,${controller}.viewEnd]`),[5,10]);
+      assert.equal(await evaluate(`${controller}.overlay.hidden && ${controller}.playhead.hidden`),true);
+      assert.deepEqual(await evaluate(`${controller}.range`),selected);
+      assert.ok(Math.abs(await evaluate(`$(${JSON.stringify(audio)}).currentTime`)-selected.start)<.02);
+      await waveformDrag(host,.5);
+      assert.ok(Math.abs(await evaluate(`$(${JSON.stringify(audio)}).currentTime`)-7.5)<.03);
+      detailDelay=300;
+      const count=waveformRequests.length;
+      await evaluate(`${controller}.zoomIn.click()`);
+      for(let i=0;i<30 && waveformRequests.length===count;i++) await delay(20);
+      assert.ok(waveformRequests.length>count);
+      await evaluate(`${controller}.full.click()`);
+      await delay(350);
+      assert.deepEqual(await evaluate(`[${controller}.viewStart,${controller}.viewEnd]`),[0,10]);
+      assert.equal(await evaluate(`${controller}.track.querySelector('svg').getAttribute('viewBox')`),'0 0 10 100');
+      assert.equal(await evaluate(`${controller}.detailStatus.textContent`),'');
+      detailDelay=0;
+    });
+  }
+  await check('Speaker strips clip to zoom and preserve separate comparison versions',async()=>{
+    await click('tabTranscript');await wait('!$("versionSel").disabled && transcriptWaveform.speakers.tracks.length===1');
+    assert.equal(await evaluate('transcriptWaveform.speakers.tracks[0].lanes.length'),2);
+    await click('optPauses');await wait('!$("renderBar").classList.contains("busy")');
+    assert.equal(await evaluate('transcriptWaveform.speakers.tracks[0].lanes.length'),2,'Text filters do not erase speaker timing');
+    await evaluate('transcriptWaveform.setViewport(2,2)');
+    const lines=await evaluate('[...$("transcriptWaveform").querySelectorAll(".waveformSpeakerLine")].map(el=>[el.style.left,el.style.width])');
+    assert.deepEqual(lines,[['0%','50%'],['50%','50%']]);
+    compareFixture={stored:'v1'};await evaluate('compareCanRender={}');
+    await click('tabCompare');await wait('COMPARE_PANES.right.result?.rendered===false && !$("renderBar").classList.contains("busy")');
+    assert.deepEqual(await evaluate('comparisonWaveform.speakers.tracks.map(t=>t.label)'),['Left']);
+    delete compareFixture.stored;
+    await evaluate('compareCanRender={};refreshComparison()');await wait('comparisonWaveform.speakers.tracks.length===2');
+    assert.deepEqual(await evaluate('comparisonWaveform.speakers.tracks.map(t=>t.label)'),['Left','Right']);
+    noTranscript=true;
+    await evaluate('loadComparison(currentBase)');
+    assert.equal(await evaluate('comparisonWaveform.speakers.tracks.length'),0,'Removed versions clear stale strips');
+    noTranscript=false;
+    compareFixture=null;
+    await evaluate('compareCanRender={};comparisonWaveform.full.click()');
+    await click('tabTranscript');await wait('!$("versionSel").disabled');
+    await evaluate('transcriptWaveform.full.click()');
+    await click('tabCompare');await wait('!$("renderBar").classList.contains("busy")');
+  });
+  await check('Waveform selection survives re-rendering and switching tabs',async()=>{
+    await waveformDrag('comparisonWaveform',.2,.4);
+    await evaluate('comparisonWaveform.setViewport(1,5)');
+    await click('optPauses');await wait('!$("renderBar").classList.contains("busy")');
+    assert.ok(await evaluate('comparisonWaveform.range?.end>3.9'));
+    assert.deepEqual(await evaluate('[comparisonWaveform.viewStart,comparisonWaveform.viewEnd]'),[1,6]);
+    await click('tabTranscript');await wait('transcriptWaveform.duration===10 && !$("versionSel").disabled');
+    await waveformDrag('transcriptWaveform',.3,.6);
+    await evaluate('transcriptWaveform.setViewport(2,5)');
+    await evaluate('$("versionSel").value="v1";$("versionSel").dispatchEvent(new Event("change"))');
+    await wait('!$("versionSel").disabled && $("versionSel").value==="v1"');
+    assert.ok(await evaluate('transcriptWaveform.range?.end>5.9'));
+    assert.deepEqual(await evaluate('[transcriptWaveform.viewStart,transcriptWaveform.viewEnd]'),[2,7]);
+    await click('tabCompare');await wait('!$("compareAudioBar").hidden');
+    assert.ok(await evaluate('comparisonWaveform.range?.end>3.9'));
+    await click('tabTranscript');await wait('!$("versionSel").disabled');
+    assert.ok(await evaluate('transcriptWaveform.range?.end>5.9'));
+    await wait('$("timeline").querySelector("button")');
+    await evaluate('transcriptWaveform.full.click()');
+    await evaluate('$("timeline").querySelector("button").click()');
+    assert.equal(await evaluate('transcriptWaveform.range'),null,'Timestamp playback clears the stop boundary');
+    await evaluate('$("audioPlayer").pause()');
+  });
+  await check('Waveform resets on file changes, ignores stale loads and offers retry',async()=>{
+    waveformDelay.b=350;
+    await select('b');await wait('currentBase==="b"');
+    assert.equal(await evaluate('comparisonWaveform.range'),null);
+    await select('a');await wait('currentBase==="a" && transcriptWaveform.base==="a" && transcriptWaveform.duration===10');
+    await delay(400);
+    assert.equal(await evaluate('transcriptWaveform.base'),'a');
+    assert.equal(await evaluate('transcriptWaveform.range'),null);
+    assert.deepEqual(await evaluate('[transcriptWaveform.viewStart,transcriptWaveform.viewEnd]'),[0,10]);
+    waveformDelay={};waveformFailure=true;
+    await select('b');await wait('!transcriptWaveform.retry.hidden');
+    assert.match(await evaluate('transcriptWaveform.status.textContent'),/Audio controls still work/);
+    assert.equal(await evaluate('$("audioPlayer").getAttribute("src").startsWith("/api/audio/b")'),true);
+    waveformFailure=false;
+    await evaluate('transcriptWaveform.retry.click()');await wait('transcriptWaveform.duration===10');
+    assert.equal(await evaluate('transcriptWaveform.retry.hidden'),true);
+    assert.equal(await evaluate('transcriptWaveform.speakers.tracks.length'),1,'Retry keeps speaker data');
+  });
+  await check('Zoom bounds and unavailable detail preserve working playback controls',async()=>{
+    waveformFailure=true;
+    await evaluate('transcriptWaveform.zoomIn.click()');
+    await wait('transcriptWaveform.detailStatus.textContent.includes("Detail unavailable")');
+    await waveformDrag('transcriptWaveform',.5);
+    assert.ok(Math.abs(await evaluate('$("audioPlayer").currentTime')-2.5)<.03);
+    waveformFailure=false;
+    await evaluate('transcriptWaveform.full.click();transcriptWaveform.zoomIn.click()');
+    await wait('transcriptWaveform.detailStatus.textContent===""');
+    await evaluate('for(let i=0;i<20;i++) transcriptWaveform.zoomIn.click()');
+    assert.equal(await evaluate('transcriptWaveform.zoomIn.disabled'),true);
+    assert.ok(Math.abs(await evaluate('transcriptWaveform.viewEnd-transcriptWaveform.viewStart')-.25)<.001);
+    await evaluate('transcriptWaveform.full.click()');
+    assert.equal(await evaluate('transcriptWaveform.zoomOut.disabled'),true);
+  });
+  await check('Waveform fits narrow tabs and pointer capture clamps at the edges',async()=>{
+    await cdp('Emulation.setDeviceMetricsOverride',{width:680,height:1000,deviceScaleFactor:1,mobile:false});
+    await waveformDrag('transcriptWaveform',.7,-.1);
+    const range=await evaluate('transcriptWaveform.range');
+    assert.equal(range.start,0);assert.ok(Math.abs(range.end-7)<.05);
+    assert.equal(await evaluate('document.documentElement.scrollWidth<=window.innerWidth'),true);
+    await evaluate('$("audioBar").scrollIntoView({block:"end"})');
+    const shot=await cdp('Page.captureScreenshot',{format:'png'});
+    await fs.writeFile('/private/tmp/swhisper-waveform-narrow.png',Buffer.from(shot.data,'base64'));
+    await cdp('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+    await evaluate('transcriptWaveform.clearRange()');
+  });
+  await check('Audio waveform remains usable in raw JSON and without a transcript',async()=>{
+    await evaluate('$("versionSel").value="__raw_json__";$("versionSel").dispatchEvent(new Event("change"))');
+    await wait('!$("versionSel").disabled');
+    assert.equal(await evaluate('!$("audioBar").hidden && transcriptWaveform.duration===10'),true);
+    noTranscript=true;
+    await select('<unsafe>');await wait('$("transcriptText").textContent.includes("No transcript yet")');
+    await wait('transcriptWaveform.duration===10');
+    await waveformDrag('transcriptWaveform',.1,.2);
+    assert.ok(await evaluate('transcriptWaveform.range?.end>1.9'));
+    await click('tabCompare');await wait('$("compareTextLeft").textContent.includes("No transcript yet")');
+    await wait('comparisonWaveform.duration===10');
+    assert.equal(await evaluate('$("compareAudioBar").hidden'),false);
+    noTranscript=false;
+    await select('a');await wait('editorBase==="a"');
+    await click('tabTranscript');await wait('!$("versionSel").disabled && renderAvailable');
   });
   await check('Export uses native Save As and cancellation writes nothing',async()=>{
     await click('renderSave');await wait('$("exportDialog").open');

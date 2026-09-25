@@ -1,0 +1,23 @@
+.waveformSpeakers { min-width: 0; margin-top: 4px; color: var(--muted); font-size: .68rem; }
+.waveformSpeakers[hidden] { display: none; }
+.waveformSpeakerGroup + .waveformSpeakerGroup { margin-top: 5px; }
+.waveformSpeakerHeading { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin-bottom: 2px; }
+.waveformSpeakerTrackLabel { flex: none; font-weight: 600; color: var(--text); }
+.waveformSpeakerScrollHint { flex: none; font-size: .9em; }
+.waveformSpeakerLegend { display: flex; gap: 5px 12px; overflow-x: auto; min-width: 0; padding-bottom: 2px; }
+.waveformSpeakerLegendItem { display: inline-flex; align-items: center; gap: 4px; flex: none; white-space: nowrap; }
+.waveformSpeakerName { max-width: 20ch; overflow: hidden; text-overflow: ellipsis; }
+.waveformSpeakerSwatch { width: 12px; height: 3px; background: var(--speaker-color); border-radius: 2px; flex: none; }
+.waveformSpeakerLanes { max-height: 70px; overflow-y: auto; overflow-x: hidden; border-radius: 2px; scrollbar-width: none; }
+/* Keep time coordinates full width even when the operating system uses non-overlay scrollbars. */
+.waveformSpeakerLanes::-webkit-scrollbar { display: none; }
+.waveformSpeakerLanes:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.waveformSpeakerLane { position: relative; height: 10px; min-width: 0; background: var(--panel); }
+.waveformSpeakerLane + .waveformSpeakerLane { border-top: 1px solid var(--border); }
+.waveformSpeakerLine { position: absolute; top: 2px; height: 5px; min-width: 1px; max-width: 100%; background: var(--speaker-color); border-radius: 2px; }
+@media (prefers-color-scheme: light) {
+  .waveformSpeakerLine, .waveformSpeakerSwatch { filter: brightness(.72); }
+}
+@media (forced-colors: active) {
+  .waveformSpeakerLine, .waveformSpeakerSwatch { background: CanvasText; }
+}
