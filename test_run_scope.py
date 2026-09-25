@@ -68,6 +68,17 @@ class RunReprocessTests(unittest.TestCase):
             os.environ[run_scope.REPROCESS_ENV_VAR] = value
             self.assertTrue(run_scope.reprocess_requested())
 
+    def test_diarization_value_forces_only_the_diarization_stage(self):
+        os.environ[run_scope.REPROCESS_ENV_VAR] = 'diarization'
+        self.assertTrue(run_scope.reprocess_requested(run_scope.STAGE_DIARIZATION))
+        self.assertFalse(run_scope.reprocess_requested(run_scope.STAGE_TRANSCRIPTION))
+        self.assertFalse(run_scope.reprocess_requested())
+
+    def test_true_forces_every_stage(self):
+        os.environ[run_scope.REPROCESS_ENV_VAR] = 'true'
+        self.assertTrue(run_scope.reprocess_requested(run_scope.STAGE_DIARIZATION))
+        self.assertTrue(run_scope.reprocess_requested(run_scope.STAGE_TRANSCRIPTION))
+
     def test_run_reprocess_retranscribes_despite_a_sidecar_that_says_no(self):
         import tempfile
         from pathlib import Path
@@ -85,6 +96,8 @@ class RunReprocessTests(unittest.TestCase):
             config.force_reprocess, config.file_limit = False, None
             manager = FileManager(config)
             with patch('transcribe.file_utils.ENABLE_EARLY_FORMAT_SUMMARY', False):
+                self.assertEqual(manager.get_audio_files_to_process(str(audio), str(output)), [])
+                os.environ[run_scope.REPROCESS_ENV_VAR] = 'diarization'
                 self.assertEqual(manager.get_audio_files_to_process(str(audio), str(output)), [])
                 os.environ[run_scope.REPROCESS_ENV_VAR] = 'true'
                 self.assertEqual(manager.get_audio_files_to_process(str(audio), str(output)), ['a.wav'])

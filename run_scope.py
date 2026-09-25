@@ -9,13 +9,18 @@ but cannot contain a newline. Extensions and directories are ignored, so
 ``a.wav``, ``/path/to/a.m4a`` and ``a`` all select the same recording.
 
 ``SWHISPER_RUN_REPROCESS=true`` makes the run redo files that already have
-output, for every stage of the pipeline. Unlike the saved force settings, it
-applies to this run only and wins over per-recording sidecar settings.
+output, for every stage of the pipeline. ``SWHISPER_RUN_REPROCESS=diarization``
+redoes diarization only and reuses existing transcriptions. Unlike the saved
+force settings, it applies to this run only and wins over per-recording sidecar
+settings. There is no transcription-only value, because diarization is aligned
+to the transcript and must follow a new one.
 """
 import os
 
 ENV_VAR = "SWHISPER_ONLY_FILES"
 REPROCESS_ENV_VAR = "SWHISPER_RUN_REPROCESS"
+STAGE_TRANSCRIPTION = "transcription"
+STAGE_DIARIZATION = "diarization"
 
 # Diarization models a single run can choose, by short name.
 DIARIZATION_MODELS = {
@@ -43,9 +48,12 @@ def keep_selected(names):
     return [name for name in names if _base(name) in bases]
 
 
-def reprocess_requested():
-    """True when this run must redo files that already have output."""
-    return os.getenv(REPROCESS_ENV_VAR, "").strip().lower() in ("1", "true", "yes", "on")
+def reprocess_requested(stage=None):
+    """True when this run must redo files that already have output in *stage*."""
+    value = os.getenv(REPROCESS_ENV_VAR, "").strip().lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    return value == STAGE_DIARIZATION and stage == STAGE_DIARIZATION
 
 
 def describe():

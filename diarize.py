@@ -21,7 +21,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from run_scope import keep_selected, reprocess_requested, describe as describe_scope
+from run_scope import STAGE_DIARIZATION, keep_selected, reprocess_requested, describe as describe_scope
 
 import warnings
 
@@ -170,7 +170,7 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
     # Check for completion marker file (.ok)
     completion_marker = os.path.join(config.final_output_dir, f"{base_filename}.ok")
 
-    if os.path.exists(completion_marker) and not (config.force_reprocess or reprocess_requested()):
+    if os.path.exists(completion_marker) and not (config.force_reprocess or reprocess_requested(STAGE_DIARIZATION)):
         sidecar_reprocess, sidecar_reason = sidecar_requests_reprocess(
             config.final_audio_dir, base_filename, completion_marker, STAGE_DIARIZE
         )
