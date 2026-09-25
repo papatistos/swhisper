@@ -54,8 +54,9 @@ def previously_uploaded(work):
 
 
 def preview_scribe(audio_dir, selected='', language=LANGUAGES[0], diarization_model='', retranscribe=False,
-                   rediarize=False):
-    """Plan a Scribe run. *retranscribe* and *rediarize* are True for every
+                   rediarize=False, only=None):
+    """Plan a Scribe run for the whole folder, one *selected* recording, or the
+    basenames in *only*. *retranscribe* and *rediarize* are True for every
     recording, or collections of basenames to redo in this run."""
     audio = Path(audio_dir).resolve()
     if language not in LANGUAGES:
@@ -67,6 +68,11 @@ def preview_scribe(audio_dir, selected='', language=LANGUAGES[0], diarization_mo
         sources = [p for p in sources if p.stem == selected]
         if len(sources) != 1:
             raise ValueError('Select one unambiguous recording basename, or use the explicit folder batch.')
+    if only is not None:
+        sources = [p for p in sources if p.stem in only]
+        stems = [p.stem for p in sources]
+        if not only or sorted(stems) != sorted(set(only)):
+            raise ValueError('Each selected recording must match exactly one source file in this folder.')
     rows = []
     for source in sources:
         if source.is_file() and source.suffix.lower() in FORMATS:
@@ -111,6 +117,7 @@ def preview_scribe(audio_dir, selected='', language=LANGUAGES[0], diarization_mo
                              reason=f'{transcription}; {diarization}; {recovery}; SenseVoice {"on" if settings["backfill_enable_sensevoice"] else "off"}; offset {settings["whisper_timestamp_offset"]:g}s; local exports in {work / "transcripts"}'))
     listed = lambda choice: choice if isinstance(choice, bool) else sorted(choice)
     result = dict(audio_dir=str(audio), pipeline='scribe', language=language, selected=selected,
+                  only=sorted(only) if only is not None else None,
                   files=rows, notes=NOTES, remote=any(row['remote'] for row in rows),
                   consent_required=any(row['consent'] for row in rows),
                   diarization_model=diarization_model, retranscribe=listed(retranscribe),
@@ -127,7 +134,7 @@ def main(argv=None):
     files = [row for row in plan['files'] if row['action'] != 'skip']
     for index, row in enumerate(files, 1):
         try:
-            current = preview_scribe(plan['audio_dir'], language=plan['language'],
+            current = preview_scribe(plan['audio_dir'], language=plan['language'], only=plan.get('only'),
                                      diarization_model=plan.get('diarization_model', ''),
                                      retranscribe=plan.get('retranscribe', False),
                                      rediarize=plan.get('rediarize', False))

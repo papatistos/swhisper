@@ -260,6 +260,26 @@ assert 'diarize.utils' not in sys.modules
         self.assertTrue(fresh['files'][0]['consent'])
         self.assertTrue(fresh['consent_required'])
 
+    def test_ticked_recordings_limit_a_scribe_run(self):
+        (self.root / 'c.wav').write_bytes(b'third')
+        preview = webui.api_run_preview('scribe', ['a', 'c'])
+        self.assertEqual([r['file'] for r in preview['files']], ['a.wav', 'c.wav'])
+        self.assertEqual(preview['only'], ['a', 'c'])
+        with self.assertRaises(webui.HTTPException):
+            webui.api_run_preview('scribe', ['missing'])
+        (self.root / 'a.mp3').write_bytes(b'same basename')
+        (self.root / 'a.m4a').write_bytes(b'another source')
+        with self.assertRaises(webui.HTTPException):
+            webui.api_run_preview('scribe', ['a'])
+        (self.root / 'a.mp3').unlink()
+        (self.root / 'a.m4a').unlink()
+        import webui_scribe
+        plan = webui_scribe.preview_scribe(self.root, only={'c'})
+        with patch('transcribe_scribe.main', return_value=0) as adapter:
+            self.assertEqual(webui_scribe.main([json.dumps(plan)]), 0)
+        self.assertEqual(adapter.call_count, 1)
+        self.assertIn(str(self.root / 'c.wav'), adapter.call_args.args[0])
+
     def test_batch_runs_only_reviewed_files_that_need_work(self):
         import webui_scribe
         work = Path(webui_scribe.preview_scribe(self.root, selected='a')['files'][0]['work_dir'])

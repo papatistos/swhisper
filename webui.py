@@ -1863,13 +1863,16 @@ def api_run_preview(pipeline: str, only: Optional[List[str]] = Query(None),
     _check_diarization_model(diarization_model, pipeline)
     # Recordings to redo in this run; a new transcript also means a new diarization.
     retranscribe, rediarize = _named_recordings(retranscribe, 'retranscribe'), _named_recordings(rediarize, 'rediarize')
-    # Scribe carries its own single-recording selection and language; the local
-    # pipelines take a set of basenames from the ticked files in the list.
+    # Every pipeline runs the files ticked in the list, or the whole folder when
+    # none is ticked. Scribe also accepts one *selected* recording.
+    if isinstance(only, QueryParam):
+        only = None
     if pipeline == 'scribe':
         from webui_scribe import preview_scribe
         try:
             preview = preview_scribe(state.audio_dir(), selected, language, diarization_model,
-                                     reprocess or retranscribe, rediarize)
+                                     reprocess or retranscribe, rediarize,
+                                     _validated_selection(state.audio_dir(), only))
         except (ValueError, OSError) as exc:
             raise HTTPException(400, str(exc)) from None
         preview['reusable'] = {row['base']: row['reusable'] for row in preview['files']
@@ -1920,9 +1923,10 @@ def api_run(body: Dict[str, Any]) -> Dict[str, Any]:
         if not body.get('preview_token'):
             raise HTTPException(400, 'Scribe requires a reviewed preview.')
         selected, language = body.get('selected', ''), body.get('language', 'Swedish (verbatim)')
-        if not isinstance(selected, str) or not isinstance(language, str):
+        only = body.get('only')
+        if not isinstance(selected, str) or not isinstance(language, str) or not isinstance(only, (list, type(None))):
             raise HTTPException(400, 'Invalid Scribe selection or language')
-        preview = api_run_preview(pipeline, selected=selected, language=language, **_run_options(body, pipeline))
+        preview = api_run_preview(pipeline, only, selected=selected, language=language, **_run_options(body, pipeline))
         if preview['token'] != body['preview_token']:
             raise HTTPException(409, 'Folder or settings changed. Review a new run preview before starting.')
         # Consent covers a recording's first upload. Reruns that reuse saved Scribe
