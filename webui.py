@@ -65,6 +65,7 @@ from sidecar import (
 )
 from webui_run import preview_run, ProgressTracker
 from diarization_status import effective_v4_model
+from webui_scribe import LANGUAGES as SCRIBE_LANGUAGES
 from run_scope import (DIARIZATION_MODELS, ENV_VAR as ONLY_FILES_ENV, REPROCESS_ENV_VAR as REPROCESS_ENV,
                        RETRANSCRIBE_ENV_VAR as RETRANSCRIBE_ENV, REDIARIZE_ENV_VAR as REDIARIZE_ENV)
 import webui_durations
@@ -838,6 +839,7 @@ def api_meta() -> Dict[str, Any]:
         "audio_dir": dirs["audio"],
         "audio_paths": get_commented_audio_dirs(),
         "pipelines": [{"id": k, "label": v["label"], "choice": v.get("choice")} for k, v in PIPELINES.items()],
+        "scribe_languages": list(SCRIBE_LANGUAGES),
         **_diarization_choices(),
         "groups": groups,
         "params": params,

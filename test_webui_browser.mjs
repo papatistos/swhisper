@@ -45,7 +45,7 @@ const interviewParams = {
 };
 const meta = () => ({audio_dir:audioDir,audio_paths:['/mock/audio','/mock/other'],
   pipelines:[{id:'transcribe4',label:'Standard pipeline',choice:'Local Whisper'},{id:'diarize4',label:'Diarization only',choice:null},{id:'scribe',label:'SUNET Scribe + local diarization',choice:'SUNET Scribe (remote)'}],
-  diarization_models:[{id:'community-1',label:'pyannote community-1'},{id:'nemotron',label:'Nemotron 3 (up to 8 speakers)'},{id:'precision',label:'pyannote Precision-2 (hosted)'}],diarization_default:'community-1',groups:[{name:'Speakers',keys:['SWHISPER_NUM_SPEAKERS','SWHISPER_CONDITION_ON_PREVIOUS','SWHISPER_VAD']}],
+  scribe_languages:['Swedish (verbatim)','Swedish'],diarization_models:[{id:'community-1',label:'pyannote community-1'},{id:'nemotron',label:'Nemotron 3 (up to 8 speakers)'},{id:'precision',label:'pyannote Precision-2 (hosted)'}],diarization_default:'community-1',groups:[{name:'Speakers',keys:['SWHISPER_NUM_SPEAKERS','SWHISPER_CONDITION_ON_PREVIOUS','SWHISPER_VAD']}],
   params:{...interviewParams,SWHISPER_VAD:{type:'bool',global:true,stage:'transcribe',scribe:{supported:false,scope:'Unavailable for Scribe',description:'Not applied to Scribe.'}},SWHISPER_NUM_SPEAKERS:{type:'int',min:1,label:'Number of speakers',global:2,stage:'diarize',help:'Speaker count',scribe:{supported:true,description:'Local speaker count'}},SWHISPER_CONDITION_ON_PREVIOUS:{type:'bool',global:true,stage:'transcribe',help:'Use previous text',scribe:{supported:true,scope:'Local backfill only',description:'Local Whisper backfill only'}}}});
 const server = http.createServer(async (req,res) => {
   const u = new URL(req.url, 'http://localhost');
@@ -503,7 +503,8 @@ try {
     assert.equal(await evaluate('$("runModel").value'),'community-1','Scribe cannot use Precision');
     await evaluate('$("pipelineSel").value="transcribe4";$("pipelineSel").dispatchEvent(new Event("change"))');
     assert.deepEqual(await evaluate('[...$("pipelineSel").options].map(o=>o.textContent)'),
-                     ['Transcription: Local Whisper','Transcription: SUNET Scribe (remote)']);
+                     ['Transcription: Local Whisper','Transcription: SUNET Scribe (remote), Swedish (verbatim)',
+                      'Transcription: SUNET Scribe (remote), Swedish']);
   });
   await check('Scribe uploads a recording again without new consent, but asks before a first upload',async()=>{
     await evaluate('$("pipelineSel").value="scribe";$("pipelineSel").dispatchEvent(new Event("change"))');
@@ -1112,8 +1113,12 @@ try {
   await check('Scribe defaults to Swedish verbatim and runs the ticked files or the folder',async()=>{
     assert.equal(await evaluate('$("pipelineSel").value'),'transcribe4');
     await evaluate('$("pipelineSel").value="scribe";$("pipelineSel").dispatchEvent(new Event("change"))');
-    assert.equal(await evaluate('$("scribeControls")?.hidden'),false);
-    assert.equal(await evaluate('$("scribeLanguage").value'),'Swedish (verbatim)');
+    assert.equal(await evaluate('document.getElementById("scribeLanguage")'),null,'Languages are transcription choices');
+    assert.deepEqual(await evaluate('[...$("pipelineSel").options].map(o=>[o.value,o.textContent])'),
+                     [['transcribe4','Transcription: Local Whisper'],
+                      ['scribe','Transcription: SUNET Scribe (remote), Swedish (verbatim)'],
+                      ['scribe|Swedish','Transcription: SUNET Scribe (remote), Swedish']]);
+    assert.equal(await evaluate('runQuery().get("language")'),'Swedish (verbatim)');
     assert.equal(await evaluate('document.getElementById("scribeScope")'),null,'The ticked files decide the scope');
     await evaluate('currentBase=null;updateRunControls()');
     assert.equal(await evaluate('$("startBtn").disabled'),false,'With nothing ticked Scribe runs the folder');
@@ -1200,21 +1205,20 @@ try {
     assert.deepEqual(await evaluate('renderOptions()'),await evaluate('({...RENDER_DEFAULTS,stats:false})'));
   });
   await check('Run preferences survive metadata refresh and a fresh session',async()=>{
-    for (const [id,value] of [['pipelineSel','scribe'],['runModel','nemotron'],['scribeLanguage','Swedish']]) {
+    for (const [id,value] of [['pipelineSel','scribe|Swedish'],['runModel','nemotron']]) {
       await evaluate(`$(${JSON.stringify(id)}).value=${JSON.stringify(value)};$(${JSON.stringify(id)}).dispatchEvent(new Event('change'))`);
     }
     await wait('document.querySelector(\'[data-base="a"] .fileForce input[aria-label^="Re-transcribe"]\')');
     await evaluate('document.querySelector(\'[data-base="a"] .fileForce input[aria-label^="Re-transcribe"]\').checked || document.querySelector(\'[data-base="a"] .fileForce input[aria-label^="Re-transcribe"]\').click()');
     await evaluate('loadMeta()');
-    assert.equal(await evaluate('$("pipelineSel").value'),'scribe');
+    assert.equal(await evaluate('$("pipelineSel").value'),'scribe|Swedish');
     await reopen();
-    assert.deepEqual(await evaluate('["pipelineSel","runModel","scribeLanguage"].map(id=>$(id).value)'),['scribe','nemotron','Swedish']);
+    assert.deepEqual(await evaluate('["pipelineSel","runModel"].map(id=>$(id).value)'),['scribe|Swedish','nemotron']);
     assert.equal(await evaluate('retranscribeBases.size'),0,'Re-transcribe belongs to one run and one session');
-    assert.equal(await evaluate('$("scribeControls").hidden'),false);
     assert.equal(await evaluate('$("startBtn").disabled'),false,'Scribe can run the folder without a ticked recording');
     consentFixture=true;
     await click('startBtn');await wait('$("previewDialog").open');
-    assert.equal(await evaluate('pendingPreview.diarization_model'),'nemotron');
+    assert.deepEqual(await evaluate('[pendingPreview.diarization_model,pendingPreview.pipeline,pendingPreview.language]'),['nemotron','scribe','Swedish']);
     consentFixture=false;
     assert.equal(await evaluate('$("scribeConsent").checked'),false,'Upload consent still belongs to each individual run');
     await click('previewCancel');
@@ -1224,10 +1228,10 @@ try {
     await reopen();
     assert.equal(await evaluate('$("pipelineSel").value'),'transcribe4');
     assert.equal(await evaluate('$("pipelineSel").disabled'),true);
-    assert.equal(await evaluate('JSON.parse(localStorage.getItem("swhisper_ui_preferences")).pipelineSel'),'scribe');
+    assert.equal(await evaluate('JSON.parse(localStorage.getItem("swhisper_ui_preferences")).pipelineSel'),'scribe|Swedish');
     status={...status,running:false,returncode:0};
     await evaluate('pollRun()');
-    assert.equal(await evaluate('$("pipelineSel").value'),'scribe');
+    assert.equal(await evaluate('$("pipelineSel").value'),'scribe|Swedish');
     assert.equal(await evaluate('$("pipelineSel").disabled'),false);
     await evaluate('localStorage.setItem("swhisper_ui_preferences", JSON.stringify({pipelineSel:"removed-pipeline",runModel:"removed-model"}))');
     await reopen();

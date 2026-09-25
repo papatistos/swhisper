@@ -145,12 +145,18 @@ function runScope() {
   for (const base of [...runSelection]) if (!known.includes(base)) runSelection.delete(base);
   return [...runSelection];
 }
+// The transcription choice names a pipeline and, for Scribe, a language:
+// "scribe" is its first language and "scribe|Swedish" another one.
+function transcription(value = $("pipelineSel").value) {
+  const [pipeline, language] = value.split("|");
+  return { pipeline, language: pipeline === "scribe" ? language || META?.scribe_languages?.[0] || "" : "" };
+}
 // The run preview query for the chosen models. Every pipeline runs the ticked
 // files, or the whole folder when none is ticked.
 function runQuery() {
-  const pipeline = $("pipelineSel").value;
+  const { pipeline, language } = transcription();
   const query = new URLSearchParams({ pipeline });
-  if (pipeline === "scribe") query.set("language", $("scribeLanguage").value);
+  if (pipeline === "scribe") query.set("language", language);
   for (const base of runScope()) query.append("only", base);
   query.set("diarization_model", $("runModel").value);
   return query;
@@ -159,8 +165,9 @@ function runQuery() {
 // "Re-diarize" only when the selected models would reuse its result. The whole
 // folder is checked, so the options do not depend on the run selection.
 function reuseQuery() {
-  const query = new URLSearchParams({ pipeline: $("pipelineSel").value, diarization_model: $("runModel").value });
-  if (query.get("pipeline") === "scribe") { query.set("selected", ""); query.set("language", $("scribeLanguage").value); }
+  const { pipeline, language } = transcription();
+  const query = new URLSearchParams({ pipeline, diarization_model: $("runModel").value });
+  if (pipeline === "scribe") { query.set("selected", ""); query.set("language", language); }
   return query;
 }
 function scheduleReuseCheck() {
@@ -195,7 +202,7 @@ function forceOptions(base) {
   const box = document.createElement("div");
   box.className = "fileForce";
   box.addEventListener("click", ev => ev.stopPropagation());
-  const scribe = $("pipelineSel").value === "scribe";
+  const scribe = transcription().pipeline === "scribe";
   const option = (set, text, title) => {
     const label = document.createElement("label"), input = document.createElement("input"), span = document.createElement("span");
     input.type = "checkbox"; input.checked = set.has(base);
@@ -238,7 +245,7 @@ function updateRunControls() {
   if (running) showingActivePipeline = true;
   // A reload or another tab can attach to a run with a different pipeline.
   // Show the server's active pipeline before locking the selector.
-  if (running && pipeline.value !== lastStatus.pipeline &&
+  if (running && transcription(pipeline.value).pipeline !== lastStatus.pipeline &&
       [...pipeline.options].some(option => option.value === lastStatus.pipeline)) {
     pipeline.value = lastStatus.pipeline;
     filterSettings();
@@ -306,10 +313,11 @@ async function loadMeta() {
   sel.innerHTML = "";
   // Only the transcription models are offered; the other pipelines stay
   // available to the API and run history.
+  // Scribe is offered once per language.
   for (const p of META.pipelines.filter(p => p.choice)) {
-    const o = document.createElement("option");
-    o.value = p.id; o.textContent = `Transcription: ${p.choice}`;
-    sel.appendChild(o);
+    const languages = p.id === "scribe" ? META.scribe_languages || [] : [""];
+    languages.forEach((language, index) => sel.appendChild(new Option(
+      `Transcription: ${p.choice}${language ? `, ${language}` : ""}`, index ? `${p.id}|${language}` : p.id)));
   }
   if ([...sel.options].some(o => o.value === previous)) sel.value = previous;
   else restoreControlPreference("pipelineSel");
@@ -851,8 +859,7 @@ function renderSettings(data, base, scope) {
   filterSettings(); updateSaveState(); updateRunControls();
 }
 function filterSettings() {
-  const scribe = $("pipelineSel").value === "scribe";
-  $("scribeControls").hidden = !scribe;
+  const scribe = transcription().pipeline === "scribe";
   // Scribe runs local community-1 or Nemotron diarization only.
   for (const option of $("runModel").options) option.disabled = scribe && option.value === "precision";
   if ($("runModel").selectedOptions[0]?.disabled) $("runModel").value = META?.diarization_default || "community-1";
@@ -2571,12 +2578,12 @@ $("consoleResize").addEventListener("keydown", e => {
   setConsoleHeight($("consolePanel").getBoundingClientRect().height + (e.key === "ArrowUp" ? 20 : -20), true);
 });
 $("globalSettingsBtn").onclick=handle(openGlobalSettings);
-for (const id of ["pipelineSel", "runModel", "scribeLanguage"]) rememberControl(id);
+for (const id of ["pipelineSel", "runModel"]) rememberControl(id);
 for (const id of ["fileSearch", "fileFilter", "fileSort", "reviewAudio", "compareSync", "compareReview", "compareFollow", "exportFormat"]) rememberControl(id);
 rememberDetails($("previewSkipped"), "previewSkipped");
 for (const id of ["audioPlayer", "compareAudio"]) rememberAudio(id);
 $("pipelineSel").addEventListener("change", () => { filterSettings(); updateRunControls(); });
-for (const id of ["runModel", "scribeLanguage"]) $(id).addEventListener("change", updateRunControls);
+$("runModel").addEventListener("change", updateRunControls);
 for(const id of ["fileSearch","fileFilter","fileSort"]) $(id).addEventListener(id==="fileSearch"?"input":"change",renderFiles);
 $("exportConfirm").onclick=handle(confirmExport);
 $("exportCancel").onclick=()=>{$("exportDialog").close();exportContext=null;};

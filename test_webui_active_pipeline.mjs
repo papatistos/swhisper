@@ -37,7 +37,7 @@ assert.match(element('runStatus').textContent, /Running transcribe5/);
 status = {...status, pipeline: 'scribe', run_id: 'other-tab-run'};
 await vm.runInContext('pollRun()', context);
 assert.equal(selector.value, 'scribe');
-assert.equal(element('scribeControls').hidden, false, 'settings follow the active pipeline');
+assert.equal(vm.runInContext('transcription().pipeline', context), 'scribe', 'settings follow the active pipeline');
 
 // When idle, preserve the user's next-run choice rather than selecting the last run.
 status = {...status, running: false, returncode: 0};

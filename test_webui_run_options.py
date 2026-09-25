@@ -145,8 +145,9 @@ class RunOptionTests(unittest.TestCase):
             self.assertEqual(popen.call_args.kwargs['env']['SWHISPER_USE_PRECISION'], 'true')
 
     def test_meta_offers_local_whisper_and_scribe_as_transcription_choices(self):
-        choices = [p['id'] for p in webui.api_meta()['pipelines'] if p['choice']]
-        self.assertEqual(choices, ['transcribe4', 'scribe'])
+        meta = webui.api_meta()
+        self.assertEqual([p['id'] for p in meta['pipelines'] if p['choice']], ['transcribe4', 'scribe'])
+        self.assertEqual(meta['scribe_languages'], ['Swedish (verbatim)', 'Swedish'])
 
     def test_model_change_in_standard_pipeline_reuses_transcription(self):
         self.transcribed()
