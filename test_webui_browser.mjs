@@ -506,7 +506,7 @@ try {
                      ['Transcription: Local Whisper','Transcription: SUNET Scribe (remote)']);
   });
   await check('Scribe uploads a recording again without new consent, but asks before a first upload',async()=>{
-    await evaluate('$("pipelineSel").value="scribe";$("pipelineSel").dispatchEvent(new Event("change"));$("scribeScope").value="folder";$("scribeScope").dispatchEvent(new Event("change"))');
+    await evaluate('$("pipelineSel").value="scribe";$("pipelineSel").dispatchEvent(new Event("change"))');
     await wait('document.querySelector(\'[data-base="a"] .fileForce span\')?.textContent===\'Re-transcribe (upload again)\'');
     await evaluate('document.querySelector(\'[data-base="a"] .fileForce input[aria-label^="Re-transcribe"]\').click()');
     await click('startBtn');await wait('$("previewDialog").open');
@@ -525,14 +525,14 @@ try {
     assert.match(await evaluate('$("previewSummary").textContent'),/Consent to the remote upload first/);
     await click('previewCancel');
     consentFixture=false;
-    await evaluate('$("scribeScope").value="selected";$("scribeScope").dispatchEvent(new Event("change"));$("pipelineSel").value="transcribe4";$("pipelineSel").dispatchEvent(new Event("change"))');
+    await evaluate('$("pipelineSel").value="transcribe4";$("pipelineSel").dispatchEvent(new Event("change"))');
   });
   await check('Selected files narrow the run and reach the launch call',async()=>{
-    assert.equal(await evaluate('$("startBtn").textContent'),'Run');
+    assert.equal(await evaluate('$("startBtn").textContent'),'Run folder');
     assert.equal(await evaluate('$("clearRunSelection").hidden'),true);
     await evaluate('document.querySelector(\'[data-base="b"] .runPick input\').click()');
     await wait('!$("startBtn").disabled && $("startBtn").title==="Run 1 selected file(s)"');
-    assert.equal(await evaluate('$("startBtn").textContent'),'Run');
+    assert.equal(await evaluate('$("startBtn").textContent'),'Run selected');
     assert.equal(await evaluate('$("clearRunSelection").hidden'),false);
     const before=launches.length;
     await click('startBtn');await wait('$("previewDialog").open');
@@ -541,7 +541,7 @@ try {
     for(let i=0;i<200 && launches.length===before;i++) await delay(20);
     assert.deepEqual(launches.at(-1).only,['b']);
     await wait('lastStatus && lastStatus.running');await click('stopBtn');await wait('lastStatus && !lastStatus.running');
-    await click('clearRunSelection');await wait('!selectionBusy && $("startBtn").title==="Run eligible files in this folder"');
+    await click('clearRunSelection');await wait('!selectionBusy && $("startBtn").title==="Run every eligible file in this folder"');
     assert.equal(await evaluate('document.querySelector(\'[data-base="b"] .runPick input\').checked'),false);
   });
   await check('Folder moved by another window is reported, not applied silently',async()=>{
@@ -1109,14 +1109,17 @@ try {
       audioDir='/mock/audio';
     }
   });
-  await check('Scribe defaults to explicit selected scope and Swedish verbatim without changing local defaults',async()=>{
+  await check('Scribe defaults to Swedish verbatim and runs the ticked files or the folder',async()=>{
     assert.equal(await evaluate('$("pipelineSel").value'),'transcribe4');
     await evaluate('$("pipelineSel").value="scribe";$("pipelineSel").dispatchEvent(new Event("change"))');
     assert.equal(await evaluate('$("scribeControls")?.hidden'),false);
     assert.equal(await evaluate('$("scribeLanguage").value'),'Swedish (verbatim)');
-    assert.equal(await evaluate('$("scribeScope").value'),'selected');
+    assert.equal(await evaluate('document.getElementById("scribeScope")'),null,'The ticked files decide the scope');
     await evaluate('currentBase=null;updateRunControls()');
-    assert.equal(await evaluate('$("startBtn").disabled'),true,'Selected scope without a recording must not start');
+    assert.equal(await evaluate('$("startBtn").disabled'),false,'With nothing ticked Scribe runs the folder');
+    assert.equal(await evaluate('$("startBtn").textContent'),'Run folder');
+    assert.deepEqual(await evaluate('runSelection.add("b");updateRunControls();[runQuery().getAll("only"),$("startBtn").textContent]'),[['b'],'Run selected']);
+    assert.deepEqual(await evaluate('runSelection.delete("b");updateRunControls();[runQuery().getAll("only"),$("startBtn").textContent]'),[[],'Run folder']);
     await select('a');await wait('editorBase==="a"');
     assert.equal(await evaluate('$("startBtn").disabled'),false);
     assert.equal(await evaluate('$("setting-SWHISPER_NUM_SPEAKERS").closest(".row").hidden'),false);
@@ -1197,7 +1200,7 @@ try {
     assert.deepEqual(await evaluate('renderOptions()'),await evaluate('({...RENDER_DEFAULTS,stats:false})'));
   });
   await check('Run preferences survive metadata refresh and a fresh session',async()=>{
-    for (const [id,value] of [['pipelineSel','scribe'],['runModel','nemotron'],['scribeScope','folder'],['scribeLanguage','Swedish']]) {
+    for (const [id,value] of [['pipelineSel','scribe'],['runModel','nemotron'],['scribeLanguage','Swedish']]) {
       await evaluate(`$(${JSON.stringify(id)}).value=${JSON.stringify(value)};$(${JSON.stringify(id)}).dispatchEvent(new Event('change'))`);
     }
     await wait('document.querySelector(\'[data-base="a"] .fileForce input[aria-label^="Re-transcribe"]\')');
@@ -1205,10 +1208,10 @@ try {
     await evaluate('loadMeta()');
     assert.equal(await evaluate('$("pipelineSel").value'),'scribe');
     await reopen();
-    assert.deepEqual(await evaluate('["pipelineSel","runModel","scribeScope","scribeLanguage"].map(id=>$(id).value)'),['scribe','nemotron','folder','Swedish']);
+    assert.deepEqual(await evaluate('["pipelineSel","runModel","scribeLanguage"].map(id=>$(id).value)'),['scribe','nemotron','Swedish']);
     assert.equal(await evaluate('retranscribeBases.size'),0,'Re-transcribe belongs to one run and one session');
     assert.equal(await evaluate('$("scribeControls").hidden'),false);
-    assert.equal(await evaluate('$("startBtn").disabled'),false,'Restored folder scope can run without selecting a recording');
+    assert.equal(await evaluate('$("startBtn").disabled'),false,'Scribe can run the folder without a ticked recording');
     consentFixture=true;
     await click('startBtn');await wait('$("previewDialog").open');
     assert.equal(await evaluate('pendingPreview.diarization_model'),'nemotron');
