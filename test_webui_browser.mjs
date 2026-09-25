@@ -14,7 +14,7 @@ let audioDir = '/mock/audio', serverFolder = null, offline = false, failSave = f
 let status = {running:false, pipeline:null, returncode:null, run_id:null, progress:{completed:{}}};
 const saved = {a:{values:{SWHISPER_NUM_SPEAKERS:'2',SWHISPER_CONDITION_ON_PREVIOUS:'yes'},comment:'original'}, b:{values:{},comment:'B'}};
 const writes = [], launches = [], errors = [], exports = [], bulkRequests = [];
-let bulkExisting = [];
+let bulkExisting = [], exportFailure = false;
 let globalValues={}, globalRevision="g1", exportCanceled=false, consentFixture=false;
 let reusableFixture={a:{transcription:true,diarization:true},b:{transcription:true,diarization:false}};
 let previewAllSkipped=false;
@@ -98,6 +98,7 @@ const server = http.createServer(async (req,res) => {
   }
   if (u.pathname === '/api/render-bulk/save-as') {bulkRequests.push(data);return send(exportCanceled ? {canceled:true} : {token:'bulk-selection',folder:'/mock/chosen',format:data.format,paths:['/mock/chosen/a_view.txt'],existing:bulkExisting,skipped:[{base:'b',reason:'No transcript found for this file'}]});}
   if (u.pathname === '/api/render-bulk/save-selected') {exports.push(data);return send({written:['/mock/chosen/a_view.txt']});}
+  if (u.pathname.endsWith('/save-as') && exportFailure) return send({detail:'Choose a different filename. Pipeline transcript versions are preserved.'},409);
   if (u.pathname.endsWith('/save-as')) return send(exportCanceled ? {canceled:true} : {token:'native-save-selection',path:'/mock/chosen/review.txt',format:data.format});
   if (u.pathname.endsWith('/save-selected')) {exports.push(data);return send({written:['/mock/chosen/review.txt']});}
   if (u.pathname.startsWith('/api/render/') && u.pathname.endsWith('/save')) {exports.push(data);return send({written:['/mock/audio/exports/review.txt']});}
@@ -1061,9 +1062,19 @@ try {
   await check('Export uses native Save As and cancellation writes nothing',async()=>{
     await click('renderSave');await wait('$("exportDialog").open');
     assert.equal(await evaluate('$("exportFormat").value'),'txt');assert.equal(exports.length,0);
-    await click('exportConfirm');await wait('!exporting && !$("exportDialog").open');
+    await click('exportConfirm');
+    assert.equal(await evaluate('$("exportDialog").open'),false,'Export closes the export dialog at once');
+    await wait('!exporting && $("exportResultDialog").open');
     assert.equal(exports.at(-1).token,'native-save-selection');
-    exportCanceled=true;const before=exports.length;await click('renderSave');await wait('$("exportDialog").open');await click('exportConfirm');await wait('!exporting && !$("exportDialog").open');assert.equal(exports.length,before);exportCanceled=false;await click('tabSettings');
+    assert.equal(await evaluate('$("exportResultTitle").textContent'),'Export saved');
+    assert.match(await evaluate('$("exportResultText").textContent'),/\/mock\/chosen\/review\.txt/);
+    await click('exportResultClose');assert.equal(await evaluate('$("exportResultDialog").open'),false);
+    exportCanceled=true;const before=exports.length;await click('renderSave');await wait('$("exportDialog").open');await click('exportConfirm');await wait('!exporting');
+    assert.equal(exports.length,before);assert.equal(await evaluate('$("exportDialog").open || $("exportResultDialog").open'),false,'Cancel shows no result');
+    exportCanceled=false;
+    exportFailure=true;await click('renderSave');await wait('$("exportDialog").open');await click('exportConfirm');await wait('!exporting && $("exportResultDialog").open');
+    assert.deepEqual(await evaluate('[$("exportResultTitle").textContent,$("exportResultText").textContent]'),['Export failed','Choose a different filename. Pipeline transcript versions are preserved.']);
+    exportFailure=false;await click('exportResultClose');await click('tabSettings');
   });
   await check('Bulk export sends the ticked files with the view options and asks before replacing',async()=>{
     await click('tabTranscript');await wait('!$("versionSel").disabled && renderAvailable');
@@ -1076,16 +1087,19 @@ try {
     await evaluate('document.querySelector(\'input[name="exportScope"][value="selected"]\').click()');
     assert.equal(await evaluate('$("exportConfirm").textContent'),'Choose folder and export…');
     bulkExisting=['/mock/chosen/a_view.txt'];await evaluate('window.confirm=()=>false');
-    const before=exports.length;await click('exportConfirm');await wait('!exporting && $("exportPaths").textContent.includes("canceled")');
+    const before=exports.length;await click('exportConfirm');await wait('!exporting');
     assert.equal(exports.length,before,'Declining the replacement writes nothing');
+    assert.equal(await evaluate('$("exportDialog").open || $("exportResultDialog").open'),false);
     await evaluate('window.confirm=()=>true');
-    await click('exportConfirm');await wait('!exporting && $("exportPaths").textContent.includes("Exported")');
+    await click('renderSave');await wait('$("exportDialog").open');
+    await evaluate('document.querySelector(\'input[name="exportScope"][value="selected"]\').click()');
+    await click('exportConfirm');await wait('!exporting && $("exportResultDialog").open');
     assert.deepEqual(bulkRequests.at(-1).bases.sort(),['a','b']);
     assert.deepEqual(bulkRequests.at(-1).options,await evaluate('renderOptions()'));
     assert.deepEqual(exports.at(-1),{token:'bulk-selection',overwrite:true});
-    assert.match(await evaluate('$("exportPaths").textContent'),/Skipped 1 files:\nb: No transcript/);
-    assert.equal(await evaluate('$("exportDialog").open && $("exportCancel").textContent'),'Close');
-    await click('exportCancel');bulkExisting=[];
+    assert.match(await evaluate('$("exportResultText").textContent'),/Saved 1 transcripts to \/mock\/chosen:\na_view\.txt\n\nSkipped 1 files:\nb: No transcript/);
+    assert.equal(await evaluate('$("exportDialog").open'),false);
+    await click('exportResultClose');bulkExisting=[];
     await evaluate('runSelection.clear();updateRunControls()');await click('tabSettings');
   });
   await check('Folder change cancel preserves folder and edits',async()=>{await select('b');await wait('editorBase==="b"');await input('folder draft');await evaluate('$("dirInput").value="/mock/other"; $("dirBtn").click()');await wait('$("dirtyDialog").open');await click('dirtyCancel');await wait('!$("dirtyDialog").open');assert.equal(audioDir,'/mock/audio');assert.equal(await evaluate('$("dirInput").value'),'/mock/audio');});

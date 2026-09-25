@@ -1199,52 +1199,53 @@ function showExportScope() {
   const selected = exportScope() === "selected";
   $("exportNote").textContent = EXPORT_NOTES[selected ? "selected" : "current"];
   $("exportConfirm").textContent = selected ? "Choose folder and export…" : "Export copy…";
-  $("exportPaths").textContent = selected ? "" : "Choose a format, then select Export copy to choose the filename and location.";
 }
 async function saveRenderedView() {
-  if (!renderAvailable || !currentBase) return;
+  if (!renderAvailable || !currentBase || exporting) return;
   const bases = runScope();
   exportContext = {base:currentBase, version:$("versionSel").value, options:renderOptions(), bases};
   // Bulk export only differs from a single export when other files are ticked.
   $("exportScope").hidden = !bases.length || (bases.length === 1 && bases[0] === currentBase);
   $("exportScopeSelected").textContent = `Most recent transcript of each of the ${bases.length} selected files`;
   document.querySelector('input[name="exportScope"][value="current"]').checked = true;
-  $("exportCancel").textContent = "Cancel";
   showExportScope();
   $("exportDialog").showModal();
 }
-function setExporting(busy) {
-  exporting = busy;
-  for (const el of [$("exportConfirm"), $("exportFormat"), $("exportCancel"), ...$("exportScope").querySelectorAll("input")]) el.disabled = busy;
+function showExportResult(title, text) {
+  $("exportResultTitle").textContent = title;
+  $("exportResultText").textContent = text;
+  $("exportResultDialog").showModal();
 }
+// The export dialog closes as soon as Export is chosen, so the macOS dialogs
+// appear on their own. A separate modal then reports what was saved or what failed.
 async function confirmExport() {
   if (!exportContext || exporting) return;
-  setExporting(true);
+  const context = exportContext, format = $("exportFormat").value, bulk = exportScope() === "selected";
+  $("exportDialog").close(); exportContext = null; exporting = true;
   try {
-    if (exportScope() === "selected") { await confirmBulkExport(); return; }
-    const body = {...exportContext, format: $("exportFormat").value};
-    const {data: choice}=await api(`/api/render/${encodeURIComponent(exportContext.base)}/save-as`,{method:"POST",timeout:DIALOG_TIMEOUT_MS,headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-    if (choice.canceled) { $("exportDialog").close(); exportContext=null; return; }
-    const {data}=await api(`/api/render/${encodeURIComponent(exportContext.base)}/save-selected`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token:choice.token})});
-    $("exportPaths").textContent="Exported:\n"+data.written.join("\n");
-    $("exportDialog").close(); exportContext=null;
-  } catch(e) {$("exportPaths").textContent=e.message;}
-  finally {setExporting(false);}
+    const result = bulk ? await exportSelectedFiles(context, format) : await exportCurrentVersion(context, format);
+    if (result) showExportResult("Export saved", result);
+  } catch (e) { showExportResult("Export failed", e.message); }
+  finally { exporting = false; }
 }
-// The dialog stays open after a bulk export so the written and skipped files remain visible.
-async function confirmBulkExport() {
-  const body = {bases: exportContext.bases, options: exportContext.options, format: $("exportFormat").value};
+// Each export function returns the text for the result modal, or null when the person canceled.
+async function exportCurrentVersion(context, format) {
+  const base = encodeURIComponent(context.base);
+  const {data: choice} = await api(`/api/render/${base}/save-as`, {method:"POST", timeout:DIALOG_TIMEOUT_MS, headers:{"Content-Type":"application/json"}, body:JSON.stringify({...context, format})});
+  if (choice.canceled) return null;
+  const {data} = await api(`/api/render/${base}/save-selected`, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({token: choice.token})});
+  return "Saved the transcript to:\n" + data.written.join("\n");
+}
+async function exportSelectedFiles(context, format) {
+  const body = {bases: context.bases, options: context.options, format};
   const {data: choice} = await api("/api/render-bulk/save-as", {method:"POST", timeout:DIALOG_TIMEOUT_MS, headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
-  if (choice.canceled) { $("exportPaths").textContent = "Export canceled. No files were written."; return; }
+  if (choice.canceled) return null;
   const fileName = path => path.split("/").pop();
-  if (choice.existing.length && !confirm(`${choice.existing.length} of these export files already exist in ${choice.folder}:\n\n${choice.existing.map(fileName).join("\n")}\n\nReplace them?`)) {
-    $("exportPaths").textContent = "Export canceled. No files were written."; return;
-  }
+  if (choice.existing.length && !confirm(`${choice.existing.length} of these export files already exist in ${choice.folder}:\n\n${choice.existing.map(fileName).join("\n")}\n\nReplace them?`)) return null;
   const {data} = await api("/api/render-bulk/save-selected", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({token: choice.token, overwrite: choice.existing.length > 0})});
   const skipped = choice.skipped.map(item => `${item.base}: ${item.reason}`);
-  $("exportPaths").textContent = `Exported ${data.written.length} transcripts to ${choice.folder}:\n` + data.written.map(fileName).join("\n")
+  return `Saved ${data.written.length} transcripts to ${choice.folder}:\n` + data.written.map(fileName).join("\n")
     + (skipped.length ? `\n\nSkipped ${skipped.length} files:\n` + skipped.join("\n") : "");
-  $("exportCancel").textContent = "Close";
 }
 /* ---------- waveform playback ---------- */
 
@@ -2627,7 +2628,8 @@ for(const id of ["fileSearch","fileFilter","fileSort"]) $(id).addEventListener(i
 $("exportConfirm").onclick=handle(confirmExport);
 $("exportCancel").onclick=()=>{$("exportDialog").close();exportContext=null;};
 for (const radio of $("exportScope").querySelectorAll("input")) radio.onchange = showExportScope;
-$("exportDialog").addEventListener("cancel",e=>{if(exporting)e.preventDefault();else exportContext=null;});
+$("exportDialog").addEventListener("cancel",()=>{exportContext=null;});
+$("exportResultClose").onclick=()=>$("exportResultDialog").close();
 $("reviewAudio").onchange = updateReviewView;
 $("audioPlayer").addEventListener("timeupdate",()=>{
   const time=$("audioPlayer").currentTime;

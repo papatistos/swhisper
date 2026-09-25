@@ -175,8 +175,12 @@
   <label for="exportFormat">Format</label>
   <select id="exportFormat"><option value="txt">Plain text (TXT)</option><option value="rtf">Rich Text (RTF)</option></select>
   <p class="settingsNote" id="exportNote"></p>
-  <p id="exportPaths" role="status"></p>
   <div class="dialogActions"><button id="exportCancel" autofocus>Cancel</button><button id="exportConfirm" class="primary">Export copy…</button></div>
+</dialog>
+<dialog id="exportResultDialog" aria-labelledby="exportResultTitle">
+  <h2 id="exportResultTitle"></h2>
+  <p id="exportResultText" role="status"></p>
+  <div class="dialogActions"><button id="exportResultClose" class="primary" autofocus>OK</button></div>
 </dialog>
 
 <dialog id="speakerDialog" aria-labelledby="speakerTitle">
