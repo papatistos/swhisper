@@ -150,6 +150,26 @@ def _transcript_versions(dirs: Dict[str, str], base: str) -> List[Dict[str, Any]
     return versions
 
 
+_BACKFILL_GAP_RE = re.compile(r"\[\s*-+\s*\]")
+_backfill_gap_cache: Dict[tuple, int] = {}
+
+
+def backfill_gaps(version: Dict[str, Any], audio_dir: str) -> int:
+    """How many unrecovered backfill gaps ([-] markers) a TXT version contains.
+
+    The count is cached by path, size and mtime, so each version is read once.
+    """
+    path = os.path.join(audio_dir, version["id"])
+    key = (path, version.get("size"), version.get("mtime"))
+    if key not in _backfill_gap_cache:
+        try:
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return 0
+        _backfill_gap_cache[key] = len(_BACKFILL_GAP_RE.findall(text))
+    return _backfill_gap_cache[key]
+
+
 # Inverses of the per-file version scans above. Listing each directory once
 # and testing set membership replaces two directory listings per audio file.
 _TRANSCRIPT_STEM_RE = re.compile(r"^(.*)_(\d{8}-\d{6})$")

@@ -521,6 +521,14 @@ async function renderFileTranscripts(list, file) {
         + (version.pipeline ? ` · ${version.pipeline}` : "");
       button.title = version.id === RAW_JSON_VERSION ? "Before diarization" : version.id;
       button.setAttribute("aria-label", `Open ${button.textContent} for ${file.base}`);
+      if (version.backfill_gaps > 0) {
+        const tag = document.createElement("span");
+        tag.className = "badge on-warn";
+        tag.textContent = "Partial backfill";
+        tag.title = `${version.backfill_gaps} gap(s) in this transcript could not be recovered and are marked [-].`;
+        button.append(" ", tag);
+        button.setAttribute("aria-label", `${button.getAttribute("aria-label")}, partial backfill`);
+      }
       button.onclick = handle(async () => {
         if (folder !== folderSeq || !await selectFile(file.base) || folder !== folderSeq) return;
         showTab("transcript");

@@ -157,6 +157,14 @@ class RunOptionTests(unittest.TestCase):
         marker.write_text(marker.read_text() + '# Backfill status: partial\n')
         self.assertTrue({f['base']: f for f in webui.api_files()['files']}['a']['backfill_incomplete'])
 
+    def test_versions_count_unrecovered_backfill_gaps(self):
+        txt = Path(self.state.dirs()['output']) / 'txt'
+        txt.mkdir(parents=True)
+        (txt / 'a_20260925-100000.txt').write_text('INTERVIEWER: Hej [--] och [ - ] mm [*]\n')
+        (txt / 'a_20260925-110000.txt').write_text('INTERVIEWER: Hej [*] och [ ** ]\n')
+        versions = {v['timestamp']: v['backfill_gaps'] for v in webui.api_transcript_versions('a')['versions']}
+        self.assertEqual(versions, {'20260925-100000': 2, '20260925-110000': 0})
+
     def test_meta_offers_local_whisper_and_scribe_as_transcription_choices(self):
         meta = webui.api_meta()
         self.assertEqual([p['id'] for p in meta['pipelines'] if p['choice']], ['transcribe4', 'scribe'])

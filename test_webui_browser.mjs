@@ -23,7 +23,7 @@ let speakerNames={};
 let speakerSuggestions={};
 let waveformDelay = {}, waveformFailure = false, noTranscript = false, detailDelay = 0;
 let versionListFailure = false, versionListDelay = 0;
-let listedVersions = [{id:'v2',filename:'new',timestamp:'20260924-120000',pipeline:'Scribe'}, {id:'v1',filename:'old'}];
+let listedVersions = [{id:'v2',filename:'new',timestamp:'20260924-120000',pipeline:'Scribe'}, {id:'v1',filename:'old',backfill_gaps:3}];
 const waveformRequests = [];
 // Two versions of one recording that split it into paragraphs differently:
 // v2 has short paragraphs every 10 s, v1 long ones every 25 s behind an introduction.
@@ -222,7 +222,9 @@ try {
     assert.equal(await evaluate('currentBase'),null);
     assert.equal(await evaluate('runSelection.size'),0);
     assert.deepEqual(await evaluate('[...document.querySelectorAll("[data-base=a] .fileTranscript")].map(b=>b.textContent)'),
-      ['2026-09-24 12:00:00 · Scribe','old','Raw JSON transcript']);
+      ['2026-09-24 12:00:00 · Scribe','old Partial backfill','Raw JSON transcript']);
+    assert.deepEqual(await evaluate('[...document.querySelectorAll("[data-base=a] .fileTranscript .badge.on-warn")].map(b=>b.title)'),
+      ['3 gap(s) in this transcript could not be recovered and are marked [-].']);
     await evaluate('document.querySelector("[data-base=a] .fileExpand").focus()');
     await key('Enter','Enter');
     assert.equal(await evaluate('document.querySelector("[data-base=a] .fileTranscripts").hidden'),true);

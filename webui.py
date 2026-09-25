@@ -82,6 +82,7 @@ from webui_schema import (
     validate_settings,
 )
 from webui_files import (
+    backfill_gaps,
     AUDIO_EXTENSIONS,
     _basenames,
     _diarized_json_for,
@@ -1181,10 +1182,13 @@ def api_history(limit: int = 50) -> Dict[str, Any]:
 
 @app.get("/api/transcript/{basename}/versions")
 def api_transcript_versions(basename: str) -> Dict[str, Any]:
-    """List available versions without reading or rendering a transcript."""
+    """List available versions, each with its count of unrecovered backfill gaps."""
     dirs = state.dirs()
     base = _safe_base(dirs["audio"], basename)
-    return {"base": base, "versions": _transcript_versions(dirs, base)}
+    versions = _transcript_versions(dirs, base)
+    for version in versions:
+        version["backfill_gaps"] = backfill_gaps(version, dirs["audio"])
+    return {"base": base, "versions": versions}
 
 
 @app.get("/api/transcript/{basename}")
