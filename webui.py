@@ -66,7 +66,7 @@ from sidecar import (
 from webui_run import preview_run, ProgressTracker
 from diarization_status import effective_v4_model
 from run_scope import (DIARIZATION_MODELS, ENV_VAR as ONLY_FILES_ENV, REPROCESS_ENV_VAR as REPROCESS_ENV,
-                       STAGE_DIARIZATION)
+                       RETRANSCRIBE_ENV_VAR as RETRANSCRIBE_ENV, REDIARIZE_ENV_VAR as REDIARIZE_ENV)
 import webui_durations
 import webui_waveform
 import webui_speakers
@@ -106,6 +106,7 @@ from transcript_render import (
 
 try:
     from fastapi import FastAPI, HTTPException, Query
+    from fastapi.params import Query as QueryParam
     from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
     import uvicorn
 except ImportError:  # pragma: no cover
@@ -501,12 +502,17 @@ class AppState:
                 if model != PRECISION_CHOICE:
                     env['SWHISPER_PIPELINE_MODEL'] = DIARIZATION_MODELS[model]
                 header += f" — diarization {model}"
+            env.pop(RETRANSCRIBE_ENV, None)
+            env.pop(REDIARIZE_ENV, None)
             if pipeline != 'scribe' and options.get('reprocess'):
                 env[REPROCESS_ENV] = 'true'
                 header += " — reprocessing existing outputs"
-            elif pipeline != 'scribe' and options.get('rediarize'):
-                env[REPROCESS_ENV] = STAGE_DIARIZATION
-                header += " — reprocessing existing diarization"
+            if pipeline != 'scribe' and options.get('retranscribe'):
+                env[RETRANSCRIBE_ENV] = "\n".join(options['retranscribe'])
+                header += f" — transcribing {len(options['retranscribe'])} file(s) again"
+            if pipeline != 'scribe' and options.get('rediarize'):
+                env[REDIARIZE_ENV] = "\n".join(options['rediarize'])
+                header += f" — diarizing {len(options['rediarize'])} file(s) again"
             with open(run_log_path, "w", encoding="utf-8", buffering=1) as log_file:
                 log_file.write(header + "\n")
                 log_file.flush()
@@ -1850,20 +1856,24 @@ def _check_diarization_model(model: Any, pipeline: str) -> None:
 def api_run_preview(pipeline: str, only: Optional[List[str]] = Query(None),
                     selected: str = '', language: str = 'Swedish (verbatim)',
                     diarization_model: str = '', reprocess: bool = False,
-                    rediarize: bool = False) -> Dict[str, Any]:
+                    retranscribe: Optional[List[str]] = Query(None),
+                    rediarize: Optional[List[str]] = Query(None)) -> Dict[str, Any]:
     if pipeline not in PIPELINES:
         raise HTTPException(400, "Unknown pipeline")
     _check_diarization_model(diarization_model, pipeline)
+    # Recordings to redo in this run; a new transcript also means a new diarization.
+    retranscribe, rediarize = _named_recordings(retranscribe, 'retranscribe'), _named_recordings(rediarize, 'rediarize')
     # Scribe carries its own single-recording selection and language; the local
     # pipelines take a set of basenames from the ticked files in the list.
     if pipeline == 'scribe':
         from webui_scribe import preview_scribe
         try:
-            preview = preview_scribe(state.audio_dir(), selected, language, diarization_model, reprocess, rediarize)
+            preview = preview_scribe(state.audio_dir(), selected, language, diarization_model,
+                                     reprocess or retranscribe, rediarize)
         except (ValueError, OSError) as exc:
             raise HTTPException(400, str(exc)) from None
-        preview['reusable'] = {stage: sum(row['reusable'][stage] for row in preview['files'])
-                               for stage in ('transcription', 'diarization')}
+        preview['reusable'] = {row['base']: row['reusable'] for row in preview['files']
+                               if any(row['reusable'].values())}
     else:
         audio_dir = state.audio_dir()
         diarization_config = _dconfig.DiarizationConfig()
@@ -1874,23 +1884,33 @@ def api_run_preview(pipeline: str, only: Optional[List[str]] = Query(None),
         diarization_config.pipeline_model = effective_v4_model(diarization_config)
         preview = preview_run(audio_dir, pipeline, _tconfig.TranscriptionConfig(),
                               diarization_config,
-                              _validated_selection(audio_dir, only), reprocess, rediarize)
+                              _validated_selection(audio_dir, only), reprocess, retranscribe, rediarize)
         preview['diarization_model'] = diarization_model
     _, revision = env_snapshot(GLOBAL_ENV_PATH)
-    options = json.dumps([diarization_model, reprocess, rediarize])
+    options = json.dumps([diarization_model, reprocess, sorted(retranscribe), sorted(rediarize)])
     preview['token'] = hashlib.sha256((preview['token'] + revision + options).encode()).hexdigest()
     return preview
+
+
+def _named_recordings(values: Any, key: str) -> set:
+    """Recording basenames named in a request; never paths."""
+    # Direct calls see the unfilled Query default rather than None.
+    if values is None or isinstance(values, QueryParam):
+        return set()
+    if not isinstance(values, list) or not all(isinstance(v, str) and v and '/' not in v and v not in ('.', '..')
+                                               for v in values):
+        raise HTTPException(400, f'{key} must be a list of recording names')
+    return set(values)
 
 
 def _run_options(body: Dict[str, Any], pipeline: str) -> Dict[str, Any]:
     model = body.get('diarization_model', '')
     _check_diarization_model(model, pipeline)
-    options = {'diarization_model': model}
-    for key in ('reprocess', 'rediarize'):
-        if not isinstance(body.get(key, False), bool):
-            raise HTTPException(400, f'{key} must be true or false')
-        options[key] = body.get(key, False)
-    return options
+    if not isinstance(body.get('reprocess', False), bool):
+        raise HTTPException(400, 'reprocess must be true or false')
+    return {'diarization_model': model, 'reprocess': body.get('reprocess', False),
+            'retranscribe': sorted(_named_recordings(body.get('retranscribe'), 'retranscribe')),
+            'rediarize': sorted(_named_recordings(body.get('rediarize'), 'rediarize'))}
 
 
 @app.post("/api/run")
@@ -1905,9 +1925,11 @@ def api_run(body: Dict[str, Any]) -> Dict[str, Any]:
         preview = api_run_preview(pipeline, selected=selected, language=language, **_run_options(body, pipeline))
         if preview['token'] != body['preview_token']:
             raise HTTPException(409, 'Folder or settings changed. Review a new run preview before starting.')
-        # Reruns that reuse saved Scribe transcripts contact no remote service.
-        if preview['remote'] and body.get('remote_upload') is not True:
-            raise HTTPException(400, 'Scribe requires explicit remote upload consent for recordings without a saved transcript.')
+        # Consent covers a recording's first upload. Reruns that reuse saved Scribe
+        # transcripts contact no remote service, and recordings uploaded before
+        # were consented to then.
+        if preview['consent_required'] and body.get('remote_upload') is not True:
+            raise HTTPException(400, 'Scribe requires explicit remote upload consent for recordings never uploaded before.')
         if not preview['files']:
             raise HTTPException(400, 'No recordings selected')
         state.start(pipeline, plan=preview)

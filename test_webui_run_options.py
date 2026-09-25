@@ -86,26 +86,36 @@ class RunOptionTests(unittest.TestCase):
             webui.api_run(dict(pipeline='diarize4', only=['a'], preview_token=plan['token'],
                                diarization_model='nemotron', reprocess=False))
         self.assertEqual(start.call_args.kwargs['options'],
-                         {'diarization_model': 'nemotron', 'reprocess': False, 'rediarize': False})
+                         {'diarization_model': 'nemotron', 'reprocess': False, 'retranscribe': [], 'rediarize': []})
 
-    def test_rediarize_forces_only_diarization_and_reaches_the_pipeline(self):
+    def test_named_recordings_are_redone_and_reach_the_pipeline(self):
         self.transcribed()
-        plan = webui.api_run_preview('transcribe4', ['a'], diarization_model='community-1', rediarize=True)
+        plan = webui.api_run_preview('transcribe4', ['a'], diarization_model='community-1', rediarize=['a'])
         self.assertEqual([(r['stage'], r['action']) for r in plan['files']],
                          [('Transcription', 'skip'), ('Diarization', 'reprocess')])
-        self.assertTrue(plan['rediarize'])
+        self.assertEqual(plan['rediarize'], ['a'])
+        again = webui.api_run_preview('transcribe4', ['a'], diarization_model='community-1', retranscribe=['a'])
+        self.assertEqual([r['action'] for r in again['files']], ['reprocess', 'reprocess'],
+                         'A new transcript is diarized again')
         with patch('webui.subprocess.Popen', **{'return_value.pid': 12345}) as popen, patch.object(self.state, '_watch_process'):
             webui.api_run(dict(pipeline='transcribe4', only=['a'], preview_token=plan['token'],
-                               diarization_model='community-1', rediarize=True))
-        self.assertEqual(popen.call_args.kwargs['env']['SWHISPER_RUN_REPROCESS'], 'diarization')
+                               diarization_model='community-1', rediarize=['a']))
+        env = popen.call_args.kwargs['env']
+        self.assertEqual(env['SWHISPER_RUN_REDIARIZE'], 'a')
+        self.assertNotIn('SWHISPER_RUN_RETRANSCRIBE', env)
+        self.assertNotIn('SWHISPER_RUN_REPROCESS', env)
+        for bad in (['../a'], 'a', [3]):
+            with self.assertRaises(webui.HTTPException):
+                webui.api_run(dict(pipeline='transcribe4', rediarize=bad))
 
-    def test_preview_counts_outputs_that_a_force_option_would_redo(self):
+    def test_preview_reports_which_files_have_reusable_results(self):
         self.transcribed()
-        for rediarize in (False, True):
-            plan = webui.api_run_preview('transcribe4', ['a'], diarization_model='community-1', rediarize=rediarize)
-            self.assertEqual(plan['reusable'], {'transcription': 1, 'diarization': 1})
-        other = webui.api_run_preview('transcribe4', ['a'], diarization_model='nemotron')
-        self.assertEqual(other['reusable'], {'transcription': 1, 'diarization': 0})
+        (self.root / 'b.wav').write_bytes(b'new')
+        for rediarize in ([], ['a']):
+            plan = webui.api_run_preview('transcribe4', None, diarization_model='community-1', rediarize=rediarize)
+            self.assertEqual(plan['reusable'], {'a': {'transcription': True, 'diarization': True}})
+        other = webui.api_run_preview('transcribe4', None, diarization_model='nemotron')
+        self.assertEqual(other['reusable'], {'a': {'transcription': True, 'diarization': False}})
 
     def precision_switch(self, on):
         original = webui._dconfig.DiarizationConfig
@@ -162,7 +172,7 @@ class RunOptionTests(unittest.TestCase):
             webui.api_run(dict(pipeline='diarize4', preview_token=preview['token'], reprocess=True))
         start.assert_not_called()
 
-    def test_scribe_retranscribe_needs_consent_and_reaches_the_adapter(self):
+    def test_scribe_retranscribe_of_an_uploaded_recording_needs_no_new_consent(self):
         work = Path(webui.api_run_preview('scribe', selected='a')['files'][0]['work_dir'])
         saved = work / 'whisper-json-output' / 'audio.json'
         saved.parent.mkdir(parents=True)
@@ -170,13 +180,14 @@ class RunOptionTests(unittest.TestCase):
         rerun = webui.api_run_preview('scribe', selected='a', diarization_model='nemotron')
         self.assertFalse(rerun['remote'])
         self.assertEqual(rerun['files'][0]['local_settings']['pipeline_model'], 'nvidia/Nemotron-3-Diarization')
-        again = webui.api_run_preview('scribe', selected='a', diarization_model='nemotron', reprocess=True)
+        again = webui.api_run_preview('scribe', selected='a', diarization_model='nemotron', retranscribe=['a'])
         self.assertTrue(again['remote'])
+        self.assertFalse(again['consent_required'])
         self.assertIn('Uploads again', again['files'][0]['reason'])
-        with patch.object(self.state, 'start') as start, self.assertRaises(webui.HTTPException):
+        with patch.object(self.state, 'start') as start:
             webui.api_run(dict(pipeline='scribe', selected='a', language=again['language'],
-                               preview_token=again['token'], diarization_model='nemotron', reprocess=True))
-        start.assert_not_called()
+                               preview_token=again['token'], diarization_model='nemotron', retranscribe=['a']))
+        start.assert_called_once()
         with patch('transcribe_scribe.main', return_value=0) as adapter:
             self.assertEqual(webui_scribe.main([json.dumps(again)]), 0)
         argv = adapter.call_args.args[0]

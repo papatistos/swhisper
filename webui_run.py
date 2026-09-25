@@ -12,7 +12,7 @@ from sidecar import (SIDECAR_PARAMS, STAGE_DIARIZE, STAGE_TRANSCRIBE,
 FORMATS = AUDIO_EXTENSIONS
 
 
-def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False, rediarize=False):
+def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False, retranscribe=(), rediarize=()):
     """Mirror FileManager and diarize.process_file selection, without conversion.
 
     Stage two is conditional on stage one's outputs. Actual conversion/model
@@ -21,7 +21,9 @@ def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False, rediari
     *only* is a set of basenames the run is restricted to, or None for the
     whole folder; it mirrors what SWHISPER_ONLY_FILES does inside the pipeline.
     *reprocess* mirrors SWHISPER_RUN_REPROCESS=true: redo existing outputs of
-    every stage in this run. *rediarize* mirrors SWHISPER_RUN_REPROCESS=diarization.
+    every stage in this run. *retranscribe* and *rediarize* mirror
+    SWHISPER_RUN_RETRANSCRIBE and SWHISPER_RUN_REDIARIZE: basenames to redo, where
+    a new transcript also means a new diarization.
     Each row's *reusable* says whether an existing output would satisfy the
     stage if the run forced nothing, which is when a force option matters.
     """
@@ -61,7 +63,7 @@ def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False, rediari
         redo, reason = sidecar_requests_reprocess(str(audio), base, str(artifact), stage)
         if redo:
             return 'reprocess', reason, False
-        if reprocess or (rediarize and stage == STAGE_DIARIZE):
+        if reprocess or base in retranscribe or (stage == STAGE_DIARIZE and base in rediarize):
             return 'reprocess', 'Reprocessing requested for this run', True
         return 'skip', 'Existing output; no reprocessing requested', True
 
@@ -130,11 +132,21 @@ def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False, rediari
     if len({r['base'] for r in rows if r['stage'] != 'Diarization'}) < len([r for r in rows if r['stage'] != 'Diarization']):
         notes.append('Multiple audio files share a basename and therefore share outputs; the pipeline may process that basename more than once.')
     result = dict(audio_dir=str(audio), pipeline=pipeline, files=rows, notes=notes,
-                  only=sorted(only) if only is not None else None, reprocess=reprocess, rediarize=rediarize,
-                  reusable=dict(transcription=sum(r['reusable'] for r in rows if r['stage'] == 'Transcription'),
-                                diarization=sum(r['reusable'] for r in rows if r['stage'] == 'Diarization')))
+                  only=sorted(only) if only is not None else None, reprocess=reprocess,
+                  retranscribe=sorted(retranscribe), rediarize=sorted(rediarize), reusable=reusable_by_file(rows))
     payload = json.dumps([result, evidence], sort_keys=True).encode()
     result['token'] = hashlib.sha256(payload).hexdigest()
+    return result
+
+
+def reusable_by_file(rows):
+    """{base: {'transcription': bool, 'diarization': bool}} for files with a reusable result."""
+    stages = {'Transcription': 'transcription', 'Diarization': 'diarization'}
+    result = {}
+    for row in rows:
+        stage = stages.get(row['stage'])
+        if stage and row.get('reusable'):
+            result.setdefault(row['base'], {'transcription': False, 'diarization': False})[stage] = True
     return result
 
 
