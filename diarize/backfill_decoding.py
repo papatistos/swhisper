@@ -2,7 +2,19 @@
 import math
 
 
-def _validate_scores(values, settings):
+def _rejected(reason, values, text):
+    """The rejection message, with what Whisper heard so a reviewer can judge it."""
+    no_speech = values.get('no_speech_prob')
+    if isinstance(no_speech, (int, float)) and math.isfinite(no_speech):
+        reason += f' (no_speech_prob {no_speech:.2f})'
+    if text is not None:
+        heard = ' '.join(str(text).split())
+        heard = heard[:120] + '…' if len(heard) > 120 else heard
+        reason += f'; rejected text: "{heard}"' if heard else '; rejected text: (empty)'
+    return ValueError(reason)
+
+
+def _validate_scores(values, settings, text=None):
     checks = [('avg_logprob', settings.get('logprob_threshold', -1.0), 'below'),
               ('compression_ratio', settings.get('compression_ratio_threshold', 2.4), 'above')]
     for field, threshold, direction in checks:
@@ -10,10 +22,11 @@ def _validate_scores(values, settings):
             continue
         value = values.get(field)
         if value is None or not math.isfinite(float(value)):
-            raise ValueError(f'Backfill rejected: missing or invalid {field}')
+            raise _rejected(f'Backfill rejected: missing or invalid {field}', values, text)
         value = float(value)
         if (direction == 'below' and value < threshold) or (direction == 'above' and value > threshold):
-            raise ValueError(f'Backfill rejected: {field} {value:.3f} {direction} threshold {threshold:g}')
+            raise _rejected(f'Backfill rejected: {field} {value:.3f} {direction} threshold {threshold:g}',
+                            values, text)
 
 
 def transcribe_with_policy(transcribe, model, audio, settings, try_harder=False):
@@ -40,7 +53,7 @@ def transcribe_with_policy(transcribe, model, audio, settings, try_harder=False)
                        and values['no_speech_prob'] > no_speech
                        and values['avg_logprob'] < logprob)
             if not silence:
-                _validate_scores(values, settings)
+                _validate_scores(values, settings, getattr(candidate, 'text', None))
         return result
 
     model.decode = checked_decode
@@ -71,4 +84,4 @@ def validate_result(result, settings, start, end):
         if not any(w.get('end', start) > start and w.get('start', end) < end
                    for w in segment.get('words', [])):
             continue
-        _validate_scores(segment, settings)
+        _validate_scores(segment, settings, segment.get('text'))

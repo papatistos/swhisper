@@ -29,12 +29,12 @@ def test_default_attempt_does_not_mutate_transcription_settings():
 def test_reject_before_low_confidence_decoding_can_become_empty_result():
     class Model:
         def decode(self):
-            return SimpleNamespace(avg_logprob=-1.42, compression_ratio=.8, no_speech_prob=0.01)
+            return SimpleNamespace(avg_logprob=-1.42, compression_ratio=.8, no_speech_prob=0.01, text=' mm  ')
     model = Model()
     def transcribe(model, audio, **settings):
         model.decode()
         return {'segments': []}
-    with pytest.raises(ValueError, match='avg_logprob'):
+    with pytest.raises(ValueError, match=r'avg_logprob -1\.420 below .*no_speech_prob 0\.01.*rejected text: "mm"'):
         transcribe_with_policy(transcribe, model, None, {})
     assert 'decode' not in vars(model)
     assert transcribe_with_policy(transcribe, model, None, {}, True) == {'segments': []}
@@ -55,8 +55,9 @@ def test_decoder_silence_exception_and_existing_override_are_preserved():
                                              (float('nan'), 1, 'invalid'),
                                              (None, 1, 'missing')])
 def test_failed_quality_checks_are_rejected(score, ratio, reason):
-    with pytest.raises(ValueError, match=reason):
+    with pytest.raises(ValueError, match=reason) as rejected:
         validate_result({'segments': [candidate(score, ratio)]}, {}, 0, .3)
+    assert str(rejected.value).endswith('rejected text: "hej"')
 
 
 def test_accepted_silence_and_padding_do_not_fail():
@@ -102,6 +103,7 @@ def test_worker_rejects_uncertain_text_only_in_default_mode(monkeypatch, tmp_pat
         assert result['word_count'] == 0
         failed = result['failed_turns'][0]
         assert 'avg_logprob' in failed['backfill_error']
+        assert 'rejected text: "hej"' in failed['backfill_error']
         assert failure_segment(failed, failed['backfill_error'])['text'] == '[---]'
 
 
