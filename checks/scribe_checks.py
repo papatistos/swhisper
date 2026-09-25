@@ -167,6 +167,29 @@ class PrototypeChecks(unittest.TestCase):
             self.assertEqual(config.final_json_input_dir, str(work / "whisper-json-output"))
             self.assertEqual(config.final_output_dir, str(work / "transcripts"))
 
+    def test_local_handoff_reuses_diarization_from_the_same_model(self):
+        import diarize4
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "interview.wav"
+            work = Path(directory) / "run"
+            (work / "transcripts").mkdir(parents=True)
+            (work / "transcripts" / "audio.ok").write_text(
+                "# Diarization model: pyannote/speaker-diarization-community-1\n")
+            processor = Mock(return_value=True)
+            module = SimpleNamespace(process_file=processor)
+            spec = SimpleNamespace(loader=SimpleNamespace(exec_module=lambda module: None))
+            with patch.object(diarize4, "ensure_pyannote_v4"), \
+                    patch("transcribe_scribe.importlib.util.spec_from_file_location", return_value=spec), \
+                    patch("transcribe_scribe.importlib.util.module_from_spec", return_value=module):
+                transcribe_scribe.local_diarization(source, work, "audio.json", "community-1")
+                processor.assert_not_called()
+                self.assertFalse((work / "local-runs").exists())
+                transcribe_scribe.local_diarization(source, work, "audio.json", "nemotron")
+                self.assertEqual(processor.call_count, 1)
+                self.assertTrue(processor.call_args.args[0].force_reprocess)
+                transcribe_scribe.local_diarization(source, work, "audio.json", "community-1", force=True)
+                self.assertEqual(processor.call_count, 2)
+
     def test_transcription_only_and_cached_restart(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "original.wav"

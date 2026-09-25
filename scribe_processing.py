@@ -1,14 +1,15 @@
 """Scribe local-processing policy and UI capabilities, without model imports."""
 from pathlib import Path
 
-from sidecar import SIDECAR_PARAMS, apply_sidecar_to_diarization_config
+from diarization_status import model_run_reason
+from sidecar import (SIDECAR_PARAMS, STAGE_DIARIZE, apply_sidecar_to_diarization_config,
+                     sidecar_requests_reprocess)
 
 
 UNSUPPORTED = {
     'SWHISPER_USE_PRECISION': 'Scribe uses local community-1 or Nemotron; Precision is not integrated.',
     'SWHISPER_PRECISION_MODEL': 'Scribe uses local community-1 or Nemotron; Precision is not integrated.',
     'SWHISPER_WHISPER_TIMESTAMP_OFFSET': 'Use the separate Scribe timestamp offset, which defaults to zero.',
-    'SWHISPER_DIARIZE_FORCE_REPROCESS': 'Scribe always repeats local processing and exports; inference may reuse its cache.',
     'SWHISPER_OUTPUT_DIR': 'Scribe exports stay inside its isolated work directory.',
     'JSON_INPUT_DIR': 'Scribe reads its saved normalized remote result from its isolated work directory.',
     'SWHISPER_VERBOSE': 'Local backfill sets Whisper verbose output off.',
@@ -53,9 +54,37 @@ def configure(config, source, work_dir):
     config.backfill_cache_dir = str(work_dir / '.backfill_cache')
     config.backfill_snippet_dir = str(work_dir / 'backfill_snippets')
     config.enable_parameter_testing = False
-    config.force_reprocess = True
     config.backfill_enable_sensevoice = bool(config.backfill_missing_turns and config.backfill_enable_sensevoice)
     return config
+
+
+def completion_marker(work_dir):
+    """The local diarization marker for the saved Scribe transcript audio.json."""
+    return Path(work_dir) / 'transcripts' / 'audio.ok'
+
+
+def diarization_reason(config, source, work_dir, force=False):
+    """Why local diarization must run after Scribe, or None to reuse the last result.
+
+    *config* is the configured result of configure(). The recording's sidecar
+    sits next to the source, not in the isolated work directory.
+    """
+    source = Path(source)
+    marker = completion_marker(work_dir)
+    if not marker.is_file():
+        return 'No local diarization yet'
+    if force:
+        return 'Force reprocessing requested for this run'
+    if config.force_reprocess:
+        return 'Force reprocessing enabled'
+    reason = model_run_reason(marker, config.pipeline_model)
+    if reason:
+        return reason
+    if any(f'# Backfill status: {status}' in marker.read_text(encoding='utf-8')
+           for status in ('failed', 'partial')):
+        return 'Previous backfill was incomplete; resume from saved gaps'
+    redo, reason = sidecar_requests_reprocess(str(source.parent), source.stem, str(marker), STAGE_DIARIZE)
+    return reason if redo else None
 
 
 def effective_settings(config):

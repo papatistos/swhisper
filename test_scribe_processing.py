@@ -140,6 +140,9 @@ def test_rerun_with_saved_transcript_needs_no_credentials_or_browser(tmp_path, m
         with patch.object(ScribeClient, '__init__', side_effect=AssertionError('SUNET contacted')), \
                 patch.object(scribe_browser_auth, 'BrowserTokenProvider', side_effect=AssertionError('BrowserOS opened')):
             assert transcribe_scribe.main([str(source), '--work-dir', str(work), '--auth', 'browseros']) == 0
+            # The rerun reuses the diarization from the same model.
+            assert len(list((work / 'transcripts/json').glob('*_diarized.json'))) == 1
+            assert transcribe_scribe.main([str(source), '--work-dir', str(work), '--auth', 'browseros', '--rediarize']) == 0
     assert len(list((work / 'transcripts/json').glob('*_diarized.json'))) == 2
 
 

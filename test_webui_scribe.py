@@ -218,6 +218,48 @@ assert 'diarize.utils' not in sys.modules
                                preview_token=preview['token']))
         start.assert_not_called()
 
+    def test_saved_diarization_from_the_selected_model_is_reused(self):
+        from webui_scribe import preview_scribe
+        work = Path(preview_scribe(self.root, selected='a')['files'][0]['work_dir'])
+        saved = work / 'whisper-json-output' / 'audio.json'
+        saved.parent.mkdir(parents=True)
+        saved.write_text('{}')
+        marker = work / 'transcripts' / 'audio.ok'
+        marker.parent.mkdir(parents=True)
+        marker.write_text('# Diarization model: pyannote/speaker-diarization-community-1\n')
+        row = preview_scribe(self.root, selected='a', diarization_model='community-1')['files'][0]
+        self.assertEqual(row['action'], 'skip')
+        self.assertEqual(row['reusable'], {'transcription': True, 'diarization': True})
+        self.assertIn('reuses the local', row['reason'])
+        forced = preview_scribe(self.root, selected='a', diarization_model='community-1', rediarize=True)
+        self.assertEqual(forced['files'][0]['action'], 'process')
+        self.assertTrue(forced['rediarize'])
+        other = preview_scribe(self.root, selected='a', diarization_model='nemotron')['files'][0]
+        self.assertEqual(other['action'], 'process')
+        self.assertFalse(other['reusable']['diarization'])
+        # A new Scribe transcript always needs a new diarization.
+        again = preview_scribe(self.root, selected='a', diarization_model='community-1', retranscribe=True)
+        self.assertEqual(again['files'][0]['action'], 'process')
+        self.assertIn('New Scribe transcript', again['files'][0]['reason'])
+
+    def test_batch_runs_only_reviewed_files_that_need_work(self):
+        import webui_scribe
+        work = Path(webui_scribe.preview_scribe(self.root, selected='a')['files'][0]['work_dir'])
+        (work / 'whisper-json-output').mkdir(parents=True)
+        (work / 'whisper-json-output' / 'audio.json').write_text('{}')
+        (work / 'transcripts').mkdir()
+        (work / 'transcripts' / 'audio.ok').write_text('# Diarization model: pyannote/speaker-diarization-community-1\n')
+        plan = webui_scribe.preview_scribe(self.root, diarization_model='community-1')
+        self.assertEqual([r['action'] for r in plan['files']], ['skip', 'process'])
+        with patch('transcribe_scribe.main', return_value=0) as adapter:
+            self.assertEqual(webui_scribe.main([json.dumps(plan)]), 0)
+        self.assertEqual(adapter.call_count, 1)
+        self.assertIn(str(self.root / 'b.wav'), adapter.call_args.args[0])
+        plan = webui_scribe.preview_scribe(self.root, selected='a', diarization_model='community-1', rediarize=True)
+        with patch('transcribe_scribe.main', return_value=0) as adapter:
+            self.assertEqual(webui_scribe.main([json.dumps(plan)]), 0)
+        self.assertIn('--rediarize', adapter.call_args.args[0])
+
     def test_selected_scope_validates_identity_before_remote_start(self):
         selected = webui.api_run_preview('scribe', selected='a', language='Swedish')
         self.assertEqual([r['file'] for r in selected['files']], ['a.wav'])

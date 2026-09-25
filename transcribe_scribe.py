@@ -72,7 +72,7 @@ def restore_working_audio(source, wav_path, state, state_path):
     print("Local audio copy rebuilt. Continuing with the saved Scribe job.", flush=True)
 
 
-def local_diarization(source, work_dir, json_name, diarization_model=None):
+def local_diarization(source, work_dir, json_name, diarization_model=None, force=False):
     # Imports delayed until after remote transcription. Local Whisper loads only if backfill needs it.
     from diarize import DiarizationConfig
     from diarize4 import ensure_pyannote_v4, resolve_pyannote_token
@@ -91,7 +91,7 @@ def local_diarization(source, work_dir, json_name, diarization_model=None):
         def audio_subdir(self):
             return ""
 
-    from scribe_processing import configure, effective_settings
+    from scribe_processing import configure, diarization_reason, effective_settings
     from transcribe import WhisperSettings
     from sidecar import sidecar_overrides
 
@@ -99,6 +99,14 @@ def local_diarization(source, work_dir, json_name, diarization_model=None):
     if diarization_model:
         config.pipeline_model = DIARIZATION_MODELS[diarization_model]
     config = configure(config, source, work_dir)
+    reason = diarization_reason(config, source, work_dir, force)
+    if reason is None:
+        print("Reusing the local diarization of this Scribe transcript; "
+              "force reprocessing to run it again.", flush=True)
+        return
+    print(f"Local diarization: {reason}.", flush=True)
+    # The decision above already covered the marker; process_file must not skip.
+    config.force_reprocess = True
     whisper_settings = WhisperSettings()
     with sidecar_overrides(str(source.parent), source.stem, whisper_settings=whisper_settings):
         config.backfill_whisper_settings = whisper_settings.to_dict()
@@ -226,6 +234,7 @@ def run_locked(args, source, work_dir):
                 state['local_pcm_sha256'] = audio_checksum
                 atomic_json(state_path, state)
 
+    new_transcript = False
     if getattr(args, "retranscribe", False):
         if output_path.exists():
             supersede_remote_result(work_dir, state, state_path, output_path)
@@ -272,9 +281,12 @@ def run_locked(args, source, work_dir):
         atomic_json(output_path, result)
         state["output_sha256"] = sha256(output_path)
         atomic_json(state_path, state)
+        new_transcript = True
         print(f"Saved timed transcription: {output_path}", flush=True)
     if not args.transcription_only:
-        local_diarization(source, work_dir, output_path.name, getattr(args, "diarization_model", None))
+        # Diarization is aligned to the transcript, so a new one needs a new run.
+        local_diarization(source, work_dir, output_path.name, getattr(args, "diarization_model", None),
+                          force=new_transcript or getattr(args, "rediarize", False))
     print(f"Prototype results: {work_dir}", flush=True)
 
 
@@ -293,6 +305,8 @@ def main(argv=None):
                         help="Local diarization model for this run (default: SWHISPER_PIPELINE_MODEL, else community-1)")
     parser.add_argument("--retranscribe", action="store_true",
                         help="Upload again for a new SUNET transcript; the saved one moves to superseded/")
+    parser.add_argument("--rediarize", action="store_true",
+                        help="Run local diarization again although a result from this model exists")
     parser.add_argument("--job-id", help="Adopt an existing job for this exact audio and language; verify these in Scribe")
     parser.add_argument("--base-url", default="https://scribe.sunet.se", help="Scribe HTTPS origin")
     parser.add_argument("--poll-interval", type=float, default=10)
