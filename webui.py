@@ -1436,6 +1436,30 @@ def _validate_export_targets(dirs, base, targets) -> None:
         raise HTTPException(409, 'Export targets cannot be symbolic links')
 
 
+def _export_content(fmt: str, rendered: Dict[str, Any]) -> str:
+    """Format one rendered transcript (the ``_render`` results by name) as TXT or RTF."""
+    options = rendered['options']
+    formatter = TXTFormatter() if fmt == 'txt' else RTFFormatter()
+    return formatter.render(rendered['segments'],
+                            config=_render_config(options.linebreak_threshold, options.preamble),
+                            transcript_id=rendered['selected'].get('timestamp'),
+                            speaker_stats=rendered['metadata'].get('speaker_stats'),
+                            stats=options.stats)
+
+
+def _write_export_file(target: Path, content: str) -> None:
+    """Replace ``target`` atomically, so a failed write never leaves half a file."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix='.swhisper-export-', dir=target.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            handle.write(content)
+        os.replace(temporary, target)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 @app.post('/api/render/{basename}/save-as')
 def api_render_save_as(basename: str, body: Dict[str, Any]) -> Dict[str, Any]:
     """Ask macOS where one rendered transcript copy should be saved.
@@ -1486,23 +1510,9 @@ def api_render_save_selected(basename: str, body: Dict[str, Any]) -> Dict[str, A
         raise HTTPException(409, 'Choose the export location again before saving')
     target = selection['target']
     _validate_export_targets(selection['dirs'], selection['base'], [target])
-    formatter = TXTFormatter() if selection['format'] == 'txt' else RTFFormatter()
-    content = formatter.render(selection['segments'],
-                               config=_render_config(selection['options'].linebreak_threshold,
-                                                     selection['options'].preamble),
-                               transcript_id=selection['selected'].get('timestamp'),
-                               speaker_stats=selection['metadata'].get('speaker_stats'),
-                               stats=selection['options'].stats)
+    content = _export_content(selection['format'], selection)
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        fd, temporary = tempfile.mkstemp(prefix='.swhisper-export-', dir=target.parent)
-        try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as handle:
-                handle.write(content)
-            os.replace(temporary, target)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
+        _write_export_file(target, content)
     except OSError as exc:
         raise HTTPException(500, f"Could not export transcript: {exc}") from None
     return {'written': [str(target)]}
