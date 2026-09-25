@@ -8,6 +8,12 @@ LEGACY_MODEL = "pyannote/speaker-diarization-3.1"
 PRECISION_MODEL = "pyannote/speaker-diarization-precision-2"
 
 
+def diarization_model_label(config):
+    """Describe the active configuration without guessing a backend."""
+    model = getattr(config, 'pipeline_model', None)
+    return model.strip() if isinstance(model, str) and model.strip() else 'unspecified model'
+
+
 def effective_v4_model(config):
     """The model diarize4 actually runs, including its legacy-default upgrade."""
     if getattr(config, 'use_precision_service', False):

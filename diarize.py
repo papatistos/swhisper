@@ -60,7 +60,7 @@ from diarize.utils import logger_manager, BackfillTranscriber, BackfillCache, Wo
 from transcript_render import RenderOptions, derive_segments
 from transcribe import TranscriptionConfig, WhisperSettings
 from sidecar import apply_sidecar_to_diarization_config, sidecar_requests_reprocess, STAGE_DIARIZE
-from diarization_status import model_run_reason
+from diarization_status import diarization_model_label, model_run_reason
 
 
 # Ensure progress messages appear immediately even when stdout is buffered
@@ -214,6 +214,7 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             print()
             print("-" * 80)
             print(f"🎯 DIARIZATION LOG FOR: {audio_basename}")
+            print(f"Diarization model: {diarization_model_label(config)}")
             print(f"Timestamp: {log_timestamp}")
             print(f"Processing file {processed_files} of {total_files}")
             print(f"Audio file: {audio_basename}")
@@ -266,7 +267,7 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
             duration = endtime - starttime
             print(f"{endtime.strftime('%Y-%m-%d %H:%M:%S')} - Transcription loaded. (Duration: {duration})")
 
-            # 2. Diarize with Pyannote 
+            # 2. Diarize with the configured model.
             starttime = datetime.now()
             print(f"{starttime.strftime('%Y-%m-%d %H:%M:%S')} - Step 2: Performing speaker diarization... (this can take a while)")
             
@@ -359,23 +360,23 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                     print("  -> Exclusive diarization stream enabled; using exclusive_speaker_diarization output.")
                     diarization_result = exclusive_result
                 else:
-                    print("  -> Exclusive diarization stream available (pyannote.audio >= 4) but disabled in config.")
+                    print("  -> Exclusive diarization stream available but disabled in config.")
             elif exclusive_requested:
                 print("  -> Exclusive diarization stream requested but not available; using standard diarization output.")
 
             DiarizationAnalyzer.analyze_diarization_result(diarization_result)
             
-            # Save pyannote segment boundaries in TSV format
-            print("  -> Saving pyannote segment boundaries (overlapping timeline)...")
-            overlap_segments_filename = f"{base_filename}_{log_timestamp}_pyannote_segments_overlapping.tsv"
+            # Save diarization segment boundaries in TSV format.
+            print("  -> Saving diarization segment boundaries (overlapping timeline)...")
+            overlap_segments_filename = f"{base_filename}_{log_timestamp}_diarization_segments_overlapping.tsv"
             overlap_segments_path = os.path.join(subdirs['tsv'], overlap_segments_filename)
             PyannoteSegmentFormatter().format(standard_result, overlap_segments_path, audio_basename=audio_basename)
             print(f"Overlapping segments saved to tsv/{overlap_segments_filename}")
 
             exclusive_segments_filename = None
             if exclusive_result is not None:
-                print("  -> Saving pyannote segment boundaries (exclusive timeline)...")
-                exclusive_segments_filename = f"{base_filename}_{log_timestamp}_pyannote_segments_exclusive.tsv"
+                print("  -> Saving diarization segment boundaries (exclusive timeline)...")
+                exclusive_segments_filename = f"{base_filename}_{log_timestamp}_diarization_segments_exclusive.tsv"
                 exclusive_segments_path = os.path.join(subdirs['tsv'], exclusive_segments_filename)
                 PyannoteSegmentFormatter().format(exclusive_result, exclusive_segments_path, audio_basename=audio_basename)
                 print(f"Exclusive segments saved to tsv/{exclusive_segments_filename}")
