@@ -16,6 +16,7 @@ const element = id => {
 const selector = element('pipelineSel');
 selector.options = ['transcribe4', 'transcribe5', 'diarize4', 'scribe'].map(value => ({value}));
 selector.value = 'transcribe4';
+Object.assign(element('runModel'), {options: [], selectedOptions: []});
 let status = {running: true, pipeline: 'transcribe5', run_id: 'existing-run',
               started_at: Date.now() / 1000, progress: {}};
 const context = vm.createContext({

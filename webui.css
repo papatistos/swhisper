@@ -263,6 +263,10 @@ body.filesCollapsed #filePanel, body.filesCollapsed #sidebarResize { display: no
 .resetSetting { padding: 2px 6px; font-size: .65rem; margin-left: 6px; }
 details.group > summary { cursor: pointer; font-size: .9rem; padding: 8px 0; border-bottom: 1px solid var(--border); }
 #pipelineSel { min-width: 0; max-width: 100%; }
+/* Each model selector keeps its force option beside it. */
+.runChoice { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
+.runChoice label { font-size: .8rem; white-space: nowrap; }
+.runChoice input:disabled + span { color: var(--muted); }
 #editorBar, #transcriptBar { flex-wrap: wrap; }
 #audioBar { padding: 8px 16px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 #audioBar[hidden], #timeline[hidden] { display: none; }

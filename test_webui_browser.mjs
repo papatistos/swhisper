@@ -14,7 +14,7 @@ let audioDir = '/mock/audio', serverFolder = null, offline = false, failSave = f
 let status = {running:false, pipeline:null, returncode:null, run_id:null, progress:{completed:{}}};
 const saved = {a:{values:{SWHISPER_NUM_SPEAKERS:'2',SWHISPER_CONDITION_ON_PREVIOUS:'yes'},comment:'original'}, b:{values:{},comment:'B'}};
 const writes = [], launches = [], errors = [], exports = [];
-let globalValues={}, globalRevision="g1", exportCanceled=false;
+let globalValues={}, globalRevision="g1", exportCanceled=false, reusableFixture={transcription:2,diarization:1};
 let previewAllSkipped=false;
 let speakerNames={};
 let speakerSuggestions={};
@@ -42,7 +42,8 @@ const interviewParams = {
       INTERVIEWEE_NAME:{type:'str',stage:'diarize',label:'Interviewee name',global:'INTERVIEWEE',help:'Name for the speaker with the highest word count when recording type is Interview. Default: INTERVIEWEE.',scribe:{supported:true}},
 };
 const meta = () => ({audio_dir:audioDir,audio_paths:['/mock/audio','/mock/other'],
-  pipelines:[{id:'transcribe4',label:'Standard pipeline'},{id:'diarize4',label:'Diarization only'},{id:'scribe',label:'SUNET Scribe + local diarization'}],groups:[{name:'Speakers',keys:['SWHISPER_NUM_SPEAKERS','SWHISPER_CONDITION_ON_PREVIOUS','SWHISPER_VAD']}],
+  pipelines:[{id:'transcribe4',label:'Standard pipeline',choice:'Local Whisper'},{id:'diarize4',label:'Diarization only',choice:null},{id:'scribe',label:'SUNET Scribe + local diarization',choice:'SUNET Scribe (remote)'}],
+  diarization_models:[{id:'community-1',label:'pyannote community-1'},{id:'nemotron',label:'Nemotron 3 (up to 8 speakers)'},{id:'precision',label:'pyannote Precision-2 (hosted)'}],diarization_default:'community-1',groups:[{name:'Speakers',keys:['SWHISPER_NUM_SPEAKERS','SWHISPER_CONDITION_ON_PREVIOUS','SWHISPER_VAD']}],
   params:{...interviewParams,SWHISPER_VAD:{type:'bool',global:true,stage:'transcribe',scribe:{supported:false,scope:'Unavailable for Scribe',description:'Not applied to Scribe.'}},SWHISPER_NUM_SPEAKERS:{type:'int',min:1,label:'Number of speakers',global:2,stage:'diarize',help:'Speaker count',scribe:{supported:true,description:'Local speaker count'}},SWHISPER_CONDITION_ON_PREVIOUS:{type:'bool',global:true,stage:'transcribe',help:'Use previous text',scribe:{supported:true,scope:'Local backfill only',description:'Local Whisper backfill only'}}}});
 const server = http.createServer(async (req,res) => {
   const u = new URL(req.url, 'http://localhost');
@@ -103,14 +104,16 @@ const server = http.createServer(async (req,res) => {
   if (u.pathname === '/api/audio-dir') {audioDir=data.path;return send({audio_dir:audioDir,audio_paths:['/mock/audio','/mock/other']});}
   if (u.pathname === '/api/audio-dir/pick') {await delay(pickDelay);return send({path:'/mock/picked'});}
   if (u.pathname === '/api/run/preview') {
-    const only=u.searchParams.getAll('only'), reprocess=u.searchParams.get('reprocess')==='true';
+    const only=u.searchParams.getAll('only'), reprocess=u.searchParams.get('reprocess')==='true', rediarize=u.searchParams.get('rediarize')==='true';
+    const forced=reprocess||rediarize;
     const files=previewAllSkipped
-      ? [{file:'a.json',stage:'Diarization',action:reprocess?'reprocess':'skip',reason:reprocess?'Reprocessing requested for this run':'Existing output; no reprocessing requested'}]
+      ? [{file:'a.json',stage:'Diarization',action:forced?'reprocess':'skip',reason:forced?'Reprocessing requested for this run':'Existing output; no reprocessing requested'}]
       : [{file:'a.wav',stage:'Transcription',action:'process',reason:'No output'},{file:'b.wav',stage:'Transcription',action:'skip',reason:'Existing output'},{file:'c.wav',stage:'Transcription',action:'skip',reason:'Existing output'}];
-    const notes=previewAllSkipped && !reprocess
-      ? ['Run is disabled because existing outputs are being skipped. To run them again, cancel this preview, enable "Reprocess existing outputs", then select Run again. Selecting a recording alone does not enable reprocessing.']
+    const notes=previewAllSkipped && !forced
+      ? ['Run is disabled because existing outputs are being skipped. To run them again, cancel this preview, tick "Force reprocessing" under the transcription or diarization model, then select Run again. Selecting a recording alone does not enable reprocessing.']
       : ['Folder scope'];
-    return send({audio_dir:audioDir,pipeline:u.searchParams.get('pipeline'),token:`preview-${reprocess}`,diarization_model:u.searchParams.get('diarization_model'),reprocess,only:only.length?only:null,notes,files});
+    const reusable=previewAllSkipped?{transcription:0,diarization:1}:reusableFixture;
+    return send({audio_dir:audioDir,pipeline:u.searchParams.get('pipeline'),token:`preview-${reprocess}-${rediarize}`,diarization_model:u.searchParams.get('diarization_model'),reprocess,rediarize,reusable,only:only.length?only:null,notes,files});
   }
   if (u.pathname === '/api/run' && req.method === 'POST') {launches.push(data);status={running:true,pipeline:'transcribe4',run_id:'run1',started_at:Date.now()/1000,audio_dir:audioDir,progress:{stage:'Transcription',current_file:'a.wav',file_index:1,total_files:2,completed:{Transcription:0}}};return send(status);}
   if (u.pathname === '/api/run/stop') {status={...status,running:false,stop_requested:true,returncode:0};return send(status);}
@@ -437,23 +440,50 @@ try {
   });
   await check('Skipped output disables Run until reprocessing is requested',async()=>{
     previewAllSkipped=true;
-    await evaluate('$("pipelineSel").value="diarize4";$("runModel").value="nemotron";$("runReprocess").checked=false');
+    await evaluate('$("pipelineSel").value="transcribe4";$("runModel").value="nemotron";$("runReprocess").checked=false;$("runRediarize").checked=false;syncForce();updateRunControls()');
+    await wait('$("runReprocessRow").hidden && !$("runRediarizeRow").hidden');
     await click('startBtn');await wait('$("previewDialog").open');
     assert.equal(await evaluate('$("previewStart").disabled'),true);
-    assert.match(await evaluate('$("previewNotes").textContent'),/Reprocess existing outputs/);
+    assert.match(await evaluate('$("previewNotes").textContent'),/Force reprocessing/);
     if (process.env.SWHISPER_TEST_SCREENSHOT) {
       const screenshot=await cdp('Page.captureScreenshot',{format:'png'});
       await fs.writeFile(process.env.SWHISPER_TEST_SCREENSHOT,Buffer.from(screenshot.data,'base64'));
     }
-    await click('previewCancel');await click('runReprocess');
+    await click('previewCancel');await click('runRediarize');
     await click('startBtn');await wait('$("previewDialog").open');
     assert.equal(await evaluate('$("previewStart").disabled'),false);
     assert.match(await evaluate('$("previewTable").textContent'),/Reprocessing requested/);
-    assert.equal(await evaluate('pendingPreview.reprocess'),true);
+    assert.equal(await evaluate('pendingPreview.reprocess'),false);
+    assert.equal(await evaluate('pendingPreview.rediarize'),true);
     assert.equal(await evaluate('pendingPreview.diarization_model'),'nemotron');
     await click('previewCancel');
-    await evaluate('$("pipelineSel").value="transcribe4";$("runModel").value="";$("runReprocess").checked=false');
+    await evaluate('$("runModel").value="community-1";$("runRediarize").checked=false');
     previewAllSkipped=false;
+    await evaluate('updateRunControls()');
+  });
+  await check('Force options follow reusable results and a forced transcript forces diarization',async()=>{
+    reusableFixture={transcription:0,diarization:0};
+    await evaluate('reuseKey="";updateRunControls()');
+    await wait('$("runReprocessRow").hidden && $("runRediarizeRow").hidden');
+    reusableFixture={transcription:2,diarization:1};
+    await evaluate('reuseKey="";updateRunControls()');
+    await wait('!$("runReprocessRow").hidden && !$("runRediarizeRow").hidden');
+    assert.equal(await evaluate('$("runReprocessLabel").textContent'),'Force reprocessing (2 files)');
+    assert.equal(await evaluate('$("runRediarizeLabel").textContent'),'Force reprocessing');
+    await evaluate('$("runReprocess").checked=false;$("runRediarize").checked=false;syncForce()');
+    await click('runReprocess');
+    assert.equal(await evaluate('$("runRediarize").checked && $("runRediarize").disabled'),true);
+    await click('startBtn');await wait('$("previewDialog").open');
+    assert.deepEqual(await evaluate('[pendingPreview.reprocess,pendingPreview.rediarize]'),[true,false]);
+    await click('previewCancel');
+    await click('runReprocess');
+    assert.equal(await evaluate('$("runRediarize").checked || $("runRediarize").disabled'),false);
+    await evaluate('$("runModel").value="precision";$("pipelineSel").value="scribe";$("pipelineSel").dispatchEvent(new Event("change"))');
+    assert.equal(await evaluate('[...$("runModel").options].find(o=>o.value==="precision").disabled'),true);
+    assert.equal(await evaluate('$("runModel").value'),'community-1','Scribe cannot use Precision');
+    await evaluate('$("pipelineSel").value="transcribe4";$("pipelineSel").dispatchEvent(new Event("change"))');
+    assert.deepEqual(await evaluate('[...$("pipelineSel").options].map(o=>o.textContent)'),
+                     ['Transcription: Local Whisper','Transcription: SUNET Scribe (remote)']);
   });
   await check('Selected files narrow the run and reach the launch call',async()=>{
     assert.equal(await evaluate('$("startBtn").textContent'),'Run');
@@ -648,11 +678,7 @@ try {
     await select('b');await wait('$("dirtyDialog").open');await click('dirtyCancel');assert.equal(await evaluate('editorScope'),'global','cancelling the dirty dialog keeps the global editor open');
     await select('b');await wait('$("dirtyDialog").open');await click('dirtyDiscard');await wait('editorBase==="b"');
   });
-  await check('Pipeline-specific fields and inline number validation',async()=>{
-    await evaluate('$("pipelineSel").value="diarize4";filterSettings()');
-    assert.equal(await evaluate('$("setting-SWHISPER_CONDITION_ON_PREVIOUS").closest(".row").hidden'),true);
-    await evaluate('$("showOtherSettings").checked=true;filterSettings()');
-    assert.equal(await evaluate('$("setting-SWHISPER_CONDITION_ON_PREVIOUS").closest(".row").hidden'),false);
+  await check('Inline number validation',async()=>{
     await evaluate('$("setting-SWHISPER_NUM_SPEAKERS").value="0";$("setting-SWHISPER_NUM_SPEAKERS").dispatchEvent(new Event("input"))');
     assert.notEqual(await evaluate('$("error-SWHISPER_NUM_SPEAKERS").textContent'),'');
     await evaluate('restoreSavedForm();$("pipelineSel").value="transcribe4";filterSettings()');
@@ -997,7 +1023,7 @@ try {
     await click('tabTranscript');failSave=true;await click('startBtn');await wait('$("dirtyDialog").open');await click('dirtySave');
     await wait('!saving && !$("uiNotice").hidden');assert.equal(await evaluate('currentTab'),'transcript');assert.equal(launches.length,n);failSave=false;
   });
-  await check('Run asks to save, then previews folder before launch',async()=>{const launchedBefore=launches.length;await click('startBtn');await wait('$("dirtyDialog").open');await click('dirtySave');await wait('$("previewDialog").open');assert.equal(launches.length,launchedBefore);assert.equal(saved.b.comment,'folder draft');assert.equal(await evaluate('$("previewTable").querySelectorAll("tbody tr").length'),1);const shot=await cdp('Page.captureScreenshot',{format:'png'});await fs.writeFile('/private/tmp/swhisper-run-preview.png',Buffer.from(shot.data,'base64'));await click('previewStart');await wait('lastStatus?.running && !runBusy');assert.equal(launches.at(-1).preview_token,'preview-false');assert.equal(await evaluate('$("dirMenuBtn").disabled'),true);});
+  await check('Run asks to save, then previews folder before launch',async()=>{const launchedBefore=launches.length;await click('startBtn');await wait('$("dirtyDialog").open');await click('dirtySave');await wait('$("previewDialog").open');assert.equal(launches.length,launchedBefore);assert.equal(saved.b.comment,'folder draft');assert.equal(await evaluate('$("previewTable").querySelectorAll("tbody tr").length'),1);const shot=await cdp('Page.captureScreenshot',{format:'png'});await fs.writeFile('/private/tmp/swhisper-run-preview.png',Buffer.from(shot.data,'base64'));await click('previewStart');await wait('lastStatus?.running && !runBusy');assert.equal(launches.at(-1).preview_token,'preview-false-false');assert.equal(await evaluate('$("dirMenuBtn").disabled'),true);});
   await check('Progress current file and stop outcome',async()=>{await evaluate('pollRun()');assert.match(await evaluate('$("progressStatus").textContent'),/a.wav.*file 1 of 2/);await click('stopBtn');await wait('lastStatus?.stop_requested && !runBusy');await evaluate('pollRun()');await wait('$("runStatus").textContent==="Stopped by you"');});
   await check('Disconnection disables launch and recovery restores it',async()=>{offline=true;await evaluate('pollRun()');await wait('!connected');assert.match(await evaluate('$("connectionStatus").textContent'),/Disconnected/);assert.equal(await evaluate('$("startBtn").disabled'),true);offline=false;await evaluate('pollRun()');await wait('connected');assert.equal(await evaluate('$("startBtn").disabled'),false);});
   await check('Exit zero with reported errors is not success',async()=>{status={...status,stop_requested:false,progress:{error_count:1,last_error:'Failed: 1',completed:{}}};await evaluate('pollRun()');await wait('$("runStatus").textContent.includes("reported errors")');});
@@ -1133,6 +1159,7 @@ try {
     for (const [id,value] of [['pipelineSel','scribe'],['runModel','nemotron'],['scribeScope','folder'],['scribeLanguage','Swedish']]) {
       await evaluate(`$(${JSON.stringify(id)}).value=${JSON.stringify(value)};$(${JSON.stringify(id)}).dispatchEvent(new Event('change'))`);
     }
+    await wait('!$("runReprocessRow").hidden');
     if (!await evaluate('$("runReprocess").checked')) await click('runReprocess');
     await evaluate('loadMeta()');
     assert.equal(await evaluate('$("pipelineSel").value'),'scribe');
@@ -1141,6 +1168,7 @@ try {
     assert.equal(await evaluate('$("runReprocess").checked'),true);
     assert.equal(await evaluate('$("scribeControls").hidden'),false);
     assert.equal(await evaluate('$("startBtn").disabled'),false,'Restored folder scope can run without selecting a recording');
+    await wait('!$("runReprocessRow").hidden');
     await click('startBtn');await wait('$("previewDialog").open');
     assert.equal(await evaluate('pendingPreview.diarization_model'),'nemotron');
     assert.equal(await evaluate('pendingPreview.reprocess'),true);
@@ -1160,7 +1188,7 @@ try {
     await evaluate('localStorage.setItem("swhisper_ui_preferences", JSON.stringify({pipelineSel:"removed-pipeline",runModel:"removed-model",runReprocess:"false"}))');
     await reopen();
     assert.equal(await evaluate('$("pipelineSel").value'),'transcribe4');
-    assert.equal(await evaluate('$("runModel").value'),'');
+    assert.equal(await evaluate('$("runModel").value'),'community-1','An unknown saved model falls back to the saved default');
     assert.equal(await evaluate('$("runReprocess").checked'),false);
   });
   await check('File filters, view toggles, export format and active tab survive reopening',async()=>{
