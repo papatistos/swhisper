@@ -43,6 +43,8 @@ Notes on the CSV workflow: `template` pre-fills the table from existing sidecar 
 
 ## Allowed settings
 
+**Interview naming**: `RECORDING_TYPE`, `INTERVIEWER_NAME`, and `INTERVIEWEE_NAME` can be set per recording under **Common settings** in the WebUI or in its `.swhisper` sidecar. Omit a key to inherit its global value. `RECORDING_TYPE=interview` enables automatic naming and modal suggestions; an explicit `RECORDING_TYPE=` disables them even if the global type is interview. Names use the same word-count ranking as the global settings. These overrides apply to standard, diarization-first, and Scribe processing.
+
 Run `python sidecar_tools.py list-keys` for the authoritative list. In summary:
 
 **Diarization** (the usual suspects): `SWHISPER_NUM_SPEAKERS` (shorthand for min=max), `SWHISPER_MIN_SPEAKERS`, `SWHISPER_MAX_SPEAKERS`, clustering parameters (`SWHISPER_VBX_*`, `SWHISPER_CLUSTERING_*`, `SWHISPER_SEGMENTATION_THRESHOLD`, `SWHISPER_EMBEDDING_THRESHOLD`, …), alignment and formatting (`SWHISPER_WHISPER_TIMESTAMP_OFFSET`, `SWHISPER_SMOOTHING_ENABLED`, `SWHISPER_MIN_SPEAKER_WORDS`, `SWHISPER_PRESERVE_MARKERS`, silence settings, `SWHISPER_OUTPUT_PREAMBLE`, `SWHISPER_TSV_WORD_PER_LINE`), and backfill options (`SWHISPER_BACKFILL_ENABLED`, `SWHISPER_BACKFILL_IGNORE_WORDS`, `SWHISPER_BACKFILL_ENABLE_SENSEVOICE`, …).
@@ -65,6 +67,8 @@ When a file has already been processed, its sidecar can still trigger reprocessi
 2. **Staleness**: if the sidecar was modified *after* the file's output was written (the whisper JSON for the transcription stage, the `.ok` marker for diarization), the file is reprocessed automatically. This is stage-aware: a sidecar containing only diarization keys (e.g. `SWHISPER_MAX_SPEAKERS`) will re-run diarization but **not** re-run the expensive transcription step. Changed transcription keys re-run both stages (new JSON invalidates the diarized transcript). Disable auto-reprocessing globally with `SWHISPER_SIDECAR_AUTOREPROCESS=false` in `.swhisper.env`.
 
 Force flags set to `false` do not by themselves trigger timestamp-based reprocessing. Other relevant settings in a newer sidecar can still trigger it.
+
+`RECORDING_TYPE`, `INTERVIEWER_NAME`, and `INTERVIEWEE_NAME` do not request reprocessing. When these are changed in the WebUI, it preserves the sidecar's processing timestamp, including when the file also contains unchanged processing overrides. For an existing transcript, use **Speaker names** to apply the proposed names. If you edit a sidecar outside the WebUI and it also contains processing overrides, its newer timestamp can still request reprocessing under the rule above.
 
 ## Edge cases and details
 

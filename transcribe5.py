@@ -208,7 +208,7 @@ class TranscriptionAppV5(_transcribe4_module.TranscriptionAppV4):
         # Import formatters from diarize module
         from diarize import (
             VTTFormatter, RTTMFormatter, RTFFormatter, 
-            TXTFormatter, TSVFormatter,
+            TXTFormatter, TSVFormatter, JSONFormatter,
             SegmentAnalyzer  # Import from main diarize module
         )
         from datetime import datetime
@@ -223,7 +223,7 @@ class TranscriptionAppV5(_transcribe4_module.TranscriptionAppV4):
         os.makedirs(transcripts_dir, exist_ok=True)
         
         subdirs = {}
-        for format_name in ['vtt', 'rttm', 'rtf', 'txt', 'tsv']:
+        for format_name in ['vtt', 'rttm', 'rtf', 'txt', 'tsv', 'json']:
             subdir = os.path.join(transcripts_dir, format_name)
             os.makedirs(subdir, exist_ok=True)
             subdirs[format_name] = subdir
@@ -233,6 +233,16 @@ class TranscriptionAppV5(_transcribe4_module.TranscriptionAppV4):
         
         # Analyze segments for statistics
         speaker_stats = SegmentAnalyzer.analyze_final_segments(segments)
+        from speaker_naming import interview_names
+        from webui_speakers import apply as apply_speaker_names
+        automatic_names = interview_names(segments, self.diarization_config)
+        named_segments, display_stats = apply_speaker_names(segments, automatic_names, speaker_stats)
+        JSONFormatter().format(
+            segments, os.path.join(subdirs['json'], f"{base_name}_{timestamp}_diarized.json"),
+            metadata={'speaker_names': automatic_names, 'speaker_stats': speaker_stats,
+                      'min_silence_duration': self.diarization_config.min_silence_duration,
+                      'timestamp': timestamp, 'audio_file': audio_basename},
+        )
         
         print("\n📄 Generating output formats...")
         
@@ -240,7 +250,7 @@ class TranscriptionAppV5(_transcribe4_module.TranscriptionAppV4):
         try:
             vtt_filename = f"{base_name}_{timestamp}.vtt"
             vtt_path = os.path.join(subdirs['vtt'], vtt_filename)
-            VTTFormatter().format(segments, vtt_path)
+            VTTFormatter().format(named_segments, vtt_path)
             print(f"   ✅ VTT: {vtt_filename}")
         except Exception as e:
             print(f"   ⚠️  VTT generation failed: {e}")
@@ -267,7 +277,7 @@ class TranscriptionAppV5(_transcribe4_module.TranscriptionAppV4):
         # keeps the full-fidelity segments so any view can be re-rendered later.
         cfg = self.diarization_config
         display_segments = derive_segments(
-            segments,
+            named_segments,
             RenderOptions(
                 pauses=cfg.include_silence_markers,
                 pause_linebreak_threshold=cfg.silence_gap_linebreak_threshold or 0.0,
@@ -285,7 +295,7 @@ class TranscriptionAppV5(_transcribe4_module.TranscriptionAppV4):
                 rtf_path,
                 config=self.diarization_config,
                 transcript_id=timestamp,
-                speaker_stats=speaker_stats
+                speaker_stats=display_stats
             )
             print(f"   ✅ RTF: {rtf_filename}")
         except Exception as e:
@@ -300,7 +310,7 @@ class TranscriptionAppV5(_transcribe4_module.TranscriptionAppV4):
                 txt_path,
                 config=self.diarization_config,
                 transcript_id=timestamp,
-                speaker_stats=speaker_stats
+                speaker_stats=display_stats
             )
             print(f"   ✅ TXT: {txt_filename}")
         except Exception as e:

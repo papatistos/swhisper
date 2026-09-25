@@ -65,6 +65,14 @@ class SidecarReprocessingTests(unittest.TestCase):
         self.assertFalse(self.decision(STAGE_TRANSCRIBE)[0])
         self.assertTrue(self.decision(STAGE_DIARIZE)[0])
 
+    def test_interview_settings_do_not_invalidate_processing(self):
+        for setting in ('RECORDING_TYPE=interview', 'RECORDING_TYPE=',
+                        'INTERVIEWER_NAME=Chris', 'INTERVIEWEE_NAME=Anna'):
+            with self.subTest(setting=setting):
+                self.settings(setting + '\n')
+                self.assertFalse(self.decision(STAGE_TRANSCRIBE)[0])
+                self.assertFalse(self.decision(STAGE_DIARIZE)[0])
+
     def test_new_transcription_force_still_invalidates_older_diarization(self):
         self.settings('SWHISPER_FORCE_REPROCESS=true\n')
         self.assertTrue(self.decision(STAGE_DIARIZE)[0])

@@ -15,6 +15,7 @@ const writes = [], launches = [], errors = [], exports = [];
 let globalValues={}, globalRevision="g1", exportCanceled=false;
 let previewAllSkipped=false;
 let speakerNames={};
+let speakerSuggestions={};
 // Two versions of one recording that split it into paragraphs differently:
 // v2 has short paragraphs every 10 s, v1 long ones every 25 s behind an introduction.
 let compareFixture=null;const compareRenders=[];
@@ -29,9 +30,14 @@ const compareDoc=version=>{
   }
   return {content:lines.join('\n'),anchors,timeline};
 };
+const interviewParams = {
+      RECORDING_TYPE:{allow_empty:true,type:'str',stage:'diarize',label:'Recording type',global:'',choices:['','interview'],choice_labels:{'':'Not specified',interview:'Interview'},help:'Interview enables automatic speaker naming by word count after diarization and name suggestions in the Speaker names dialog. Not specified disables both.',scribe:{supported:true}},
+      INTERVIEWER_NAME:{type:'str',stage:'diarize',label:'Interviewer name',global:'INTERVIEWER',help:'Name for the speaker with the second-highest word count when recording type is Interview. Default: INTERVIEWER.',scribe:{supported:true}},
+      INTERVIEWEE_NAME:{type:'str',stage:'diarize',label:'Interviewee name',global:'INTERVIEWEE',help:'Name for the speaker with the highest word count when recording type is Interview. Default: INTERVIEWEE.',scribe:{supported:true}},
+};
 const meta = () => ({audio_dir:audioDir,audio_paths:['/mock/audio','/mock/other'],
   pipelines:[{id:'transcribe4',label:'Standard pipeline'},{id:'diarize4',label:'Diarization only'},{id:'scribe',label:'SUNET Scribe + local diarization'}],groups:[{name:'Speakers',keys:['SWHISPER_NUM_SPEAKERS','SWHISPER_CONDITION_ON_PREVIOUS','SWHISPER_VAD']}],
-  params:{SWHISPER_VAD:{type:'bool',global:true,stage:'transcribe',scribe:{supported:false,scope:'Unavailable for Scribe',description:'Not applied to Scribe.'}},SWHISPER_NUM_SPEAKERS:{type:'int',min:1,label:'Number of speakers',global:2,stage:'diarize',help:'Speaker count',scribe:{supported:true,description:'Local speaker count'}},SWHISPER_CONDITION_ON_PREVIOUS:{type:'bool',global:true,stage:'transcribe',help:'Use previous text',scribe:{supported:true,scope:'Local backfill only',description:'Local Whisper backfill only'}}}});
+  params:{...interviewParams,SWHISPER_VAD:{type:'bool',global:true,stage:'transcribe',scribe:{supported:false,scope:'Unavailable for Scribe',description:'Not applied to Scribe.'}},SWHISPER_NUM_SPEAKERS:{type:'int',min:1,label:'Number of speakers',global:2,stage:'diarize',help:'Speaker count',scribe:{supported:true,description:'Local speaker count'}},SWHISPER_CONDITION_ON_PREVIOUS:{type:'bool',global:true,stage:'transcribe',help:'Use previous text',scribe:{supported:true,scope:'Local backfill only',description:'Local Whisper backfill only'}}}});
 const server = http.createServer(async (req,res) => {
   const u = new URL(req.url, 'http://localhost');
   let body = ''; for await (const chunk of req) body += chunk;
@@ -85,16 +91,25 @@ const server = http.createServer(async (req,res) => {
   }
   if (u.pathname === '/api/run' && req.method === 'POST') {launches.push(data);status={running:true,pipeline:'transcribe4',run_id:'run1',started_at:Date.now()/1000,audio_dir:audioDir,progress:{stage:'Transcription',current_file:'a.wav',file_index:1,total_files:2,completed:{Transcription:0}}};return send(status);}
   if (u.pathname === '/api/run/stop') {status={...status,running:false,stop_requested:true,returncode:0};return send(status);}
+  if (u.pathname === '/api/sidecars/batch') {
+    if(failSave)return send({errors:{RECORDING_TYPE:'Invalid fixture setting'}},422);
+    for (const base of data.bases) {
+      const values={...(saved[base]?.values||{})}, comment=saved[base]?.comment||'';
+      for(const [key,value] of Object.entries(data.changes)) value===null?delete values[key]:values[key]=value;
+      saved[base]={values,comment};writes.push({base,data:{...values,_comment:comment}});
+    }
+    return send({files:Object.fromEntries(data.bases.map(base=>[base,{exists:true,...saved[base],revision:JSON.stringify(saved[base])}]))});
+  }
   if (u.pathname.startsWith('/api/sidecar/')) {
     const base=decodeURIComponent(u.pathname.split('/').at(-1));
     if (req.method==='PUT') {writes.push({base,data});if(failSave)return send({errors:{SWHISPER_NUM_SPEAKERS:'invalid'}},422);saved[base]={values:Object.fromEntries(Object.entries(data).filter(([k])=>k!=='_comment')),comment:data._comment};}
     if(req.method==='DELETE') saved[base]={values:{},comment:''};
     await delay(sidecarDelay[base] || 0);
-    return send({exists:true,unknown:{FUTURE:'preserve'},...(saved[base]||{values:{},comment:''})});
+    return send({exists:true,unknown:{FUTURE:'preserve'},...(saved[base]||{values:{},comment:''}),revision:JSON.stringify(saved[base]||{})});
   }
   if (u.pathname.startsWith('/api/speakers/')) {
     if (req.method==='PUT') {if(data.names.S01==='bad')return send({detail:'Two speakers cannot share that name'},422);speakerNames=Object.fromEntries(Object.entries(data.names).filter(([,v])=>v));}
-    return send({base:'a',detected:['S01','S02'],names:speakerNames});
+    return send({base:'a',detected:['S01','S02'],names:speakerNames,suggested:speakerSuggestions});
   }
   if (u.pathname.startsWith('/api/json-transcript/')) return send({base:'a',path:'whisper-json-output/a.json',content:'{"raw": true}'});
   if (u.pathname.startsWith('/api/transcript/')) {
@@ -267,6 +282,25 @@ try {
     await wait('$("transcriptText").textContent.startsWith("Rendered")');
     speakerNames={};
   });
+  await check('Interview suggestions fill the naming modal and remain editable',async()=>{
+    speakerSuggestions={S01:'INTERVIEWER',S02:'Anna Svensson'};
+    speakerNames={S01:'Chris'};
+    await click('renderSpeakers');await wait('$("speakerDialog").open');
+    assert.equal(await evaluate('$("speaker-S01").value'),'Chris');
+    assert.equal(await evaluate('$("speaker-S02").value'),'Anna Svensson');
+    assert.equal(await evaluate('$("speakerSuggestion").hidden'),false);
+    if (process.env.SWHISPER_INTERVIEW_SCREENSHOT) {
+      const shot=await cdp('Page.captureScreenshot',{format:'png'});
+      await fs.writeFile(process.env.SWHISPER_INTERVIEW_SCREENSHOT,Buffer.from(shot.data,'base64'));
+    }
+    await click('speakerCancel');await wait('!$("speakerDialog").open');
+    assert.deepEqual(speakerNames,{S01:'Chris'});
+    speakerNames={};
+    await click('renderSpeakers');await wait('$("speakerDialog").open');
+    await click('speakerSave');await wait('!$("speakerDialog").open');
+    assert.deepEqual(speakerNames,speakerSuggestions);
+    speakerSuggestions={};speakerNames={};
+  });
   await check('Run preview separates what runs from what is skipped',async()=>{
     await click('startBtn');await wait('$("previewDialog").open');
     assert.equal(await evaluate('$("previewTitle").textContent'),'Run Preview');
@@ -307,7 +341,7 @@ try {
     assert.equal(await evaluate('$("startBtn").textContent'),'Run');
     assert.equal(await evaluate('$("clearRunSelection").hidden'),true);
     await evaluate('document.querySelector(\'[data-base="b"] .runPick input\').click()');
-    await wait('$("startBtn").title==="Run 1 selected file(s)"');
+    await wait('!$("startBtn").disabled && $("startBtn").title==="Run 1 selected file(s)"');
     assert.equal(await evaluate('$("startBtn").textContent'),'Run');
     assert.equal(await evaluate('$("clearRunSelection").hidden'),false);
     const before=launches.length;
@@ -317,7 +351,7 @@ try {
     for(let i=0;i<200 && launches.length===before;i++) await delay(20);
     assert.deepEqual(launches.at(-1).only,['b']);
     await wait('lastStatus && lastStatus.running');await click('stopBtn');await wait('lastStatus && !lastStatus.running');
-    await click('clearRunSelection');await wait('$("startBtn").title==="Run eligible files in this folder"');
+    await click('clearRunSelection');await wait('!selectionBusy && $("startBtn").title==="Run eligible files in this folder"');
     assert.equal(await evaluate('document.querySelector(\'[data-base="b"] .runPick input\').checked'),false);
   });
   await check('Folder moved by another window is reported, not applied silently',async()=>{
@@ -386,6 +420,109 @@ try {
     await evaluate('$("setting-SWHISPER_MIN_SPEAKERS").value="4";$("setting-SWHISPER_MIN_SPEAKERS").dispatchEvent(new Event("input"))');
     await click('saveBtn');await wait('!saving && !formDirty()');assert.equal(globalValues.SWHISPER_MIN_SPEAKERS,'4');
     await select('b');await wait('editorScope==="file" && editorBase==="b"');
+  });
+  await check('Interview settings appear once in Common settings and save their values',async()=>{
+    await click('globalSettingsBtn');await wait('editorScope==="global" && !editorLoading');
+    for (const name of ['RECORDING_TYPE','INTERVIEWER_NAME','INTERVIEWEE_NAME']) {
+      assert.equal(await evaluate(`$("setting-${name}").closest("details").querySelector("summary").textContent`),'Common settings');
+      assert.equal(await evaluate(`document.querySelectorAll('#setting-${name}').length`),1);
+    }
+    assert.deepEqual(await evaluate('[...$("setting-RECORDING_TYPE").options].map(o=>[o.value,o.textContent])'),[['','Not specified'],['interview','Interview']]);
+    await evaluate('$("setting-RECORDING_TYPE").value="interview";$("setting-RECORDING_TYPE").dispatchEvent(new Event("change"));$("setting-INTERVIEWER_NAME").value="Researcher";$("setting-INTERVIEWER_NAME").dispatchEvent(new Event("input"));$("setting-INTERVIEWEE_NAME").value="Participant";$("setting-INTERVIEWEE_NAME").dispatchEvent(new Event("input"))');
+    if (process.env.SWHISPER_COMMON_SCREENSHOT) {
+      const shot=await cdp('Page.captureScreenshot',{format:'png'});
+      await fs.writeFile(process.env.SWHISPER_COMMON_SCREENSHOT,Buffer.from(shot.data,'base64'));
+    }
+    await click('saveBtn');await wait('!saving && !formDirty()');
+    assert.equal(globalValues.RECORDING_TYPE,'interview');
+    assert.equal(globalValues.INTERVIEWER_NAME,'Researcher');
+    assert.equal(globalValues.INTERVIEWEE_NAME,'Participant');
+    await evaluate('$("setting-RECORDING_TYPE").value="";$("setting-RECORDING_TYPE").dispatchEvent(new Event("change"))');
+    await click('saveBtn');await wait('!saving && !formDirty()');
+    assert.equal(globalValues.RECORDING_TYPE,'');
+  });
+  await check('Per-file interview overrides distinguish inheritance from disabled naming',async()=>{
+    await select('a');await wait('editorScope==="file" && editorBase==="a" && !editorLoading');
+    for (const name of ['RECORDING_TYPE','INTERVIEWER_NAME','INTERVIEWEE_NAME']) {
+      assert.equal(await evaluate(`$("setting-${name}").closest("details").querySelector("summary").textContent`),'Common settings');
+    }
+    assert.deepEqual(await evaluate('[...$("setting-RECORDING_TYPE").options].map(o=>o.textContent)'),['Use global','Not specified','Interview']);
+    assert.equal(await evaluate('$("setting-RECORDING_TYPE").value'),'__inherit__');
+    assert.equal(await evaluate('Object.hasOwn(formValues(),"RECORDING_TYPE")'),false);
+    await evaluate('$("setting-RECORDING_TYPE").value="interview";$("setting-RECORDING_TYPE").dispatchEvent(new Event("change"));$("setting-INTERVIEWER_NAME").value="Chris";$("setting-INTERVIEWER_NAME").dispatchEvent(new Event("input"));$("setting-INTERVIEWEE_NAME").value="Anna";$("setting-INTERVIEWEE_NAME").dispatchEvent(new Event("input"))');
+    await click('saveBtn');await wait('!saving && !formDirty()');
+    assert.equal(saved.a.values.RECORDING_TYPE,'interview');
+    assert.equal(saved.a.values.INTERVIEWER_NAME,'Chris');
+    assert.equal(saved.a.values.INTERVIEWEE_NAME,'Anna');
+    await evaluate('$("setting-RECORDING_TYPE").value="";$("setting-RECORDING_TYPE").dispatchEvent(new Event("change"))');
+    await click('saveBtn');await wait('!saving && !formDirty()');
+    assert.equal(saved.a.values.RECORDING_TYPE,'');
+    await select('b');await wait('editorBase==="b"');
+    await select('a');await wait('editorBase==="a"');
+    assert.equal(await evaluate('$("setting-RECORDING_TYPE").value'),'');
+    assert.equal(await evaluate('$("setting-RECORDING_TYPE").closest(".fieldValue").querySelector(".inheritance").textContent'),'per-file override');
+    await evaluate('$("setting-RECORDING_TYPE").closest(".fieldValue").querySelector(".resetSetting").click()');
+    assert.equal(await evaluate('Object.hasOwn(formValues(),"RECORDING_TYPE")'),false);
+    await evaluate('restoreSavedForm()');
+    assert.equal(await evaluate('$("setting-RECORDING_TYPE").value'),'');
+    await evaluate('$("setting-RECORDING_TYPE").value="__inherit__";$("setting-RECORDING_TYPE").dispatchEvent(new Event("change"))');
+    await click('saveBtn');await wait('!saving && !formDirty()');
+    assert.equal(Object.hasOwn(saved.a.values,'RECORDING_TYPE'),false);
+    await select('b');await wait('editorBase==="b"');
+    assert.equal(await evaluate('$("setting-INTERVIEWEE_NAME").value'),'');
+  });
+  await check('Select all shown edits only touched settings across the selection',async()=>{
+    saved.a={values:{SWHISPER_NUM_SPEAKERS:'2',RECORDING_TYPE:'',SWHISPER_CONDITION_ON_PREVIOUS:'true'},comment:'First file'};
+    saved.b={values:{SWHISPER_NUM_SPEAKERS:'4',RECORDING_TYPE:'interview',SWHISPER_CONDITION_ON_PREVIOUS:'false'},comment:'Second file'};
+    await evaluate('$("fileSearch").value="";$("fileFilter").value="ready";renderFiles()');
+    await click('selectShown');await wait('editorScope==="batch" && !editorLoading && !selectionBusy');
+    assert.deepEqual(await evaluate('[...runSelection].sort()'),['a','b']);
+    assert.equal(await evaluate('$("setting-SWHISPER_NUM_SPEAKERS").placeholder'),'Mixed values');
+    assert.equal(await evaluate('$("setting-RECORDING_TYPE").value'),'__mixed__');
+    assert.equal(await evaluate('$("setting-SWHISPER_CONDITION_ON_PREVIOUS").indeterminate'),true);
+    assert.equal(await evaluate('$("commentField")===null && $("deleteBtn").hidden'),true);
+    assert.equal(await evaluate('$("saveBtn").disabled'),true);
+    await evaluate('$("setting-RECORDING_TYPE").value="interview";$("setting-RECORDING_TYPE").dispatchEvent(new Event("change"))');
+    if (process.env.SWHISPER_BULK_SCREENSHOT) {
+      await cdp('Emulation.setDeviceMetricsOverride',{width:1440,height:1300,deviceScaleFactor:1,mobile:false});
+      const shot=await cdp('Page.captureScreenshot',{format:'png'});
+      await fs.writeFile(process.env.SWHISPER_BULK_SCREENSHOT,Buffer.from(shot.data,'base64'));
+      await cdp('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:false});
+      const mobile=await cdp('Page.captureScreenshot',{format:'png'});
+      await fs.writeFile(process.env.SWHISPER_BULK_SCREENSHOT.replace('.png','-mobile.png'),Buffer.from(mobile.data,'base64'));
+      assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'),true);
+      await cdp('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+    }
+    await click('saveBtn');await wait('!saving && !formDirty()');
+    assert.equal(saved.a.values.RECORDING_TYPE,'interview');assert.equal(saved.b.values.RECORDING_TYPE,'interview');
+    assert.equal(saved.a.values.SWHISPER_NUM_SPEAKERS,'2');assert.equal(saved.b.values.SWHISPER_NUM_SPEAKERS,'4');
+    assert.equal(saved.a.comment,'First file');assert.equal(saved.b.comment,'Second file');
+    await evaluate('$("setting-INTERVIEWEE_NAME").value="Participant";$("setting-INTERVIEWEE_NAME").dispatchEvent(new Event("input"))');
+    await click('clearRunSelection');await wait('$("dirtyDialog").open');await click('dirtyCancel');await wait('!selectionBusy');
+    assert.equal(await evaluate('runSelection.size'),2);assert.equal(await evaluate('formDirty()'),true);
+    failSave=true;await click('saveBtn');await wait('!saving && $("editorMsg").textContent.includes("No files")');
+    assert.equal(saved.a.values.INTERVIEWEE_NAME,undefined);failSave=false;
+    await click('clearRunSelection');await wait('$("dirtyDialog").open');await click('dirtySave');await wait('!selectionBusy && runSelection.size===0');
+    assert.equal(saved.a.values.INTERVIEWEE_NAME,'Participant');assert.equal(saved.b.values.INTERVIEWEE_NAME,'Participant');
+    await click('selectShown');await wait('editorScope==="batch" && !selectionBusy');
+    await evaluate('$("setting-SWHISPER_CONDITION_ON_PREVIOUS").closest(".fieldValue").querySelector(".resetSetting").click()');
+    assert.deepEqual(await evaluate('formValues()'),{SWHISPER_CONDITION_ON_PREVIOUS:null});
+    await click('saveBtn');await wait('!saving && !formDirty()');
+    assert.equal(Object.hasOwn(saved.a.values,'SWHISPER_CONDITION_ON_PREVIOUS'),false);
+    assert.equal(Object.hasOwn(saved.b.values,'SWHISPER_CONDITION_ON_PREVIOUS'),false);
+    await evaluate('$("fileSearch").value="a";renderFiles()');
+    assert.equal(await evaluate('$("selectionCount").textContent'),'2 selected (1 hidden by filters)');
+    await click('selectShown');await wait('!selectionBusy && editorScope==="file"');
+    assert.deepEqual(await evaluate('[...runSelection]'),['b']);assert.equal(await evaluate('editorBase'),'b');
+    await click('clearRunSelection');await wait('!selectionBusy && runSelection.size===0');
+    await evaluate('$("fileSearch").value="no matching files";renderFiles()');
+    assert.equal(await evaluate('$("selectShown").disabled'),true);
+    await evaluate('$("fileSearch").value="";$("fileFilter").value="all";renderFiles()');
+    await click('selectShown');await wait('editorScope==="batch" && !selectionBusy');
+    await evaluate('$("dirInput").value="/mock/bulk-test";changeDir()');await wait('META.audio_dir==="/mock/bulk-test" && !changingDir');
+    assert.equal(await evaluate('runSelection.size'),0);
+    assert.equal(await evaluate('editorBase'),null);
+    await evaluate('$("dirInput").value="/mock/audio";changeDir()');await wait('META.audio_dir==="/mock/audio" && !changingDir');
   });
   await check('Global draft navigation uses edit guard',async()=>{
     await click('globalSettingsBtn');await wait('editorScope==="global" && !editorLoading');

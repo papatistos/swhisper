@@ -81,6 +81,9 @@ class DiarizationConfig:
     hugging_face_token: str = field(default_factory=_default_hf_token)
 
     # Diarization settings
+    recording_type: str = field(default_factory=lambda: os.getenv("RECORDING_TYPE", ""))
+    interviewer_name: str = field(default_factory=lambda: os.getenv("INTERVIEWER_NAME", "INTERVIEWER"))
+    interviewee_name: str = field(default_factory=lambda: os.getenv("INTERVIEWEE_NAME", "INTERVIEWEE"))
     min_speakers: int = _get_env_int("SWHISPER_MIN_SPEAKERS", 1)
     # Do not use max_speakers with Nemotron; leave it unset/None. That backend
     # only forces assignments after inference, even with low speaker probability.

@@ -281,7 +281,8 @@ details.group > summary { cursor: pointer; font-size: .9rem; padding: 8px 0; bor
 }
 @media (max-width: 760px) {
   main { flex-direction: column; }
-  #filePanel { flex: 0 0 210px; max-height: 26vh; width: 100%; max-width: none; min-width: 0; }
+  #filePanel { flex: 0 0 210px; max-height: 26vh; width: 100%; max-width: none; min-width: 0; overflow-y: auto; }
+  #files { flex: 0 0 auto; overflow: visible; }
   #consolePanel { flex-basis: var(--console-mobile-height, 120px); min-height: 50px; max-height: 70vh; }
   #fileTools { grid-template-columns: 1fr 1fr; }
   #fileTools input { grid-column: 1 / -1; }
@@ -290,6 +291,7 @@ details.group > summary { cursor: pointer; font-size: .9rem; padding: 8px 0; bor
   #dirBox { min-width: 0; flex-basis: 100%; flex-wrap: nowrap; }
   #dirCombo { flex-basis: 0; }
   #runControlBar { gap: 6px; padding: 6px; }
+  #runControlBar select { max-width: 100%; min-width: 0; }
   #progressStatus { overflow-wrap: anywhere; }
   #tabBar { padding-left: 4px; }
   #tabBar .tab { padding-left: 8px; padding-right: 8px; }

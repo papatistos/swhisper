@@ -63,7 +63,8 @@ let currentLogSel = null;
 let logOffset = 0;
 let wasRunning = false;
 let savedAudioPaths = new Set();
-let runSelection = new Set();   // files ticked for a selective run
+let runSelection = new Set();   // files selected for settings and processing
+let shownBases = [], selectionBusy = false, bulkContext = null;
 let durationTimer = null;
 let changingDir = false;
 let editorBase = null, savedForm = null, saving = false, editorLoading = false;
@@ -74,10 +75,21 @@ let pendingPreview = null, dirtyChoice = null, initialized = false, pollTimer = 
 const escapeHTML = value => String(value).replace(/[&<>"']/g, c => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"}[c]));
 
 function formValues() {
+  if (editorScope === "batch") {
+    const changes = {};
+    document.querySelectorAll("#editor [data-key]").forEach(el => {
+      if (el.dataset.bulkChanged !== "1") return;
+      const raw = el.value.trim();
+      changes[el.dataset.key] = el.dataset.explicit !== "1" || el.value === el.dataset.inheritValue ||
+        (raw === "" && el.dataset.allowEmpty !== "1") ? null : raw;
+    });
+    return changes;
+  }
   const values = editorScope === "global" ? {} : { _comment: ($("commentField") || { value: "" }).value };
   document.querySelectorAll("#editor [data-key]").forEach(el => {
+    if (el.value === el.dataset.inheritValue) return;
     const raw = el.dataset.originalValue === el.value ? el.dataset.originalRaw : el.value;
-    if (raw.trim() !== "" || (editorScope === "global" && el.dataset.explicit === "1")) values[el.dataset.key] = raw.trim();
+    if (raw.trim() !== "" || ((editorScope === "global" || el.dataset.allowEmpty === "1") && el.dataset.explicit === "1")) values[el.dataset.key] = raw.trim();
   });
   return values;
 }
@@ -86,15 +98,16 @@ function formDirty() {
 }
 function updateSaveState() {
   $("saveBtn").disabled = saving || editorLoading || !formDirty() || (editorScope === "global" && lastStatus?.running);
-  $("saveBtn").textContent = saving ? "Saving…" : "Save";
+  $("saveBtn").textContent = saving ? "Saving…" : editorScope === "batch" ? `Save to ${bulkContext.bases.length} files` : "Save";
   if (!saving && !editorLoading && editorBase) setMsg(formDirty() ? "Unsaved changes" : "All changes saved.", "");
 }
 function restoreSavedForm() {
   if (savedForm === null) return;
+  if (editorScope === "batch") { renderBulkSettings(bulkContext); return; }
   const values = JSON.parse(savedForm);
   if ($("commentField")) $("commentField").value = values._comment || "";
   document.querySelectorAll("#editor [data-key]").forEach(el => {
-    const value = values[el.dataset.key] || "";
+    const value = values[el.dataset.key] ?? el.dataset.inheritValue ?? "";
     el.value = value === el.dataset.originalRaw ? el.dataset.originalValue : value;
     el.dataset.explicit = Object.hasOwn(values, el.dataset.key) ? "1" : "0";
     if (el.type === "checkbox") el.checked = el.value ? ["true", "1", "yes", "on"].includes(el.value) : el.dataset.globalBool === "true";
@@ -106,7 +119,7 @@ async function resolveUnsaved() {
   if (saving) return false;
   if (!formDirty()) return true;
   if (dirtyChoice) return false;
-  $("dirtyText").textContent = `Save changes to ${editorScope === "global" ? "global settings" : editorBase} before continuing?`;
+  $("dirtyText").textContent = `Save changes to ${editorScope === "global" ? "global settings" : editorScope === "batch" ? `${bulkContext.bases.length} selected files` : editorBase} before continuing?`;
   const choice = await new Promise(resolve => {
     dirtyChoice = resolve;
     $("dirtyDialog").showModal();
@@ -122,7 +135,7 @@ function finishDirtyDialog(choice) {
   if (resolve) resolve(choice);
 }
 function runScope() {
-  // Only files still visible in the list can be part of the next run.
+  // Keep filtered selections, but drop files no longer in this folder.
   const known = Object.keys(FILES_BY_BASE);
   for (const base of [...runSelection]) if (!known.includes(base)) runSelection.delete(base);
   return [...runSelection];
@@ -147,8 +160,10 @@ function updateRunControls() {
   $("startBtn").textContent = "Run";
   $("startBtn").title = chosen ? `Run ${chosen} selected file(s)` : "Run eligible files in this folder";
   $("clearRunSelection").hidden = !chosen;
+  $("clearRunSelection").disabled = selectionBusy || saving || changingDir;
+  $("selectShown").disabled = !shownBases.length || selectionBusy || saving || changingDir;
   const scribeGate = $("pipelineSel").value === "scribe" && !scribeSelectionReady();
-  $("startBtn").disabled = !connected || !initialized || running || runBusy || changingDir || saving || editorLoading || scribeGate;
+  $("startBtn").disabled = !connected || !initialized || running || runBusy || changingDir || selectionBusy || saving || editorLoading || scribeGate;
   $("stopBtn").disabled = !connected || !running || runBusy;
   for (const id of ["pipelineSel", "dirBtn", "dirInput", "dirMenuBtn", "dirBrowse"]) {
     $(id).disabled = !connected || running || runBusy || changingDir;
@@ -226,6 +241,7 @@ async function changeDir() {
     folderSeq++; editorSeq++; transcriptSeq++; renderSeq++; logSeq++; logListSeq++;
     resetAudioReview();
     currentBase = editorBase = savedForm = null;
+    runSelection.clear(); bulkContext = null; editorScope = "file";
     txtVersionsByBase = {};
     editorLoading = false;
     $("editor").inert = false;
@@ -371,9 +387,7 @@ function fmtDuration(seconds) {
        : minutes ? `${minutes} min`
        : `${total} s`;
 }
-function renderFiles() {
-  const box = $("files");
-  box.innerHTML = "";
+function visibleFiles() {
   const all = Object.values(FILES_BY_BASE);
   const query = $("fileSearch").value.toLocaleLowerCase();
   const filter = $("fileFilter").value;
@@ -383,7 +397,19 @@ function renderFiles() {
   const stateRank = f => f.will_reprocess ? 0 : !f.transcribed ? 1 : !f.has_transcript ? 2 : 3;
   rows.sort((a, b) => ($("fileSort").value === "newest" ? (b.mtime || 0) - (a.mtime || 0) :
     $("fileSort").value === "status" ? stateRank(a) - stateRank(b) : 0) || a.base.localeCompare(b.base, undefined, {numeric:true}));
+  return rows;
+}
+
+function renderFiles() {
+  const box = $("files");
+  box.innerHTML = "";
+  const all = Object.values(FILES_BY_BASE), rows = visibleFiles();
+  shownBases = rows.map(f => f.base);
+  const chosen = runScope(), hidden = chosen.filter(base => !shownBases.includes(base)).length;
   $("fileCount").textContent = `${rows.length} of ${all.length} files`;
+  $("selectionCount").textContent = chosen.length ? `${chosen.length} selected${hidden ? ` (${hidden} hidden by filters)` : ""}` : "";
+  $("selectShown").textContent = shownBases.length && shownBases.every(base => runSelection.has(base)) ? "Deselect shown" : "Select all shown";
+  updateRunControls();
   if (!rows.length) {
     box.textContent = all.length ? "No files match these filters." : "No audio files found.";
     return;
@@ -403,16 +429,19 @@ function renderFiles() {
     if (f.has_transcript) badges.push('<span class="badge tbadge" title="Open transcript">Transcript</span>');
     if (f.transcribed) badges.push('<span class="badge jbadge" title="View raw JSON transcript">JSON</span>');
     if (f.has_logs) badges.push('<span class="badge lbadge" title="Open logs">Logs</span>');
-    div.innerHTML = `<label class="runPick"><input type="checkbox"><span class="visuallyHidden">Include in run</span></label>` +
+    div.innerHTML = `<label class="runPick"><input type="checkbox"><span class="visuallyHidden">Select file</span></label>` +
       `<button class="name fileSelect">${escapeHTML(f.base)}</button><div class="badges">${badges.join("")}</div>`;
     const pick = div.querySelector(".runPick input");
     pick.checked = runSelection.has(f.base);
-    pick.setAttribute("aria-label", `Include ${f.base} in the next run`);
+    pick.setAttribute("aria-label", `Select ${f.base} for settings and processing`);
     pick.onclick = ev => ev.stopPropagation();
-    pick.onchange = () => {
-      pick.checked ? runSelection.add(f.base) : runSelection.delete(f.base);
-      updateRunControls();
-    };
+    pick.disabled = selectionBusy || saving || changingDir;
+    pick.onchange = handle(async () => {
+      const next = new Set(runSelection);
+      pick.checked ? next.add(f.base) : next.delete(f.base);
+      pick.checked = runSelection.has(f.base);
+      await changeFileSelection(next);
+    });
     const fileButton = div.querySelector(".fileSelect");
     fileButton.setAttribute("aria-pressed", String(f.base === currentBase));
     fileButton.setAttribute("aria-label", `Edit settings for ${f.base}`);
@@ -459,7 +488,7 @@ function renderFiles() {
 function syncSetting(el) {
   const box = el.closest(".fieldValue");
   if (!box) return;
-  const explicit = editorScope === "global" ? el.dataset.explicit === "1" : el.value !== "";
+  const explicit = editorScope === "global" || el.dataset.allowEmpty === "1" ? el.dataset.explicit === "1" : el.value !== "";
   el.classList.toggle("set", explicit);
   const note = box.querySelector(".inheritance");
   note.textContent = explicit ? (editorScope === "global" ? "global value" : "per-file override") :
@@ -469,6 +498,12 @@ function syncSetting(el) {
   const error = box.querySelector(".fieldError");
   error.textContent = el.validity.valid ? "" : el.validationMessage;
   el.setAttribute("aria-invalid", String(!el.validity.valid));
+  if (editorScope === "batch") {
+    note.textContent = el.dataset.bulkChanged === "1" ? (explicit ? "apply to all selected files" : "use global for all selected files") :
+      el.dataset.mixed === "1" ? "mixed values — unchanged unless edited" : "same setting in all selected files";
+    box.querySelector(".resetSetting").hidden = false;
+    box.querySelector(".resetSetting").disabled = el.disabled;
+  }
 }
 function inputFor(key, spec, value) {
   const globalVal = spec.global === null || spec.global === undefined ? "" : String(spec.global);
@@ -487,8 +522,10 @@ function inputFor(key, spec, value) {
     el = document.createElement("textarea"); el.rows = 3;
   } else if (spec.choices) {
     el = document.createElement("select");
-    for (const choice of ["", ...spec.choices]) {
-      const option = document.createElement("option"); option.value = choice; option.textContent = choice || `Use ${editorScope === "global" ? "program default" : "global"}`; el.appendChild(option);
+    const inheritValue = editorScope !== "global" && spec.allow_empty ? "__inherit__" : "";
+    if (inheritValue) el.dataset.inheritValue = inheritValue;
+    for (const choice of new Set([inheritValue, ...spec.choices])) {
+      const option = document.createElement("option"); option.value = choice; option.textContent = choice === "__inherit__" ? "Use global" : (spec.choice_labels?.[choice] ?? (choice || `Use ${editorScope === "global" ? "program default" : "global"}`)); el.appendChild(option);
     }
   } else {
     el = document.createElement("input");
@@ -499,8 +536,9 @@ function inputFor(key, spec, value) {
     if (el.type === "number" && value !== undefined && !Number.isFinite(Number(value))) {
       el.type = "text"; el.dataset.numericType = spec.type; el.setCustomValidity("Enter a valid number.");
     }
-    el.value = value ?? ""; el.placeholder = globalVal || "Not set";
+    el.value = value ?? el.dataset.inheritValue ?? ""; el.placeholder = globalVal || "Not set";
   }
+  el.dataset.allowEmpty = spec.allow_empty ? "1" : "0";
   el.dataset.explicit = value !== undefined ? "1" : "0";
   el.dataset.key = key; el.id = `setting-${key}`;
   el.setAttribute("aria-describedby", `help-${key} error-${key} inherit-${key} scribe-${key}`);
@@ -512,7 +550,8 @@ function inputFor(key, spec, value) {
   reset.textContent = editorScope === "global" ? "Use program default" : "Use global";
   reset.setAttribute("aria-label", `${reset.textContent} for ${spec.label || key}`);
   reset.onclick = () => {
-    el.value = ""; el.dataset.explicit = "0";
+    el.dataset.bulkChanged = "1"; el.dataset.mixed = "0";
+    el.value = el.dataset.inheritValue ?? ""; el.dataset.explicit = "0";
     el.setCustomValidity("");
     if (el.type === "checkbox") { el.checked = el.dataset.globalBool === "true"; el.indeterminate = editorScope === "global"; }
     syncSetting(el); if (editorScope === "global") inheritance.textContent = "program default after saving"; updateSaveState();
@@ -528,15 +567,43 @@ function inputFor(key, spec, value) {
   scribeHelp.append(applicability, document.createTextNode(spec.scribe?.description || "Not available for Scribe.")); scribeHelp.hidden = true; box.appendChild(scribeHelp);
   const error = document.createElement("div"); error.className = "fieldError"; error.id = `error-${key}`; box.appendChild(error);
   const change = () => {
+    el.dataset.bulkChanged = "1"; el.dataset.mixed = "0";
     if (el.type === "checkbox") { el.value = String(el.checked); el.indeterminate = false; el.setCustomValidity(""); }
     if (el.dataset.numericType) {
       const n = Number(el.value);
       el.setCustomValidity(el.value && (!Number.isFinite(n) || (el.dataset.numericType === "int" && !Number.isInteger(n)) || (spec.min !== undefined && n < spec.min) || (spec.max !== undefined && n > spec.max)) ? "Enter a valid number within the allowed range." : "");
     }
-    el.dataset.explicit = "1"; syncSetting(el); updateSaveState();
+    el.dataset.explicit = el.value === el.dataset.inheritValue ? "0" : "1"; syncSetting(el); updateSaveState();
   };
   el.addEventListener("input", change); el.addEventListener("change", change);
   return box;
+}
+
+function renderBulkSettings(context) {
+  bulkContext = context;
+  const values = {}, mixed = [];
+  for (const key of Object.keys(META.params)) {
+    const first = context.files[context.bases[0]].values[key];
+    if (context.bases.every(base => context.files[base].values[key] === first)) {
+      if (first !== undefined) values[key] = first;
+    } else mixed.push(key);
+  }
+  renderSettings({values, mixed}, null, "batch");
+}
+
+async function changeFileSelection(next) {
+  if (selectionBusy || saving || changingDir) return false;
+  selectionBusy = true; updateRunControls();
+  try {
+    if (!await resolveUnsaved()) return false;
+    runSelection = new Set(next);
+    const base = currentBase || [...runSelection][0];
+    if (base) {
+      await selectFile(base, true);
+      showTab("settings");
+    }
+    return true;
+  } finally { selectionBusy = false; renderFiles(); updateRunControls(); }
 }
 function fieldErrors(errors) {
   if (Object.keys(errors || {}).length && $("showOtherSettings")) { $("showOtherSettings").checked = true; filterSettings(); }
@@ -549,11 +616,17 @@ function fieldErrors(errors) {
 function renderSettings(data, base, scope) {
   editorScope = scope; editorMeta = scope === "global" ? data : META;
   const editor = $("editor"); editor.replaceChildren();
-  const title = document.createElement("h2"); title.textContent = scope === "global" ? "Global settings" : base; editor.appendChild(title);
+  const title = document.createElement("h2"); title.textContent = scope === "global" ? "Global settings" : scope === "batch" ? `Settings for ${bulkContext.bases.length} selected files` : base; editor.appendChild(title);
   if (scope === "file") {
     const comment = document.createElement("textarea"); comment.id = "commentField"; comment.rows = 3; comment.value = data.comment || "";
     comment.setAttribute("aria-label", "Comments about this file"); comment.placeholder = "Comments do not trigger reprocessing."; comment.style.width = "100%";
     comment.addEventListener("input", updateSaveState); editor.appendChild(comment);
+  } else if (scope === "batch") {
+    const note = document.createElement("p"); note.className = "settingsNote";
+    note.textContent = "Only fields you edit are applied to every selected file. Mixed values, other settings and individual comments are preserved."; editor.appendChild(note);
+    const files = document.createElement("details"), summary = document.createElement("summary");
+    summary.textContent = "Selected files"; files.appendChild(summary);
+    const list = document.createElement("p"); list.textContent = bulkContext.bases.join(", "); files.appendChild(list); editor.appendChild(files);
   } else {
     const note = document.createElement("p"); note.className = "settingsNote";
     note.textContent = "Defaults for future runs. Per-file overrides take precedence. Changes are saved to " + data.path + ". Credentials are not shown."; editor.appendChild(note);
@@ -561,7 +634,7 @@ function renderSettings(data, base, scope) {
   const applicabilityNote = document.createElement("p"); applicabilityNote.id = "settingsApplicability"; applicabilityNote.className = "settingsNote";
   applicabilityNote.textContent = "Scribe: these settings control local processing. Backfill-only settings take effect when backfill is enabled. SUNET transcription is controlled by the Scribe language/model selector. Values marked as inherited are editable; greyed-out controls are unavailable.";
   editor.appendChild(applicabilityNote);
-  const common = ["SWHISPER_LANGUAGE", "SWHISPER_NUM_SPEAKERS", "SWHISPER_MIN_SPEAKERS", "SWHISPER_MAX_SPEAKERS", "SWHISPER_INITIAL_PROMPT", "SWHISPER_FORCE_REPROCESS", "SWHISPER_DIARIZE_FORCE_REPROCESS"];
+  const common = ["RECORDING_TYPE", "INTERVIEWER_NAME", "INTERVIEWEE_NAME", "SWHISPER_LANGUAGE", "SWHISPER_NUM_SPEAKERS", "SWHISPER_MIN_SPEAKERS", "SWHISPER_MAX_SPEAKERS", "SWHISPER_INITIAL_PROMPT", "SWHISPER_FORCE_REPROCESS", "SWHISPER_DIARIZE_FORCE_REPROCESS"];
   const groups = [{name:"Common settings",keys:common.filter(k=>editorMeta.params[k])}, ...editorMeta.groups.map(g=>({...g,keys:g.keys.filter(k=>!common.includes(k))}))];
   {
     const note = document.createElement("label"); note.className = "settingsNote";
@@ -581,17 +654,25 @@ function renderSettings(data, base, scope) {
       const label = document.createElement("label"); label.htmlFor = `setting-${key}`;
       label.textContent = spec.label || key.replace("SWHISPER_", "").replaceAll("_", " ").toLowerCase(); label.title = key;
       row.append(label, inputFor(key, spec, data.values[key])); section.appendChild(row);
+      if (scope === "batch" && data.mixed.includes(key)) {
+        const el = row.querySelector("[data-key]"); el.dataset.mixed = "1";
+        if (el.type === "checkbox") el.indeterminate = true;
+        else if (el.tagName === "SELECT") {
+          const option = document.createElement("option"); option.value = "__mixed__"; option.textContent = "Mixed values"; option.disabled = true;
+          el.appendChild(option); el.value = "__mixed__";
+        } else { el.value = ""; el.placeholder = "Mixed values"; }
+      }
     }
     editor.appendChild(section);
   }
   if (data.unknown && Object.keys(data.unknown).length) {
     const note = document.createElement("p"); note.className="settingsNote"; note.textContent="Additional settings are preserved: " + Object.keys(data.unknown).join(", ");editor.appendChild(note);
   }
-  editorBase = scope === "global" ? "__global__" : base;
+  editorBase = scope === "global" ? "__global__" : scope === "batch" ? "__batch__" : base;
   editor.querySelectorAll("[data-key]").forEach(syncSetting);
   savedForm = JSON.stringify(formValues()); editorLoading = false; editor.inert = false;
   $("editorBar").style.display = currentTab === "settings" ? "" : "none";
-  $("deleteBtn").hidden = scope === "global"; $("deleteBtn").disabled = !data.exists;
+  $("deleteBtn").hidden = scope !== "file"; $("deleteBtn").disabled = !data.exists;
   $("globalSettingsBtn").setAttribute("aria-pressed", String(scope === "global"));
   filterSettings(); updateSaveState(); updateRunControls();
 }
@@ -600,7 +681,7 @@ function filterSettings() {
   $("scribeControls").hidden = !scribe;
   $("runReprocessLabel").textContent = scribe ? "Transcribe again with Scribe" : "Reprocess existing outputs";
   if ($("settingsApplicability")) $("settingsApplicability").hidden = !scribe;
-  const onlyDiarize = editorScope === "file" && $("pipelineSel").value === "diarize4" && !$("showOtherSettings")?.checked;
+  const onlyDiarize = editorScope !== "global" && $("pipelineSel").value === "diarize4" && !$("showOtherSettings")?.checked;
   document.querySelectorAll("#editor .row").forEach(row => {row.hidden = onlyDiarize && row.dataset.stage === "transcribe";});
   document.querySelectorAll("#editor details.group").forEach(group => {group.hidden = ![...group.querySelectorAll(".row")].some(row=>!row.hidden);});
   document.querySelectorAll("#editor .row").forEach(row => {
@@ -682,8 +763,14 @@ async function selectFile(base, force = false) {
     d.querySelector(".fileSelect")?.setAttribute("aria-pressed", String(d.dataset.base === base));
     if (d.querySelector(".fileSelect")) d.querySelector(".fileSelect").tabIndex = d.dataset.base === base ? 0 : -1;
   });
-  let data;
-  try { ({ data } = await api(`/api/sidecar/${encodeURIComponent(base)}`)); }
+  const bases = runScope().length ? runScope() : [base];
+  let files;
+  try {
+    files = Object.fromEntries(await Promise.all(bases.map(async name => {
+      const {data} = await api(`/api/sidecar/${encodeURIComponent(name)}`);
+      return [name, data];
+    })));
+  }
   catch (e) {
     if (seq === editorSeq && folder === folderSeq) {
       $("editor").textContent = "Could not load settings. Select the file to retry.";
@@ -693,7 +780,8 @@ async function selectFile(base, force = false) {
     return false;
   }
   if (seq !== editorSeq || folder !== folderSeq || base !== currentBase) return false;
-  renderSettings(data, base, "file");
+  if (bases.length > 1) renderBulkSettings({bases, files});
+  else renderSettings(files[bases[0]], bases[0], "file");
   return true;
 }
 
@@ -888,9 +976,10 @@ async function openSpeakerNames() {
     caption.textContent = label; caption.htmlFor = `speaker-${label}`;
     const field = document.createElement("input");
     field.type = "text"; field.id = `speaker-${label}`; field.dataset.label = label;
-    field.value = data.names[label] || ""; field.placeholder = label; field.maxLength = 60;
+    field.value = data.names[label] || (data.suggested || {})[label] || ""; field.placeholder = label; field.maxLength = 60;
     return [caption, field];
   }));
+  $("speakerSuggestion").hidden = !Object.keys(data.suggested || {}).length;
   // Old recording-wide names are only offered: the person decides whether they fit this run.
   const unassigned = Object.entries(data.unassigned || {});
   $("speakerUnassigned").hidden = !unassigned.length;
@@ -1036,8 +1125,8 @@ async function loadTranscript(base, version) {
     }
     updateRenderBar(!!data.can_render);
     loadAudioReview(base, data.selected);
-    // The stored TXT carries the original labels, so re-render to show names.
-    if (data.can_render && (!renderIsDefault(renderOptions()) || Object.keys(data.speaker_names || {}).length)) applyRenderOptions();
+    // Re-render saved name changes, including removal of automatic names.
+    if (data.can_render && (!renderIsDefault(renderOptions()) || data.speaker_names_edited || Object.keys(data.speaker_names || {}).length)) applyRenderOptions();
   } catch (e) {
     if (!valid()) return;
     delete txtVersionsByBase[base];
@@ -1429,8 +1518,9 @@ async function loadLogContent() {
 
 async function saveSidecar() {
   if (editorScope === "global") return saveGlobalSettings();
+  if (editorScope === "batch") return saveBulkSettings();
   if (!validateForm()) return false;
-  if (saving || editorLoading || !editorBase || editorBase !== currentBase) return false;
+  if (saving || editorLoading || !editorBase) return false;
   if (!formDirty()) return true;
   const base = editorBase, folder = folderSeq, values = formValues();
   const deleteDisabled = $("deleteBtn").disabled;
@@ -1459,6 +1549,32 @@ async function saveSidecar() {
     $("saveBtn").textContent = "Save";
     if (!formDirty()) setMsg("All changes saved.", "ok");
     updateRunControls();
+  }
+}
+
+async function saveBulkSettings() {
+  if (saving || editorLoading || !bulkContext || !validateForm()) return false;
+  if (!formDirty()) return true;
+  const context = bulkContext, folder = folderSeq, changes = formValues();
+  let failure = null;
+  saving = true; $("editor").inert = true; updateSaveState(); updateRunControls();
+  try {
+    const revisions = Object.fromEntries(context.bases.map(base => [base, context.files[base].revision ?? null]));
+    const {status, data} = await api("/api/sidecars/batch", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({bases:context.bases, changes, revisions}),
+    });
+    if (status === 422) { fieldErrors(data.errors); throw new Error("Correct the highlighted settings. No files were changed."); }
+    if (folder !== folderSeq || context !== bulkContext) return false;
+    renderBulkSettings({bases:context.bases, files:data.files});
+    await loadFiles();
+    return true;
+  } catch (e) {failure = e;return false;}
+  finally {
+    saving = false; $("editor").inert = false;
+    updateSaveState(); updateRunControls();
+    if (failure) setMsg(failure.message, "err");
+    else if (!formDirty()) setMsg(`Settings saved to ${context.bases.length} files.`, "ok");
   }
 }
 
@@ -1811,7 +1927,12 @@ $("speakerSave").onclick = handle(saveSpeakerNames);
 $("speakerCancel").onclick = () => { $("speakerDialog").close(); speakerContext = null; };
 $("speakerDialog").addEventListener("cancel", () => { speakerContext = null; });
 $("startBtn").onclick = startRun;
-$("clearRunSelection").onclick = () => { runSelection.clear(); renderFiles(); updateRunControls(); };
+$("clearRunSelection").onclick = handle(() => changeFileSelection(new Set()));
+$("selectShown").onclick = handle(() => {
+  const next = new Set(runSelection), deselect = shownBases.every(base => next.has(base));
+  for (const base of shownBases) deselect ? next.delete(base) : next.add(base);
+  return changeFileSelection(next);
+});
 $("stopBtn").onclick = stopRun;
 $("refreshBtn").onclick = handle(loadFiles);
 $("clearLogBtn").onclick = () => { $("log").textContent = ""; };

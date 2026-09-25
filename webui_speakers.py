@@ -64,7 +64,16 @@ def transcript_key(audio_dir: str, diarized_json: str) -> str:
 def names_for(audio_dir: str, transcript: Optional[str]) -> Dict[str, str]:
     if not transcript:
         return {}
-    return dict(load_all(audio_dir)["transcripts"].get(transcript) or {})
+    saved = load_all(audio_dir)["transcripts"]
+    if transcript in saved:
+        return dict(saved[transcript])
+    # A run can supply automatic names; a manual mapping takes precedence,
+    # including an empty mapping that deliberately restores original labels.
+    try:
+        data = json.loads(Path(audio_dir, transcript).read_text(encoding="utf-8"))
+        return dict((data.get("metadata") or {}).get("speaker_names") or {})
+    except (OSError, ValueError, TypeError):
+        return {}
 
 
 def unassigned_for(audio_dir: str, base: str) -> Dict[str, str]:
@@ -78,10 +87,7 @@ def save_for(audio_dir: str, transcript: str, base: str, names: Dict[str, str]) 
     """
     cleaned = {label: name.strip() for label, name in names.items() if name and name.strip()}
     data = load_all(audio_dir)
-    if cleaned:
-        data["transcripts"][transcript] = cleaned
-    else:
-        data["transcripts"].pop(transcript, None)
+    data["transcripts"][transcript] = cleaned
     data["unassigned"].pop(base, None)
     target = _path(audio_dir)
     temporary = f"{target}.{os.getpid()}.{uuid.uuid4().hex}.tmp"

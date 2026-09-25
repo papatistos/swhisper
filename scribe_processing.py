@@ -32,7 +32,9 @@ def capability(key):
         return dict(supported=True, scope='Local backfill only', description='Local Whisper backfill only; does not change the Scribe transcription. Recovery always uses Swedish transcription with VAD off.')
     if key.startswith('SWHISPER_BACKFILL_'):
         return dict(supported=True, scope='Local backfill only', description='Local Whisper recovery of missing turns only. SenseVoice analyzes recovery snippets only.')
-    if (param and param.target == 'diarization') or key == 'SWHISPER_DIARIZE_DEVICE':
+    if (param and param.target == 'diarization') or key in {
+        'SWHISPER_DIARIZE_DEVICE', 'RECORDING_TYPE', 'INTERVIEWER_NAME', 'INTERVIEWEE_NAME'
+    }:
         return dict(supported=True, scope='Local processing after Scribe', description='Applies to local processing after Scribe transcription.')
     return dict(supported=False, scope='Unavailable for Scribe', description='Does not control SUNET transcription or local recovery. Scribe uses its language selector; recovery uses its own Whisper defaults. Remote prompting, disfluency and alignment controls are unavailable.')
 
@@ -59,6 +61,7 @@ def configure(config, source, work_dir):
 def effective_settings(config):
     """Allowlisted settings only; never serialize credentials from the config."""
     names = ('pipeline_model', 'device', 'min_speakers', 'max_speakers',
+             'recording_type', 'interviewer_name', 'interviewee_name',
              'whisper_timestamp_offset', 'smoothing_enabled', 'min_speaker_words',
              'preserve_markers', 'min_silence_duration', 'include_silence_markers',
              'backfill_missing_turns', 'backfill_try_harder', 'backfill_model', 'backfill_device',

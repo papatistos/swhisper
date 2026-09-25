@@ -58,6 +58,8 @@ from sidecar import (
     find_sidecar,
     parse_sidecar_file,
     sidecar_requests_reprocess,
+    apply_sidecar_to_diarization_config,
+    processing_overrides,
 )
 from webui_run import preview_run, ProgressTracker
 from diarization_status import effective_v4_model
@@ -788,6 +790,7 @@ def api_meta() -> Dict[str, Any]:
             "stage": p.stage,
             "help": PARAM_HELP.get(key, p.note),
             "type": _TYPE_BY_PARSER.get(p.parse.__name__, "str"),
+            "allow_empty": p.allow_empty,
             "global": defaults.get(key),
             "scribe": scribe_capability(key),
             **parameter_ui(key),
@@ -810,7 +813,7 @@ def _global_form():
             'diarization': _dconfig.DiarizationConfig()}
     for key, (target, attr, kind, label) in GLOBAL_EXTRAS.items():
         params[key] = dict(scribe=scribe_capability(key), type=kind, stage='diarize' if target == 'diarization' else 'transcribe',
-                           help='Used by future runs. Per-file overrides take precedence where supported.',
+                           help=PARAM_HELP.get(key, 'Used by future runs. Per-file overrides take precedence where supported.'),
                            **{**parameter_ui(key), 'label': label, 'global': getattr(objs[target], attr)})
     text, revision = env_snapshot(GLOBAL_ENV_PATH)
     raw = parse_env(text)
@@ -884,6 +887,11 @@ def api_pick_audio_dir() -> Dict[str, Any]:
 
 @app.post("/api/audio-dir")
 def api_set_audio_dir(body: Dict[str, str]) -> Dict[str, Any]:
+    with state.lock:
+        return _set_audio_dir(body)
+
+
+def _set_audio_dir(body: Dict[str, str]) -> Dict[str, Any]:
     raw_path = body.get("path") or ""
     try:
         path = str(normalize_path_value(raw_path))
@@ -970,15 +978,21 @@ def api_get_sidecar(basename: str) -> Dict[str, Any]:
     base = _safe_base(dirs["audio"], basename)
     path = find_sidecar(dirs["audio"], base)
     if path is None:
-        return {"exists": False, "values": {}, "comment": "", "unknown": {}}
+        return {"exists": False, "values": {}, "comment": "", "unknown": {}, "revision": None}
     raw = parse_sidecar_file(path)
     known = {k: v for k, v in raw.items() if k in SIDECAR_PARAMS}
     other = {k: v for k, v in raw.items() if k not in SIDECAR_PARAMS}
-    return {"exists": True, "values": known, "comment": _read_comment(path), "unknown": other}
+    return {"exists": True, "values": known, "comment": _read_comment(path), "unknown": other,
+            "revision": env_snapshot(path)[1]}
 
 
 @app.put("/api/sidecar/{basename}")
 def api_put_sidecar(basename: str, body: Dict[str, str]) -> Dict[str, Any]:
+    with state.lock:
+        return _save_sidecar(basename, dict(body))
+
+
+def _save_sidecar(basename: str, body: Dict[str, str]) -> Dict[str, Any]:
     dirs = state.dirs()
     base = _safe_base(dirs["audio"], basename)
     path = os.path.join(dirs["audio"], base + SIDECAR_SUFFIX)
@@ -988,9 +1002,9 @@ def api_put_sidecar(basename: str, body: Dict[str, str]) -> Dict[str, Any]:
     errors: Dict[str, str] = {}
     for key, raw in body.items():
         raw = (raw or "").strip()
-        if not raw:
-            continue
         param = SIDECAR_PARAMS.get(key)
+        if not raw and not (param and param.allow_empty):
+            continue
         if param is None:
             reason = BLOCKED_KEYS.get(key, "unknown setting")
             errors[key] = f"not allowed per file ({reason})"
@@ -1020,8 +1034,8 @@ def api_put_sidecar(basename: str, body: Dict[str, str]) -> Dict[str, Any]:
             os.remove(path)
         return {"exists": False, "values": {}, "comment": ""}
 
-    # If only the comment changed, keep the old mtime so the edit does not
-    # count as a settings change (and thus never triggers reprocessing).
+    # Comments and speaker naming do not invalidate processing, including
+    # when the sidecar also contains unchanged processing overrides.
     old_values: Optional[Dict[str, str]] = None
     old_times: Optional[Tuple[float, float]] = None
     if os.path.isfile(path):
@@ -1034,19 +1048,74 @@ def api_put_sidecar(basename: str, body: Dict[str, str]) -> Dict[str, Any]:
 
     _write_sidecar(path, clean, comment)
 
-    if old_values is not None and old_times is not None and old_values == clean:
+    if old_values is not None and old_times is not None and processing_overrides(old_values) == processing_overrides(clean):
         os.utime(path, old_times)
 
     return {"exists": True, "values": clean, "comment": comment}
 
 
+@app.post("/api/sidecars/batch")
+def api_patch_sidecars(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply only edited keys, validating every file before the first write."""
+    bases, changes, revisions = body.get('bases'), body.get('changes'), body.get('revisions')
+    if (not isinstance(bases, list) or not bases or not all(isinstance(b, str) for b in bases)
+            or len(set(bases)) != len(bases) or not isinstance(changes, dict)
+            or not isinstance(revisions, dict)
+            or not all(isinstance(k, str) and (v is None or isinstance(v, str)) for k, v in changes.items())):
+        raise HTTPException(422, 'Provide selected files, edited settings, and their revisions.')
+    with state.lock:
+        dirs = state.dirs()
+        specs = api_meta()['params']
+        invalid = {k: 'Not an editable setting' for k in changes if k not in specs}
+        if invalid:
+            return JSONResponse(status_code=422, content={'errors': invalid})
+        plans, originals, errors = [], [], {}
+        for base in bases:
+            base = _safe_base(dirs['audio'], base)
+            path = Path(dirs['audio']) / (base + SIDECAR_SUFFIX)
+            snapshot = api_get_sidecar(base)
+            if base not in revisions or revisions[base] != snapshot['revision']:
+                raise HTTPException(409, f'Settings for {base} changed. Reload the selection before saving.')
+            merged = dict(snapshot['values'])
+            for key, value in changes.items():
+                if value is None:
+                    merged.pop(key, None)
+                else:
+                    merged[key] = value.strip()
+            for key, error in validate_settings(merged, specs).items():
+                errors.setdefault(key, f'{base}: {error}')
+            originals.append((path, path.read_bytes() if path.exists() else None,
+                              path.stat() if path.exists() else None))
+            plans.append((base, {**merged, '_comment': snapshot['comment']}))
+        if errors:
+            return JSONResponse(status_code=422, content={'errors': errors})
+        written = []
+        try:
+            for index, (base, values) in enumerate(plans):
+                written.append(index)
+                result = _save_sidecar(base, values)
+                if isinstance(result, JSONResponse):
+                    raise ValueError(f'Could not save settings for {base}')
+        except Exception:
+            for index in reversed(written):
+                path, content, stat = originals[index]
+                if content is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_bytes(content)
+                    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+            raise
+        return {'files': {base: api_get_sidecar(base) for base in bases}}
+
+
 @app.delete("/api/sidecar/{basename}")
 def api_delete_sidecar(basename: str) -> Dict[str, Any]:
-    dirs = state.dirs()
-    base = _safe_base(dirs["audio"], basename)
-    path = os.path.join(dirs["audio"], base + SIDECAR_SUFFIX)
-    if os.path.isfile(path):
-        os.remove(path)
+    with state.lock:
+        dirs = state.dirs()
+        base = _safe_base(dirs["audio"], basename)
+        path = os.path.join(dirs["audio"], base + SIDECAR_SUFFIX)
+        if os.path.isfile(path):
+            os.remove(path)
     return {"exists": False}
 
 
@@ -1102,6 +1171,9 @@ def api_transcript(basename: str, version: Optional[str] = None) -> Dict[str, An
         # Only transcripts with a diarized JSON beside them can be re-rendered.
         "can_render": _diarized_json_for(dirs, selected["id"]) is not None,
         "speaker_names": _speaker_names(dirs, selected["id"]),
+        "speaker_names_edited": webui_speakers.transcript_key(
+            dirs["audio"], _diarized_json_for(dirs, selected["id"]) or path
+        ) in webui_speakers.load_all(dirs["audio"])["transcripts"],
     }
 
 
@@ -1483,15 +1555,28 @@ def _detected_speakers(dirs: Dict[str, str], base: str, version: Optional[str]):
             data = json.load(handle)
     except (OSError, json.JSONDecodeError) as exc:
         raise HTTPException(500, f"Could not read diarized JSON: {exc}")
-    return webui_speakers.detected_in(data.get("segments") or []), webui_speakers.transcript_key(dirs["audio"], json_path)
+    segments = data.get("segments") or []
+    return webui_speakers.detected_in(segments), webui_speakers.transcript_key(dirs["audio"], json_path), segments
 
 
 @app.get("/api/speakers/{basename}")
 def api_get_speakers(basename: str, version: Optional[str] = None) -> Dict[str, Any]:
     dirs = state.dirs()
     base = _safe_base(dirs["audio"], basename)
-    detected, transcript = _detected_speakers(dirs, base, version)
+    detected, transcript, segments = _detected_speakers(dirs, base, version)
+    from speaker_naming import interview_names
+    config = _dconfig.DiarizationConfig()
+    raw = parse_env(env_snapshot(GLOBAL_ENV_PATH)[0])
+    for key in ('RECORDING_TYPE', 'INTERVIEWER_NAME', 'INTERVIEWEE_NAME'):
+        if key in raw:
+            setattr(config, key.lower(), raw[key])
+    config, _ = apply_sidecar_to_diarization_config(config, dirs["audio"], base)
+    try:
+        suggested = interview_names(segments, config)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
     return {"base": base, "detected": detected, "transcript": transcript,
+            "suggested": suggested,
             "names": webui_speakers.names_for(dirs["audio"], transcript),
             "unassigned": webui_speakers.unassigned_for(dirs["audio"], base)}
 
@@ -1500,7 +1585,7 @@ def api_get_speakers(basename: str, version: Optional[str] = None) -> Dict[str, 
 def api_put_speakers(basename: str, body: Dict[str, Any]) -> Dict[str, Any]:
     dirs = state.dirs()
     base = _safe_base(dirs["audio"], basename)
-    detected, transcript = _detected_speakers(dirs, base, body.get("version"))
+    detected, transcript, _ = _detected_speakers(dirs, base, body.get("version"))
     try:
         cleaned = webui_speakers.validate(body.get("names"), detected)
     except ValueError as exc:

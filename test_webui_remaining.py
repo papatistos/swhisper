@@ -23,7 +23,7 @@ class RemainingTests(unittest.TestCase):
             p = patch.object(webui, name, value);p.start();self.addCleanup(p.stop)
         p = patch.dict(os.environ);p.start();self.addCleanup(p.stop)
         for key in list(os.environ):
-            if key.startswith('SWHISPER_') or key == 'JSON_INPUT_DIR': os.environ.pop(key)
+            if key.startswith('SWHISPER_') or key in ('JSON_INPUT_DIR', 'RECORDING_TYPE', 'INTERVIEWER_NAME', 'INTERVIEWEE_NAME'): os.environ.pop(key)
         p = patch.object(path_settings, '_load_env_file', lambda: None);p.start();self.addCleanup(p.stop)
         self.client = TestClient(webui.app, base_url="http://127.0.0.1:8722")
         self.addCleanup(self.client.close)
@@ -76,10 +76,92 @@ class RemainingTests(unittest.TestCase):
         with patch.object(webui.state,'running',return_value=True):
             self.assertEqual(self.client.put('/api/settings/global',json={'values':{},'revision':form['revision']}).status_code,409)
 
+    def test_global_interview_settings_control_modal_suggestions(self):
+        self.transcript()
+        form = self.client.get('/api/settings/global').json()
+        self.assertEqual(form['params']['RECORDING_TYPE']['choices'], ['', 'interview'])
+        values = {'RECORDING_TYPE': 'interview', 'INTERVIEWER_NAME': 'Researcher',
+                  'INTERVIEWEE_NAME': 'Participant'}
+        saved = self.client.put('/api/settings/global', json={'values': values, 'revision': form['revision']})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(parse_env(webui.GLOBAL_ENV_PATH.read_text()), values)
+        self.assertEqual(self.client.get('/api/speakers/a').json()['suggested'], {'S01': 'Participant'})
+        values['RECORDING_TYPE'] = ''
+        cleared = self.client.put('/api/settings/global', json={'values': values, 'revision': saved.json()['revision']})
+        self.assertEqual(cleared.status_code, 200, cleared.text)
+        self.assertEqual(self.client.get('/api/speakers/a').json()['suggested'], {})
+        values['RECORDING_TYPE'] = 'typo'
+        invalid = self.client.put('/api/settings/global', json={'values': values, 'revision': cleared.json()['revision']})
+        self.assertEqual(invalid.status_code, 422)
+
     def test_per_file_numeric_bounds(self):
         response=self.client.put('/api/sidecar/a',json={'SWHISPER_NUM_SPEAKERS':'0'})
         self.assertEqual(response.status_code,422)
         self.assertIn('SWHISPER_NUM_SPEAKERS',response.json()['errors'])
+
+    def batch(self, bases, changes, revisions=None):
+        if revisions is None:
+            revisions = {base: self.client.get(f'/api/sidecar/{base}').json()['revision'] for base in bases}
+        return self.client.post('/api/sidecars/batch', json={'bases': bases, 'changes': changes, 'revisions': revisions})
+
+    def test_batch_updates_only_edited_fields_and_preserves_comments(self):
+        self.client.put('/api/sidecar/a', json={'SWHISPER_NUM_SPEAKERS': '2', '_comment': 'First comment'})
+        self.client.put('/api/sidecar/b', json={'SWHISPER_NUM_SPEAKERS': '4', '_comment': 'Second comment'})
+        with (self.root / 'a.swhisper').open('a') as handle:
+            handle.write('FUTURE_KEY=preserved\n')
+        response = self.batch(['a', 'b'], {'RECORDING_TYPE': 'interview', 'INTERVIEWEE_NAME': 'Participant'})
+        self.assertEqual(response.status_code, 200, response.text)
+        for base, count, comment in [('a', '2', 'First comment'), ('b', '4', 'Second comment')]:
+            result = self.client.get(f'/api/sidecar/{base}').json()
+            self.assertEqual(result['values']['SWHISPER_NUM_SPEAKERS'], count)
+            self.assertEqual(result['values']['RECORDING_TYPE'], 'interview')
+            self.assertEqual(result['comment'], comment)
+        self.assertEqual(self.client.get('/api/sidecar/a').json()['unknown'], {'FUTURE_KEY': 'preserved'})
+        self.assertEqual(self.batch(['a', 'b'], {'RECORDING_TYPE': ''}).status_code, 200)
+        self.assertEqual(self.client.get('/api/sidecar/a').json()['values']['RECORDING_TYPE'], '')
+        self.assertEqual(self.batch(['a', 'b'], {'RECORDING_TYPE': None}).status_code, 200)
+        self.assertNotIn('RECORDING_TYPE', self.client.get('/api/sidecar/a').json()['values'])
+
+    def test_batch_checks_every_file_before_writing(self):
+        self.client.put('/api/sidecar/a', json={'SWHISPER_MAX_SPEAKERS': '5'})
+        self.client.put('/api/sidecar/b', json={'SWHISPER_MAX_SPEAKERS': '2'})
+        before = {base: (self.root / f'{base}.swhisper').read_bytes() for base in ('a', 'b')}
+        response = self.batch(['a', 'b'], {'SWHISPER_MIN_SPEAKERS': '3'})
+        self.assertEqual(response.status_code, 422)
+        for base in before:
+            self.assertEqual((self.root / f'{base}.swhisper').read_bytes(), before[base])
+        revisions = {base: self.client.get(f'/api/sidecar/{base}').json()['revision'] for base in before}
+        self.client.put('/api/sidecar/b', json={'SWHISPER_MAX_SPEAKERS': '6'})
+        self.assertEqual(self.batch(['a', 'b'], {'RECORDING_TYPE': 'interview'}, revisions).status_code, 409)
+        self.assertEqual((self.root / 'a.swhisper').read_bytes(), before['a'])
+
+    def test_batch_rolls_back_a_failed_write(self):
+        self.client.put('/api/sidecar/a', json={'SWHISPER_NUM_SPEAKERS': '2'})
+        original = (self.root / 'a.swhisper').read_bytes()
+        writer = webui._write_sidecar
+        def fail_second(path, values, comment):
+            writer(path, values, comment)
+            if str(path).endswith('b.swhisper'):
+                raise OSError('Simulated failure after write')
+        with patch.object(webui, '_write_sidecar', fail_second):
+            with self.assertRaises(OSError):
+                self.batch(['a', 'b'], {'RECORDING_TYPE': 'interview'})
+        self.assertEqual((self.root / 'a.swhisper').read_bytes(), original)
+        self.assertFalse((self.root / 'b.swhisper').exists())
+
+    def test_name_only_saves_keep_processing_timestamp_even_with_other_overrides(self):
+        from sidecar import sidecar_requests_reprocess, STAGE_DIARIZE
+        self.client.put('/api/sidecar/a', json={'SWHISPER_NUM_SPEAKERS': '2'})
+        path = self.root / 'a.swhisper'
+        os.utime(path, (100, 100))
+        artifact = self.write('a.ok')
+        os.utime(artifact, (200, 200))
+        for changes in ({'RECORDING_TYPE': 'interview'}, {'INTERVIEWER_NAME': 'Chris'}, {'RECORDING_TYPE': ''}):
+            self.assertEqual(self.batch(['a'], changes).status_code, 200)
+            self.assertEqual(path.stat().st_mtime, 100)
+            self.assertFalse(sidecar_requests_reprocess(str(self.root), 'a', str(artifact), STAGE_DIARIZE)[0])
+        self.assertEqual(self.batch(['a'], {'SWHISPER_NUM_SPEAKERS': '3'}).status_code, 200)
+        self.assertTrue(sidecar_requests_reprocess(str(self.root), 'a', str(artifact), STAGE_DIARIZE)[0])
 
     def test_export_creates_copies_and_requires_explicit_replace(self):
         original=self.transcript();body={'formats':['txt','rtf'],'name':'review','destination':'exports','options':{'stats':False}}
@@ -217,6 +299,54 @@ class RemainingTests(unittest.TestCase):
         # The file the pipeline wrote is never rewritten.
         self.assertEqual(original.read_text(), "Original transcript")
         self.assertEqual(self.client.put("/api/speakers/a", json={"names": {"S01": ""}}).json()["names"], {})
+
+    def test_interview_suggestions_use_current_settings_without_changing_old_transcripts(self):
+        original = self.transcript()
+        self.assertEqual(self.client.get('/api/speakers/a').json()['suggested'], {})
+        self.write('.env', 'RECORDING_TYPE=interview\nINTERVIEWEE_NAME="Anna Svensson"\n')
+        response = self.client.get('/api/speakers/a').json()
+        self.assertEqual(response['suggested'], {'S01': 'Anna Svensson'})
+        self.assertEqual(response['names'], {})
+        self.assertFalse((self.root / 'speaker-names.json').exists())
+        self.client.put('/api/speakers/a', json={'names': response['suggested']})
+        self.assertIn('Anna Svensson', self.client.post('/api/render/a', json={}).json()['content'])
+        self.assertEqual(original.read_text(), 'Original transcript')
+
+    def test_automatic_names_can_be_overridden_and_cleared_for_one_version(self):
+        self.transcript()
+        path = self.root / 'transcripts/json/a_20260913-120000_diarized.json'
+        data = json.loads(path.read_text())
+        data['metadata'] = {'speaker_names': {'S01': 'INTERVIEWEE'}}
+        path.write_text(json.dumps(data))
+        self.assertEqual(self.client.get('/api/speakers/a').json()['names'], {'S01': 'INTERVIEWEE'})
+        self.assertEqual(self.client.get('/api/timeline/a').json()['segments'][0]['speaker'], 'INTERVIEWEE')
+        self.client.put('/api/speakers/a', json={'names': {'S01': 'Anna'}})
+        self.assertEqual(self.client.get('/api/speakers/a').json()['names'], {'S01': 'Anna'})
+        self.client.put('/api/speakers/a', json={'names': {}})
+        self.assertEqual(self.client.get('/api/speakers/a').json()['names'], {})
+        self.assertTrue(self.client.get('/api/transcript/a').json()['speaker_names_edited'])
+        self.assertEqual(self.client.get('/api/timeline/a').json()['segments'][0]['speaker'], 'S01')
+        self.assertEqual(json.loads(path.read_text()), data)
+
+    def test_per_file_interview_settings_override_globals_and_can_disable_naming(self):
+        self.transcript()
+        self.write('.env', 'RECORDING_TYPE=\nINTERVIEWEE_NAME=Global participant\n')
+        fields = self.client.get('/api/meta').json()['params']
+        for key in ('RECORDING_TYPE', 'INTERVIEWER_NAME', 'INTERVIEWEE_NAME'):
+            self.assertIn(key, fields)
+            self.assertEqual(fields[key]['stage'], 'diarize')
+        values = {'RECORDING_TYPE': 'interview', 'INTERVIEWEE_NAME': 'Anna', 'INTERVIEWER_NAME': 'Chris'}
+        saved = self.client.put('/api/sidecar/a', json=values)
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(self.client.get('/api/sidecar/a').json()['values'], values)
+        self.assertEqual(self.client.get('/api/speakers/a').json()['suggested'], {'S01': 'Anna'})
+        self.write('.env', 'RECORDING_TYPE=interview\nINTERVIEWEE_NAME=Global participant\n')
+        disabled = self.client.put('/api/sidecar/a', json={'RECORDING_TYPE': ''})
+        self.assertEqual(disabled.status_code, 200, disabled.text)
+        self.assertEqual(self.client.get('/api/sidecar/a').json()['values'], {'RECORDING_TYPE': ''})
+        self.assertEqual(self.client.get('/api/speakers/a').json()['suggested'], {})
+        self.client.put('/api/sidecar/a', json={})
+        self.assertEqual(self.client.get('/api/speakers/a').json()['suggested'], {'S01': 'Global participant'})
 
     def test_speaker_names_belong_to_the_transcript_they_were_entered_for(self):
         self.transcript()

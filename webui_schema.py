@@ -49,6 +49,9 @@ def parameter_ui(key):
         result['min'] = 0
     if short == 'TASK':
         result['choices'] = ['transcribe', 'translate']
+    if key == 'RECORDING_TYPE':
+        result['choices'] = ['', 'interview']
+        result['choice_labels'] = {'': 'Not specified', 'interview': 'Interview'}
     return result
 
 
@@ -90,6 +93,7 @@ def validate_settings(values, specs):
 
 PARAM_GROUPS: List[Dict[str, Any]] = [
     {"name": "Speakers", "keys": [
+        "RECORDING_TYPE", "INTERVIEWER_NAME", "INTERVIEWEE_NAME",
         "SWHISPER_NUM_SPEAKERS", "SWHISPER_MIN_SPEAKERS", "SWHISPER_MAX_SPEAKERS"]},
     {"name": "Reprocess", "keys": [
         "SWHISPER_FORCE_REPROCESS", "SWHISPER_DIARIZE_FORCE_REPROCESS"]},
@@ -128,6 +132,9 @@ PARAM_GROUPS: List[Dict[str, Any]] = [
 
 # Mouseover help texts for the sidecar form
 PARAM_HELP: Dict[str, str] = {
+    "RECORDING_TYPE": "Interview enables automatic speaker naming by word count after diarization and name suggestions in the Speaker names dialog. Not specified disables both.",
+    "INTERVIEWER_NAME": "Name for the speaker with the second-highest word count when recording type is Interview. Default: INTERVIEWER.",
+    "INTERVIEWEE_NAME": "Name for the speaker with the highest word count when recording type is Interview. Default: INTERVIEWEE.",
     "SWHISPER_SCRIBE_TIMESTAMP_OFFSET": "Scribe only: shift returned word and segment timestamps locally. Default 0 seconds; does not run model alignment.",
     "SWHISPER_NUM_SPEAKERS": "Exact number of speakers for this file — sets both min and max. Tip from the README: specifying 1–2 more speakers than actually present often works better.",
     "SWHISPER_MIN_SPEAKERS": "Lower bound for the number of speakers pyannote may detect (default 1).",

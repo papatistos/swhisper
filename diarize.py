@@ -697,6 +697,11 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                 segments, display_options,
                 pipeline_min_silence=config.min_silence_duration,
             )
+            from speaker_naming import interview_names
+            from webui_speakers import apply as apply_speaker_names
+            automatic_names = interview_names(segments, config)
+            display_segments, display_stats = apply_speaker_names(
+                display_segments, automatic_names, speaker_stats)
 
             # VTT format
             print(f'Saving transcript for "{audio_basename}" in VTT format...')
@@ -731,7 +736,7 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                 rtf_output_path,
                 config=config,
                 transcript_id=log_timestamp,
-                speaker_stats=speaker_stats,
+                speaker_stats=display_stats,
             )
             print(f"RTF file saved to rtf/{rtf_filename}")
             output_files['rtf'] = rtf_filename
@@ -745,7 +750,7 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                 txt_output_path,
                 config=config,
                 transcript_id=log_timestamp,
-                speaker_stats=speaker_stats
+                speaker_stats=display_stats
             )
             print(f"TXT file saved to txt/{txt_filename}")
             output_files['txt'] = txt_filename
@@ -781,6 +786,7 @@ def process_file(config: DiarizationConfig, json_file: str, processed_files: int
                 'word_stats': word_stats,
                 'segment_stats': segment_stats,
                 'speaker_stats': speaker_stats,
+                'speaker_names': automatic_names,
                 'min_silence_duration': config.min_silence_duration,
                 'preserve_markers': config.preserve_markers
             }

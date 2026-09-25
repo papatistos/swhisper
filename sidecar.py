@@ -4,7 +4,7 @@ A sidecar file lets you override selected pipeline settings for a single
 audio file. It lives next to the audio file, is named after the audio
 file's basename with a ``.swhisper`` extension (e.g. ``interview1.swhisper``
 for ``interview1.wav``), and uses the same ``KEY=value`` syntax and the same
-``SWHISPER_*`` variable names as the global ``.swhisper.env`` file::
+variable names as the global ``.swhisper.env`` file::
 
     # interview1.swhisper
     SWHISPER_NUM_SPEAKERS=3            # shorthand: sets min AND max speakers
@@ -98,6 +98,8 @@ class SidecarParam:
     parse: Callable[[str], Any]
     stage: str                        # STAGE_* constant (which stage it affects)
     note: str = ""
+    allow_empty: bool = False
+    requires_reprocessing: bool = True
 
 
 def _params() -> List[SidecarParam]:
@@ -108,6 +110,12 @@ def _params() -> List[SidecarParam]:
           STAGE_DIARIZE, "shorthand: sets both min_speakers and max_speakers"),
 
         # --- Diarization: speaker counts ---
+        P("RECORDING_TYPE", TARGET_DIARIZATION, "recording_type", _parse_str, STAGE_DIARIZE,
+          allow_empty=True, requires_reprocessing=False),
+        P("INTERVIEWER_NAME", TARGET_DIARIZATION, "interviewer_name", _parse_str, STAGE_DIARIZE,
+          requires_reprocessing=False),
+        P("INTERVIEWEE_NAME", TARGET_DIARIZATION, "interviewee_name", _parse_str, STAGE_DIARIZE,
+          requires_reprocessing=False),
         P("SWHISPER_MIN_SPEAKERS", TARGET_DIARIZATION, "min_speakers", _parse_int, STAGE_DIARIZE),
         P("SWHISPER_MAX_SPEAKERS", TARGET_DIARIZATION, "max_speakers", _parse_int, STAGE_DIARIZE),
 
@@ -191,6 +199,12 @@ def _params() -> List[SidecarParam]:
 
 SIDECAR_PARAMS: Dict[str, SidecarParam] = {p.env_key: p for p in _params()}
 
+
+def processing_overrides(values: Dict[str, str]) -> Dict[str, str]:
+    """Settings whose changes can require processing the recording again."""
+    return {key: value for key, value in values.items()
+            if key not in SIDECAR_PARAMS or SIDECAR_PARAMS[key].requires_reprocessing}
+
 # Keys that exist in .swhisper.env but are deliberately NOT allowed per file,
 # with the reason (used for a helpful warning instead of "unknown key").
 BLOCKED_KEYS: Dict[str, str] = {
@@ -272,7 +286,7 @@ def parse_sidecar_file(path: str) -> Dict[str, str]:
             value = value.split('#')[0].strip()
         value = value.strip().strip('"').strip("'")
         value = value.replace('\\n', '\n').replace('\\t', '\t').replace('\\r', '\r')
-        if key and value:
+        if key and (value or (key in SIDECAR_PARAMS and SIDECAR_PARAMS[key].allow_empty)):
             values[key] = value
     return values
 
@@ -466,7 +480,7 @@ def sidecar_requests_reprocess(
 
     def _relevant(key: str) -> bool:
         param = SIDECAR_PARAMS.get(key)
-        if param is None:
+        if param is None or not param.requires_reprocessing:
             return False
         # Turning a force option off does not change the generated output.
         # Its presence alone must not make a newer sidecar look stale.

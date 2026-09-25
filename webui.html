@@ -33,6 +33,8 @@
       <select id="fileFilter" aria-label="Filter files"><option value="all">All files</option><option value="unfinished">Unfinished</option><option value="reprocess">Needs reprocessing</option><option value="ready">Transcript ready</option><option value="overrides">Per-file settings</option></select>
       <select id="fileSort" aria-label="Sort files"><option value="name">Name A–Z</option><option value="newest">Newest audio first</option><option value="status">Processing status</option></select>
       <span id="fileCount" role="status"></span>
+      <button id="selectShown" type="button">Select all shown</button>
+      <span id="selectionCount" class="settingsNote" role="status"></span>
       <p id="fileNote" class="settingsNote" hidden></p>
     </div>
     <div id="files" role="region" aria-label="Audio files"></div>
@@ -49,7 +51,7 @@
       </select>
       <label id="runReprocessRow"><input type="checkbox" id="runReprocess"> <span id="runReprocessLabel">Reprocess existing outputs</span></label>
       <button class="primary" id="startBtn" disabled>Run</button>
-      <button id="clearRunSelection" title="Run the whole folder again" hidden>Clear selection</button>
+      <button id="clearRunSelection" title="Clear the file selection" hidden>Clear selection</button>
       <button id="stopBtn" disabled>Stop</button>
       <span class="status" id="runStatus" role="status">Idle</span>
       <span id="connectionStatus" role="status">Connecting…</span>
@@ -190,6 +192,7 @@
     <p>Names saved for this recording before names were tied to a transcript: <span id="speakerUnassignedList"></span>. They may belong to a different diarization run. Check that the labels match before you use them; they are removed once you save names for any transcript of this recording.</p>
     <button id="speakerUseUnassigned" type="button">Fill in these names</button>
   </div>
+  <p id="speakerSuggestion" class="settingsNote" hidden>Interview names are proposed by word count: the most words for the interviewee, the second most for the interviewer. Check the names before saving.</p>
   <div id="speakerRows"></div>
   <p id="speakerMsg" role="status"></p>
   <div class="dialogActions"><button id="speakerCancel" autofocus>Cancel</button><button id="speakerSave" class="primary">Save names</button></div>
