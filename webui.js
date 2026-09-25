@@ -260,7 +260,11 @@ function nudgeFont(delta) {
 /* ---------- meta & file list ---------- */
 
 async function loadMeta() {
-  META = (await api("/api/meta")).data;
+  const meta = (await api("/api/meta")).data;
+  if (!Array.isArray(meta.diarization_models) || !Array.isArray(meta.pipelines)) {
+    throw new Error("The WebUI server is running older code. Run python webui.py --restart in your terminal. This page will retry automatically.");
+  }
+  META = meta;
   $("dirInput").value = META.audio_dir;
   const paths = [...(META.audio_paths || [])];
   if (META.audio_dir && !paths.includes(META.audio_dir)) paths.push(META.audio_dir);
@@ -2312,10 +2316,10 @@ async function pollRun() {
     wasRunning = st.running;
   } catch (e) {
     connected = false;
-    $("connectionStatus").textContent = "Disconnected · retrying connection…";
+    $("connectionStatus").textContent = initialized ? "Disconnected · retrying connection…" : "Could not load WebUI · retrying…";
     $("runDot").className = "dot err";
-    $("runStatus").textContent = "Run status unavailable";
-    $("consoleMsg").textContent = "Connection lost; transcription may still be running.";
+    $("runStatus").textContent = initialized ? "Run status unavailable" : e.message;
+    $("consoleMsg").textContent = initialized ? "Connection lost; transcription may still be running." : "Waiting for the WebUI to load.";
   } finally { pollBusy = false; updateRunControls(); }
 }
 

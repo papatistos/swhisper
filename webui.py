@@ -33,6 +33,8 @@ import time
 import uuid
 import webbrowser
 import tempfile
+import socket
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -678,7 +680,16 @@ class AppState:
 
 
 state = AppState()
-app = FastAPI(title="swhisper web UI")
+
+
+@asynccontextmanager
+async def _lifespan(app):
+    """Reconnect to a transcription that outlived the previous UI process."""
+    state.attach_existing_run()
+    yield
+
+
+app = FastAPI(title="swhisper web UI", lifespan=_lifespan)
 
 # The server has no authentication because it binds to the loopback address.
 # That only holds if requests really come from this machine, so refuse a Host
@@ -705,12 +716,6 @@ async def restrict_to_local_requests(request, call_next):
         if scheme not in ("http", "https") or _hostname(rest) not in LOCAL_HOSTNAMES:
             return JSONResponse(status_code=403, content={"detail": "Refusing cross-origin request"})
     return await call_next(request)
-
-
-@app.on_event("startup")
-async def _attach_active_run() -> None:
-    """Reconnect to a transcription that outlived the previous UI process."""
-    state.attach_existing_run()
 
 
 # ---------------------------------------------------------------------------
@@ -1964,20 +1969,68 @@ def api_run_log(offset: int = 0) -> Dict[str, Any]:
 
 
 def main() -> None:
+    from webui_lifecycle import LifecycleError, find_instance, stop_instance
+
     parser = argparse.ArgumentParser(description="swhisper web UI")
     parser.add_argument("--port", type=int, default=8722)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--audio-dir", help="Override SWHISPER_AUDIO_DIR for this session")
     parser.add_argument("--no-browser", action="store_true", help="Do not open the browser automatically")
+    actions = parser.add_mutually_exclusive_group()
+    actions.add_argument("--restart", action="store_true", help="Restart the WebUI, keeping pipeline jobs running")
+    actions.add_argument("--stop", action="store_true", help="Stop the WebUI, keeping pipeline jobs running")
+    actions.add_argument("--status", action="store_true", help="Show whether the WebUI is running")
     args = parser.parse_args()
+    if not 1 <= args.port <= 65535:
+        parser.error("--port must be between 1 and 65535")
+    url_host = f"[{args.host}]" if ":" in args.host else args.host
+    url = f"http://{url_host}:{args.port}"
+    command = "python webui.py"
+    if args.port != 8722:
+        command += f" --port {args.port}"
+    if args.host != "127.0.0.1":
+        import shlex
+        command += f" --host {shlex.quote(args.host)}"
+    try:
+        instance = find_instance(args.host, args.port, Path(__file__))
+        if args.status:
+            print(f"WebUI is running at {url} (PID {instance.pid})." if instance
+                  else f"WebUI is not running at {url}.")
+            return
+        if instance and (args.restart or args.stop):
+            print(f"Stopping WebUI (PID {instance.pid}); pipeline jobs keep running.", flush=True)
+            stop_instance(instance, args.host, args.port, Path(__file__))
+        elif instance:
+            print(f"WebUI is already running at {url} (PID {instance.pid}).")
+            print(f"Restart: {command} --restart\nStop:    {command} --stop")
+            if args.audio_dir:
+                print("--audio-dir was not applied. Use --restart to change startup options.")
+            if not args.no_browser:
+                webbrowser.open(url)
+            return
+        if args.stop:
+            print("WebUI stopped. Pipeline jobs keep running." if instance else "WebUI is not running.")
+            return
+    except LifecycleError as exc:
+        parser.exit(1, f"{exc}\n")
     if args.audio_dir:
         state.audio_dir_override = os.path.abspath(args.audio_dir)
         state.audio_dir_pinned = True
-    url = f"http://{args.host}:{args.port}"
-    print(f"🌐 swhisper web UI: {url}")
-    if not args.no_browser:
-        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    # Reserve the port before announcing success or opening a browser. Passing
+    # this socket to Uvicorn also closes the check-then-bind race.
+    try:
+        listener = socket.create_server((args.host, args.port),
+                                        family=socket.AF_INET6 if ":" in args.host else socket.AF_INET)
+    except OSError as exc:
+        parser.exit(1, f"Cannot start WebUI at {url}: {exc}.\n"
+                    f"Check {command} --status or choose another --port.\n")
+    with listener:
+        print(f"swhisper web UI: {url}", flush=True)
+        print(f"Restart: {command} --restart\nStop:    {command} --stop", flush=True)
+        if not args.no_browser:
+            threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+        uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port,
+                                      log_level="warning")).run(sockets=[listener])
 
 
 if __name__ == "__main__":

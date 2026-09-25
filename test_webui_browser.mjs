@@ -16,6 +16,7 @@ const saved = {a:{values:{SWHISPER_NUM_SPEAKERS:'2',SWHISPER_CONDITION_ON_PREVIO
 const writes = [], launches = [], errors = [], exports = [];
 let globalValues={}, globalRevision="g1", exportCanceled=false, reusableFixture={transcription:2,diarization:1};
 let previewAllSkipped=false;
+let legacyMetadata=false;
 let speakerNames={};
 let speakerSuggestions={};
 let waveformDelay = {}, waveformFailure = false, noTranscript = false, detailDelay = 0;
@@ -55,7 +56,11 @@ const server = http.createServer(async (req,res) => {
   if (u.pathname === '/webui.js') {res.writeHead(200, {'Content-Type':'text/javascript','Cache-Control':'no-store'});res.end(js);return;}
   if (u.pathname === '/webui_waveform_speakers.js') {res.writeHead(200, {'Content-Type':'text/javascript'});res.end(speakerJS);return;}
   if (u.pathname === '/webui_waveform_speakers.css') {res.writeHead(200, {'Content-Type':'text/css'});res.end(speakerCSS);return;}
-  if (u.pathname === '/api/meta') return send(meta());
+  if (u.pathname === '/api/meta') {
+    const metadata = meta();
+    if (legacyMetadata) { delete metadata.diarization_models; delete metadata.diarization_default; }
+    return send(metadata);
+  }
   if (u.pathname === '/api/files') return send({files:['a','b','<unsafe>'].map(base=>({base,transcribed:base!=='<unsafe>',diarized:base!=='<unsafe>',has_transcript:base!=='<unsafe>',has_logs:true,will_reprocess:base==='b',mtime:base==='b'?20:10,duration:base==='a'?3202:base==='b'?95:null}))});
   if (u.pathname === '/api/run/status') return offline ? send({detail:'Offline'},503) : send({...status, folder:serverFolder??audioDir});
   if (u.pathname === '/api/logs') {
@@ -1289,6 +1294,20 @@ try {
       await cdp('Network.setBlockedURLs',{urls:[]});
       await evaluate('pollLoop()');await wait('initialized && connected');
     }
+  });
+  await check('Older server metadata explains the restart and recovers without a page reload',async()=>{
+    legacyMetadata=true;
+    try {
+      await evaluate('window.__beforeReload=true');
+      await cdp('Page.reload');
+      await wait('!window.__beforeReload && document.querySelector("#runStatus").textContent.includes("python webui.py --restart")');
+      assert.equal(await evaluate('initialized'),false);
+      assert.equal(await evaluate('$("startBtn").disabled'),true);
+    } finally { legacyMetadata=false; }
+    await wait('initialized && connected');
+    assert.equal(await evaluate('Object.keys(FILES_BY_BASE).length'),3);
+    assert.equal(await evaluate('$("connectionStatus").textContent'),'Connected');
+    assert.doesNotMatch(await evaluate('$("runStatus").textContent'),/older code|--restart/);
   });
   await check('File persistence: reload restores the file and tab without requiring a visible search result',async()=>{
     await evaluate('$("fileSearch").value="";$("fileSearch").dispatchEvent(new Event("input"));$("fileFilter").value="all";$("fileFilter").dispatchEvent(new Event("change"))');

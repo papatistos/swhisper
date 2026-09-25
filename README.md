@@ -162,7 +162,12 @@ A local browser UI covers per-file settings and run control:
 ```bash
 pip install fastapi uvicorn   # one-time
 python webui.py               # then open http://127.0.0.1:8722
+python webui.py --restart     # restart even if another terminal or agent started it
+python webui.py --status      # show the running server and its PID
+python webui.py --stop        # stop the UI server
 ```
+
+Starting an already running WebUI opens that instance and prints the restart and stop commands. Restart and stop leave pipeline jobs running; the next WebUI reconnects to them. Restart runs in the current terminal, where Ctrl+C also stops the UI. Use the same `--port` for these commands if you chose a custom port. Process discovery uses `lsof` and `ps` and only stops a Python WebUI from this checkout owned by your user. Startup options must be supplied again when restarting.
 
 It shows your audio files with per-file status (transcribed / diarized / per-file settings / will-reprocess) and recording length, edits the `.swhisper` sidecar files through a grouped form (empty fields = global settings, shown as placeholders), and starts/stops runs with live log output. The directory selector remembers your last folder across restarts in the local `.swhisper-webui.json` file and adds it to the saved-folder history in `.swhisper.env`. If that folder is unavailable, the UI falls back to `SWHISPER_AUDIO_DIR`. `--audio-dir` overrides both for the session. Reconnecting to an existing run can select that run's folder.
 
