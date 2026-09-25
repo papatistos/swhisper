@@ -214,6 +214,7 @@ async function changeDir() {
   if (!path || path === META?.audio_dir) return;
   if (!await resolveUnsaved()) { $("dirInput").value = META?.audio_dir || ""; return; }
   changingDir = true;
+  let folderLoaded = false;
   updateRunControls();
   try {
     const { data } = await api("/api/audio-dir", {
@@ -243,8 +244,10 @@ async function changeDir() {
     await loadMeta();
     await loadFiles();
     showTab(currentTab, false);
+    folderLoaded = true;
   } catch (e) { reportError(e); $("dirInput").value = META?.audio_dir || ""; }
   finally { changingDir = false; updateRunControls(); }
+  if (folderLoaded) await restoreSelectedFile();
 }
 
 async function browseAudioDir() {
@@ -650,6 +653,13 @@ function validateForm() {
   return true;
 }
 
+async function restoreSelectedFile() {
+  if (!META || currentBase || editorBase || editorLoading || changingDir || saving) return;
+  const key = `selectedFile.${META.audio_dir}`;
+  const base = readUIPreferences()[key] ?? uiPreferences[key];
+  if (typeof base === "string" && Object.hasOwn(FILES_BY_BASE, base)) await selectFile(base);
+}
+
 async function selectFile(base, force = false) {
   if (changingDir || saving) return false;
   if (!force && base === editorBase && base === currentBase) return true;
@@ -658,6 +668,7 @@ async function selectFile(base, force = false) {
   const seq = ++editorSeq, folder = folderSeq;
   transcriptSeq++; renderSeq++; logSeq++; logListSeq++;
   currentBase = base;
+  saveUIPreference(`selectedFile.${META.audio_dir}`, base);
   editorBase = savedForm = null;
   editorLoading = true;
   $("editor").inert = true;
@@ -1616,7 +1627,9 @@ async function pollRun() {
   pollBusy = true;
   try {
     if (!initialized) {
-      await loadMeta(); await loadFiles(); initialized = true;
+      await loadMeta(); await loadFiles();
+      await restoreSelectedFile();
+      initialized = true;
     }
     const seq = ++statusSeq;
     const st = (await api("/api/run/status")).data;

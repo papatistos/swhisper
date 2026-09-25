@@ -651,7 +651,8 @@ try {
   await check('Invalid saved Show settings safely fall back to valid defaults',async()=>{
     await evaluate('localStorage.setItem("swhisper_render_options", "broken JSON")');
     await reopen();
-    assert.deepEqual(await evaluate('renderOptions()'),await evaluate('RENDER_DEFAULTS'));
+    assert.equal(await evaluate('editorBase'),'a','The selected file is restored too');
+    assert.deepEqual(await evaluate('renderOptions()'),await evaluate('renderBaseline'));
     await evaluate('localStorage.setItem("swhisper_render_options", JSON.stringify({stats:false,pauses:"false",min_pause:-1,pause_linebreak_threshold:100}))');
     await reopen();
     assert.deepEqual(await evaluate('renderOptions()'),await evaluate('({...RENDER_DEFAULTS,stats:false})'));
@@ -787,6 +788,52 @@ try {
     } finally {
       await cdp('Network.setBlockedURLs',{urls:[]});
       await evaluate('pollLoop()');await wait('initialized && connected');
+    }
+  });
+  await check('File persistence: reload restores the file and tab without requiring a visible search result',async()=>{
+    await evaluate('$("fileSearch").value="";$("fileSearch").dispatchEvent(new Event("input"));$("fileFilter").value="all";$("fileFilter").dispatchEvent(new Event("change"))');
+    await select('b');await wait('editorBase==="b"');await click('tabTranscript');
+    await evaluate('$("fileSearch").value="a";$("fileSearch").dispatchEvent(new Event("input"))');
+    await reloadPage();
+    assert.equal(await evaluate('currentBase'),'b');
+    assert.equal(await evaluate('editorBase'),'b');
+    assert.equal(await evaluate('currentTab'),'transcript');
+    await wait('!$("versionSel").disabled');
+    assert.equal(await evaluate('document.querySelector("[data-base=b]")'),null,'The filter is preserved independently of the open file');
+    await evaluate('$("fileSearch").value="";$("fileSearch").dispatchEvent(new Event("input"))');
+    await click('tabSettings');await input('unsaved selection guard');await select('a');await wait('$("dirtyDialog").open');
+    await click('dirtyCancel');
+    assert.equal(await evaluate('readUIPreferences()[`selectedFile.${META.audio_dir}`]'),'b','Canceled navigation does not change the saved file');
+    await select('a');await wait('$("dirtyDialog").open');await click('dirtyDiscard');await wait('editorBase==="a"');
+  });
+  await check('File persistence: each folder restores its own selected recording',async()=>{
+    await evaluate('$("dirInput").value="/mock/audio";changeDir()');
+    await select('b');await wait('editorBase==="b"');
+    await evaluate('$("dirInput").value="/mock/other";changeDir()');
+    await select('a');await wait('editorBase==="a"');
+    await evaluate('$("dirInput").value="/mock/audio";changeDir()');
+    assert.equal(await evaluate('currentBase'),'b');
+    assert.equal(await evaluate('editorBase'),'b');
+    await reloadPage();assert.equal(await evaluate('editorBase'),'b');
+    await evaluate('$("dirInput").value="/mock/other";changeDir()');
+    assert.equal(await evaluate('editorBase'),'a');
+  });
+  await check('File persistence: a user selection supersedes slow restoration',async()=>{
+    await select('b');await wait('editorBase==="b"');sidecarDelay.b=300;
+    await evaluate('window.__beforeReload=true');await cdp('Page.reload');
+    await wait('!window.__beforeReload && typeof currentBase !== "undefined" && currentBase==="b" && editorLoading');
+    await select('a');await wait('editorBase==="a" && initialized && connected');
+    sidecarDelay.b=0;
+    assert.equal(await evaluate('currentBase'),'a');
+    assert.equal(await evaluate('readUIPreferences()[`selectedFile.${META.audio_dir}`]'),'a');
+    await reloadPage();assert.equal(await evaluate('editorBase'),'a');
+  });
+  await check('File persistence: deleted files and invalid saved values are ignored',async()=>{
+    for (const value of ['missing-recording','__proto__',42]) {
+      await evaluate(`saveUIPreference('selectedFile.'+META.audio_dir,${JSON.stringify(value)})`);
+      await reloadPage();
+      assert.equal(await evaluate('currentBase'),null);
+      assert.equal(await evaluate('editorBase'),null);
     }
   });
   assert.deepEqual(errors,[],'No uncaught browser errors');
