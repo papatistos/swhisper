@@ -17,7 +17,7 @@ class ApiAnchorTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.root = Path(temp.name)
+        self.root = Path(temp.name).resolve()
         p = patch.object(webui, 'state', webui.AppState(str(self.root)));p.start();self.addCleanup(p.stop)
         p = patch.dict(os.environ);p.start();self.addCleanup(p.stop)
         for key in list(os.environ):
@@ -41,6 +41,34 @@ class ApiAnchorTests(unittest.TestCase):
         (self.root / 'transcripts/txt/a_20260913-120000.txt').write_text("S01 [00:00:04]:\nHello\n")
         data = self.client.get('/api/transcript/a').json()
         self.assertEqual(data['anchors'], [{'line': 0, 'start': 4.0, 'end': 4.0}])
+
+    def test_version_list_combines_pipelines_without_reading_transcript_content(self):
+        dirs = webui.state.dirs()
+        paths = [self.root / 'transcripts/txt/a_20260913-120000.txt',
+                 Path(dirs['json']) / 'transcripts/txt/a_20260914-120000.txt']
+        work = self.root / 'scribe-webui/run-a'
+        paths.append(work / 'transcripts/txt/audio_20260915-120000.txt')
+        for i, path in enumerate(paths):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('Transcript contents stay out of the version list')
+            os.utime(path, (100 + i, 100 + i))
+        (work / 'scribe-state.json').write_text(json.dumps({'identity': {'source': str((self.root / 'a.wav').resolve())}}))
+        (self.root / 'transcripts/txt/another.txt').write_text('Unrelated recording')
+        response = self.client.get('/api/transcript/a/versions')
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['base'], 'a')
+        self.assertEqual([v['id'] for v in data['versions']],
+                         [str(p.relative_to(self.root)) for p in reversed(paths)])
+        self.assertEqual(data['versions'][0]['pipeline'], 'Scribe')
+        self.assertNotIn('content', data)
+        for version in data['versions']:
+            self.assertNotIn('content', version)
+            self.assertEqual(self.client.get('/api/transcript/a', params={'version': version['id']}).status_code, 200)
+
+    def test_version_list_is_empty_before_transcription_and_validates_basename(self):
+        self.assertEqual(self.client.get('/api/transcript/a/versions').json(), {'base': 'a', 'versions': []})
+        self.assertEqual(self.client.get('/api/transcript/.hidden/versions').status_code, 400)
 
 
 if __name__ == '__main__':

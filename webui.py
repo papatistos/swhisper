@@ -1149,6 +1149,14 @@ def api_history(limit: int = 50) -> Dict[str, Any]:
     return {"path": history_path, "entries": entries[:max(1, min(limit, 500))]}
 
 
+@app.get("/api/transcript/{basename}/versions")
+def api_transcript_versions(basename: str) -> Dict[str, Any]:
+    """List available versions without reading or rendering a transcript."""
+    dirs = state.dirs()
+    base = _safe_base(dirs["audio"], basename)
+    return {"base": base, "versions": _transcript_versions(dirs, base)}
+
+
 @app.get("/api/transcript/{basename}")
 def api_transcript(basename: str, version: Optional[str] = None) -> Dict[str, Any]:
     """Serve a TXT transcript for a file — the newest version by default."""
