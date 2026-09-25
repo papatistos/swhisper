@@ -62,7 +62,7 @@ const server = http.createServer(async (req,res) => {
     if (legacyMetadata) { delete metadata.diarization_models; delete metadata.diarization_default; }
     return send(metadata);
   }
-  if (u.pathname === '/api/files') return send({files:['a','b','<unsafe>'].map(base=>({base,transcribed:base!=='<unsafe>',diarized:base!=='<unsafe>',has_transcript:base!=='<unsafe>',has_logs:true,will_reprocess:base==='b',mtime:base==='b'?20:10,duration:base==='a'?3202:base==='b'?95:null}))});
+  if (u.pathname === '/api/files') return send({files:['a','b','<unsafe>'].map(base=>({base,transcribed:base!=='<unsafe>',diarized:base!=='<unsafe>',has_transcript:base!=='<unsafe>',has_logs:true,will_reprocess:base==='b',backfill_incomplete:base==='a',mtime:base==='b'?20:10,duration:base==='a'?3202:base==='b'?95:null}))});
   if (u.pathname === '/api/run/status') return offline ? send({detail:'Offline'},503) : send({...status, folder:serverFolder??audioDir});
   if (u.pathname === '/api/logs') {
     const file = u.searchParams.get('file');
@@ -451,6 +451,11 @@ try {
     assert.equal(await evaluate('[...document.querySelectorAll(\'[data-base="a"] .badge\')].map(b=>b.textContent).includes("53 min")'),true);
     assert.equal(await evaluate('[...document.querySelectorAll(\'[data-base="b"] .badge\')].map(b=>b.textContent).includes("1 min")'),true);
     assert.equal(await evaluate('[...document.querySelectorAll(\'[data-base="<unsafe>"] .badge\')].some(b=>/min|h /.test(b.textContent))'),false);
+  });
+  await check('Recordings with unrecovered backfill gaps carry an orange tag',async()=>{
+    const tags=base=>evaluate(`[...document.querySelectorAll('[data-base="${base}"] .badge.on-warn')].map(b=>b.textContent)`);
+    assert.ok((await tags('a')).includes('Partial backfill'));
+    assert.ok(!(await tags('b')).includes('Partial backfill'));
   });
   await check('Skipped output disables Run until reprocessing is requested',async()=>{
     previewAllSkipped=true;

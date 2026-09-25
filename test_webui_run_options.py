@@ -144,6 +144,19 @@ class RunOptionTests(unittest.TestCase):
                 webui.api_run(dict(pipeline='transcribe4', diarization_model='precision'))
             self.assertEqual(popen.call_args.kwargs['env']['SWHISPER_USE_PRECISION'], 'true')
 
+    def test_file_list_marks_recordings_with_unrecovered_backfill_gaps(self):
+        self.transcribed()
+        (self.root / 'b.wav').write_bytes(b'other')
+        # Listing files starts background duration probes; keep them out of later Popen mocks.
+        warm = patch.object(webui.webui_durations, 'warm', return_value=False)
+        warm.start()
+        self.addCleanup(warm.stop)
+        files = {f['base']: f for f in webui.api_files()['files']}
+        self.assertEqual((files['a']['backfill_incomplete'], files['b']['backfill_incomplete']), (False, False))
+        marker = Path(self.state.dirs()['output']) / 'a.ok'
+        marker.write_text(marker.read_text() + '# Backfill status: partial\n')
+        self.assertTrue({f['base']: f for f in webui.api_files()['files']}['a']['backfill_incomplete'])
+
     def test_meta_offers_local_whisper_and_scribe_as_transcription_choices(self):
         meta = webui.api_meta()
         self.assertEqual([p['id'] for p in meta['pipelines'] if p['choice']], ['transcribe4', 'scribe'])

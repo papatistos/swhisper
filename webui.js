@@ -577,6 +577,7 @@ function renderFiles() {
     const badges = [];
     const primary = f.will_reprocess ? "Needs reprocessing" : f.has_transcript ? "Transcript ready" : f.transcribed ? "Awaiting diarization" : "Not transcribed";
     badges.push(`<span class="badge ${f.will_reprocess ? "on-warn" : f.has_transcript ? "on-ok" : ""}">${primary}</span>`);
+    if (f.backfill_incomplete) badges.push('<span class="badge on-warn" title="The transcript is complete, but some missing turns could not be recovered and are marked [-]. The next run retries them.">Partial backfill</span>');
     if (f.duration) badges.push(`<span class="badge" title="Recording length">${escapeHTML(fmtDuration(f.duration))}</span>`);
     if (f.sidecar) badges.push('<span class="badge on-info">overrides</span>');
     if (f.comment) badges.push('<span class="badge">comment</span>');

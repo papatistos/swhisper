@@ -22,6 +22,19 @@ def effective_v4_model(config):
     return COMMUNITY_MODEL if model in ('', LEGACY_MODEL) else model
 
 
+def backfill_incomplete(marker):
+    """True when the run behind *marker* could not recover every missing turn.
+
+    The transcript is complete; the unrecovered gaps are marked [-] and the
+    next run retries them.
+    """
+    try:
+        text = Path(marker).read_text(encoding='utf-8')
+    except OSError:
+        return False
+    return any(f'# Backfill status: {status}' in text for status in ('failed', 'partial'))
+
+
 def model_run_reason(marker, requested_model, stamp=None):
     """Why existing output cannot satisfy this model, or None when it can.
 

@@ -64,7 +64,7 @@ from sidecar import (
     processing_overrides,
 )
 from webui_run import preview_run, ProgressTracker
-from diarization_status import effective_v4_model
+from diarization_status import backfill_incomplete, effective_v4_model
 from webui_scribe import LANGUAGES as SCRIBE_LANGUAGES
 from run_scope import (DIARIZATION_MODELS, ENV_VAR as ONLY_FILES_ENV, REPROCESS_ENV_VAR as REPROCESS_ENV,
                        RETRANSCRIBE_ENV_VAR as RETRANSCRIBE_ENV, REDIARIZE_ENV_VAR as REDIARIZE_ENV)
@@ -997,6 +997,7 @@ def api_files() -> Dict[str, Any]:
             "sidecar": bool(sidecar_path) and bool(parse_sidecar_file(sidecar_path)) if sidecar_path else False,
             "comment": has_comment,
             "will_reprocess": redo_t or redo_d,
+            "backfill_incomplete": diarized and backfill_incomplete(ok_path),
             "has_transcript": base in has_transcript,
             "has_logs": base in has_logs,
             "mtime": audio_mtimes.get(base, 0),
