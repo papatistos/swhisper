@@ -65,6 +65,7 @@ let wasRunning = false;
 let savedAudioPaths = new Set();
 let runSelection = new Set();   // files selected for settings and processing
 let shownBases = [], selectionBusy = false, bulkContext = null;
+const expandedFiles = new Set(), fileVersionRequests = new Map();
 let durationTimer = null;
 let changingDir = false;
 let editorBase = null, savedForm = null, saving = false, editorLoading = false;
@@ -243,6 +244,8 @@ async function changeDir() {
     currentBase = editorBase = savedForm = null;
     runSelection.clear(); bulkContext = null; editorScope = "file";
     txtVersionsByBase = {};
+    expandedFiles.clear();
+    fileVersionRequests.clear();
     editorLoading = false;
     $("editor").inert = false;
     $("editor").innerHTML = '<div class="placeholder">Select an audio file.</div>';
@@ -372,6 +375,8 @@ async function loadFiles() {
   const { data } = await api("/api/files");
   if (seq !== filesSeq || folder !== folderSeq) return;
   FILES_BY_BASE = Object.fromEntries(data.files.map(f => [f.base, f]));
+  fileVersionRequests.clear();
+  for (const base of expandedFiles) if (!FILES_BY_BASE[base]) expandedFiles.delete(base);
   $("fileNote").textContent = data.note || "";
   $("fileNote").hidden = !data.note;
   renderFiles();
@@ -387,6 +392,51 @@ function fmtDuration(seconds) {
        : minutes ? `${minutes} min`
        : `${total} s`;
 }
+
+async function renderFileTranscripts(list, file) {
+  const folder = folderSeq;
+  list.textContent = "Loading transcripts…";
+  let request = fileVersionRequests.get(file.base);
+  if (!request) {
+    request = api(`/api/transcript/${encodeURIComponent(file.base)}/versions`);
+    fileVersionRequests.set(file.base, request);
+  }
+  const valid = () => folder === folderSeq && list.isConnected && fileVersionRequests.get(file.base) === request;
+  try {
+    const { data } = await request;
+    if (!valid()) return;
+    list.replaceChildren();
+    const versions = [...data.versions];
+    if (file.transcribed) versions.push({id: RAW_JSON_VERSION, filename: "Raw JSON transcript"});
+    for (const version of versions) {
+      const item = document.createElement("li");
+      const button = document.createElement("button");
+      button.className = "fileTranscript";
+      button.dataset.version = version.id;
+      button.textContent = (version.timestamp ? fmtTimestamp(version.timestamp) : version.filename)
+        + (version.pipeline ? ` · ${version.pipeline}` : "");
+      button.title = version.id === RAW_JSON_VERSION ? "Before diarization" : version.id;
+      button.setAttribute("aria-label", `Open ${button.textContent} for ${file.base}`);
+      button.onclick = handle(async () => {
+        if (folder !== folderSeq || !await selectFile(file.base) || folder !== folderSeq) return;
+        showTab("transcript");
+        await loadTranscript(file.base, version.id);
+      });
+      item.appendChild(button);
+      list.appendChild(item);
+    }
+    if (!versions.length) list.textContent = "No transcripts yet.";
+  } catch (error) {
+    if (!valid()) return;
+    fileVersionRequests.delete(file.base);
+    list.textContent = `Could not load transcripts: ${error.message} `;
+    const retry = document.createElement("button");
+    retry.textContent = "Retry";
+    retry.onclick = () => renderFileTranscripts(list, file);
+    list.appendChild(retry);
+  }
+}
+
 function visibleFiles() {
   const all = Object.values(FILES_BY_BASE);
   const query = $("fileSearch").value.toLocaleLowerCase();
@@ -414,7 +464,7 @@ function renderFiles() {
     box.textContent = all.length ? "No files match these filters." : "No audio files found.";
     return;
   }
-  for (const f of rows) {
+  for (const [index, f] of rows.entries()) {
     const div = document.createElement("div");
     div.className = "file" + (f.base === currentBase ? " sel" : "");
     div.dataset.base = f.base;
@@ -430,7 +480,32 @@ function renderFiles() {
     if (f.transcribed) badges.push('<span class="badge jbadge" title="View raw JSON transcript">JSON</span>');
     if (f.has_logs) badges.push('<span class="badge lbadge" title="Open logs">Logs</span>');
     div.innerHTML = `<label class="runPick"><input type="checkbox"><span class="visuallyHidden">Select file</span></label>` +
+      `<button class="fileExpand" type="button"></button>` +
       `<button class="name fileSelect">${escapeHTML(f.base)}</button><div class="badges">${badges.join("")}</div>`;
+    const expand = div.querySelector(".fileExpand");
+    const transcripts = document.createElement("ul");
+    transcripts.className = "fileTranscripts";
+    transcripts.id = `file-transcripts-${index}`;
+    transcripts.setAttribute("aria-label", `Transcripts for ${f.base}`);
+    transcripts.setAttribute("aria-live", "polite");
+    expand.setAttribute("aria-controls", transcripts.id);
+    const updateExpansion = () => {
+      const open = expandedFiles.has(f.base);
+      expand.textContent = open ? "▾" : "▸";
+      expand.setAttribute("aria-expanded", String(open));
+      expand.setAttribute("aria-label", `${open ? "Hide" : "Show"} transcripts for ${f.base}`);
+      expand.title = open ? "Hide transcripts" : "Show transcripts";
+      transcripts.hidden = !open;
+    };
+    expand.onclick = ev => {
+      ev.stopPropagation();
+      expandedFiles.has(f.base) ? expandedFiles.delete(f.base) : expandedFiles.add(f.base);
+      updateExpansion();
+      if (!transcripts.hidden) renderFileTranscripts(transcripts, f);
+    };
+    transcripts.addEventListener("click", ev => ev.stopPropagation());
+    updateExpansion();
+    div.appendChild(transcripts);
     const pick = div.querySelector(".runPick input");
     pick.checked = runSelection.has(f.base);
     pick.setAttribute("aria-label", `Select ${f.base} for settings and processing`);
@@ -480,6 +555,7 @@ function renderFiles() {
       items[Math.max(0, Math.min(items.length - 1, target))].querySelector(".fileSelect").focus();
     });
     box.appendChild(div);
+    if (!transcripts.hidden) renderFileTranscripts(transcripts, f);
   }
 }
 

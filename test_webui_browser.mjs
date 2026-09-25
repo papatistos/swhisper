@@ -19,6 +19,8 @@ let previewAllSkipped=false;
 let speakerNames={};
 let speakerSuggestions={};
 let waveformDelay = {}, waveformFailure = false, noTranscript = false, detailDelay = 0;
+let versionListFailure = false, versionListDelay = 0;
+let listedVersions = [{id:'v2',filename:'new',timestamp:'20260924-120000',pipeline:'Scribe'}, {id:'v1',filename:'old'}];
 const waveformRequests = [];
 // Two versions of one recording that split it into paragraphs differently:
 // v2 has short paragraphs every 10 s, v1 long ones every 25 s behind an introduction.
@@ -64,7 +66,8 @@ const server = http.createServer(async (req,res) => {
   }
   if (u.pathname === '/api/settings/global') {
     if(req.method==='PUT') {if(data.revision!==globalRevision)return send({detail:'stale'},409);globalValues=data.values;globalRevision+='x';}
-    const gm=meta();gm.params.SWHISPER_MIN_SPEAKERS=gm.params.SWHISPER_NUM_SPEAKERS;delete gm.params.SWHISPER_NUM_SPEAKERS;gm.groups=gm.groups.map(g=>({...g,keys:g.keys.map(k=>k==='SWHISPER_NUM_SPEAKERS'?'SWHISPER_MIN_SPEAKERS':k)}));return send({...gm,values:globalValues,revision:globalRevision,path:'/mock/.swhisper.env'});
+    const gm=meta();gm.params.SWHISPER_MIN_SPEAKERS=gm.params.SWHISPER_NUM_SPEAKERS;delete gm.params.SWHISPER_NUM_SPEAKERS;gm.groups=gm.groups.map(g=>({...g,keys:g.keys.map(k=>k==='SWHISPER_NUM_SPEAKERS'?'SWHISPER_MIN_SPEAKERS':k)}));
+    return send({...gm,values:globalValues,revision:globalRevision,path:'/mock/.swhisper.env'});
   }
   if (u.pathname.startsWith('/api/timeline/')) {
     if (noTranscript) return send({detail:'No transcript'},404);
@@ -132,6 +135,11 @@ const server = http.createServer(async (req,res) => {
     return send({base:'a',detected:['S01','S02'],names:speakerNames,suggested:speakerSuggestions});
   }
   if (u.pathname.startsWith('/api/json-transcript/')) return send({base:'a',path:'whisper-json-output/a.json',content:'{"raw": true}'});
+  if (u.pathname.startsWith('/api/transcript/') && u.pathname.endsWith('/versions')) {
+    await delay(versionListDelay);
+    if (versionListFailure) return send({detail:'Version list unavailable'},503);
+    return send({versions:decodeURIComponent(u.pathname.split('/')[3])==='<unsafe>'?[]:listedVersions});
+  }
   if (u.pathname.startsWith('/api/transcript/')) {
     if (noTranscript) return send({detail:'No transcript'},404);
     const version=u.searchParams.get('version')||'v2';
@@ -172,7 +180,7 @@ try {
   };
   const select=async base=>evaluate(`document.querySelector('[data-base="${base}"] .fileSelect').click()`);
   const input=async value=>evaluate(`document.getElementById('commentField').value=${JSON.stringify(value)};document.getElementById('commentField').dispatchEvent(new Event('input',{bubbles:true}))`);
-  const key=async(key,code)=>{await cdp('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode:({Escape:27,Enter:13,ArrowLeft:37,ArrowRight:39,ArrowUp:38,ArrowDown:40})[key]});await cdp('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:({Escape:27,Enter:13,ArrowLeft:37,ArrowRight:39,ArrowUp:38,ArrowDown:40})[key]});};
+  const key=async(key,code)=>{await cdp('Input.dispatchKeyEvent',{type:'keyDown',key,code,...(key==='Enter'?{text:'\r'}:{}),windowsVirtualKeyCode:({Escape:27,Enter:13,ArrowLeft:37,ArrowRight:39,ArrowUp:38,ArrowDown:40})[key]});await cdp('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:({Escape:27,Enter:13,ArrowLeft:37,ArrowRight:39,ArrowUp:38,ArrowDown:40})[key]});};
   const check=async(name,fn)=>{
     try { await fn(); console.log('PASS '+name); }
     catch (error) {
@@ -185,6 +193,78 @@ try {
   await cdp('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
   await cdp('Page.navigate',{url:`http://127.0.0.1:${server.address().port}/`});
   await wait('typeof initialized !== "undefined" && initialized && connected');
+  const expandFile = base => evaluate(`document.querySelector('[data-base="${base}"] .fileExpand').click()`);
+  await check('File expansion lists transcript versions without selecting or ticking the recording',async()=>{
+    assert.equal(await evaluate('document.querySelectorAll(".fileExpand[aria-expanded=false]").length'),3);
+    await expandFile('a');
+    await wait('document.querySelectorAll("[data-base=a] .fileTranscript").length===3');
+    assert.equal(await evaluate('currentBase'),null);
+    assert.equal(await evaluate('runSelection.size'),0);
+    assert.deepEqual(await evaluate('[...document.querySelectorAll("[data-base=a] .fileTranscript")].map(b=>b.textContent)'),
+      ['2026-09-24 12:00:00 · Scribe','old','Raw JSON transcript']);
+    await evaluate('document.querySelector("[data-base=a] .fileExpand").focus()');
+    await key('Enter','Enter');
+    assert.equal(await evaluate('document.querySelector("[data-base=a] .fileTranscripts").hidden'),true);
+    await key('Enter','Enter');
+    await wait('document.querySelectorAll("[data-base=a] .fileTranscript").length===3');
+    await expandFile('<unsafe>');
+    await wait('document.querySelectorAll(".fileTranscripts")[0].textContent==="No transcripts yet."');
+    assert.equal(await evaluate('document.querySelector("#files unsafe")'),null);
+  });
+  await check('Expanded transcript lists survive filtering and refresh with newly available versions',async()=>{
+    await evaluate('$("fileSearch").value="b";renderFiles();$("fileSearch").value="";renderFiles()');
+    await wait('document.querySelectorAll("[data-base=a] .fileTranscript").length===3');
+    listedVersions.push({id:'v0',filename:'earlier'});
+    await evaluate('loadFiles()');
+    await wait('document.querySelectorAll("[data-base=a] .fileTranscript").length===4');
+    assert.equal(await evaluate('document.querySelector("[data-base=a] .fileExpand").getAttribute("aria-expanded")'),'true');
+    const shot=await cdp('Page.captureScreenshot',{format:'png'});
+    await fs.writeFile('/private/tmp/swhisper-expanded-files.png',Buffer.from(shot.data,'base64'));
+    await cdp('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:false});
+    assert.equal(await evaluate('$("files").scrollWidth <= $("files").clientWidth'),true);
+    const mobile=await cdp('Page.captureScreenshot',{format:'png'});
+    await fs.writeFile('/private/tmp/swhisper-expanded-files-mobile.png',Buffer.from(mobile.data,'base64'));
+    await cdp('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+    listedVersions.pop();
+  });
+  await check('Failed transcript lists offer a working retry',async()=>{
+    versionListFailure=true;
+    await expandFile('b');
+    await wait('document.querySelector("[data-base=b] .fileTranscripts").textContent.includes("Retry")');
+    versionListFailure=false;
+    await evaluate('document.querySelector("[data-base=b] .fileTranscripts button").click()');
+    await wait('document.querySelectorAll("[data-base=b] .fileTranscript").length===3');
+  });
+  await check('Transcript entries open the chosen version and respect unsaved settings',async()=>{
+    await evaluate('document.querySelector("[data-base=a] [data-version=v1]").click()');
+    await wait('$("versionSel").value==="v1" && !$("versionSel").disabled');
+    assert.equal(await evaluate('currentTab'),'transcript');
+    await click('tabSettings');await input('unsaved transcript navigation');
+    await expandFile('b');await expandFile('b');
+    await wait('document.querySelectorAll("[data-base=b] .fileTranscript").length===3');
+    assert.equal(await evaluate('$("dirtyDialog").open'),false);
+    await evaluate('document.querySelector("[data-base=b] [data-version=v1]").click()');
+    await wait('$("dirtyDialog").open');await click('dirtyCancel');
+    await wait('!$("dirtyDialog").open');
+    assert.equal(await evaluate('currentBase'),'a');
+    assert.equal(await evaluate('$("commentField").value'),'unsaved transcript navigation');
+    await input(saved.a.comment);
+    await evaluate('document.querySelector("[data-base=b] [data-version=__raw_json__]").click()');
+    await wait('currentBase==="b" && $("versionSel").value==="__raw_json__" && !$("versionSel").disabled');
+  });
+  await check('Folder changes clear expanded lists and ignore responses from the previous folder',async()=>{
+    versionListDelay=300;
+    await evaluate('fileVersionRequests.clear();renderFiles()');
+    await evaluate('$("dirInput").value="/mock/other";changeDir()');
+    await wait('META.audio_dir==="/mock/other" && !changingDir');
+    await delay(350);
+    assert.equal(await evaluate('expandedFiles.size'),0);
+    assert.equal(await evaluate('document.querySelectorAll(".fileTranscript").length'),0);
+    versionListDelay=0;
+    await evaluate('$("dirInput").value="/mock/audio";changeDir()');
+    await wait('META.audio_dir==="/mock/audio" && !changingDir');
+    await click('tabSettings');
+  });
   await check('Directory controls share aligned edges at different font sizes',async()=>{
     for (const fontSize of [16,22,28]) {
       await evaluate(`document.documentElement.style.fontSize='${fontSize}px'`);

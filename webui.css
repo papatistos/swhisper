@@ -84,8 +84,13 @@ main { flex: 1; display: flex; min-height: 0; }
 #files .file:hover { background: var(--panel2); }
 #files .file.sel { background: var(--panel2); border-left: 3px solid var(--accent); padding-left: 11px; }
 #files .name { font-weight: 600; word-break: break-all; }
-#files .file { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 10px; align-items: start; }
-#files .badges { grid-column: 2; }
+#files .file { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 0 8px; align-items: start; }
+#files .badges { grid-column: 3; }
+#files .fileExpand { padding: 0; width: 24px; min-height: 24px; border: 0; background: transparent; }
+#files .fileTranscripts { grid-column: 3; margin: 8px 0 0; padding: 0; list-style: none;
+                          color: var(--muted); font-size: 0.8rem; cursor: default; }
+#files .fileTranscript { display: block; width: 100%; padding: 6px 8px; margin: 2px 0;
+                         text-align: left; white-space: normal; overflow-wrap: anywhere; }
 #files .runPick { display: flex; align-items: center; padding-top: 2px; cursor: pointer; }
 #files .runPick input { width: 20px; height: 20px; }
 .visuallyHidden { position: absolute; width: 1px; height: 1px; overflow: hidden;
