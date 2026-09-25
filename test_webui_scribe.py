@@ -242,6 +242,24 @@ assert 'diarize.utils' not in sys.modules
         self.assertEqual(again['files'][0]['action'], 'process')
         self.assertIn('New Scribe transcript', again['files'][0]['reason'])
 
+    def test_named_recordings_upload_again_without_new_consent(self):
+        from webui_scribe import preview_scribe
+        for row in preview_scribe(self.root)['files']:
+            saved = Path(row['work_dir']) / 'whisper-json-output' / 'audio.json'
+            saved.parent.mkdir(parents=True)
+            saved.write_text('{}')
+        plan = preview_scribe(self.root, retranscribe={'a'})
+        a, b = plan['files']
+        self.assertEqual((a['remote'], a['retranscribe'], a['consent']), (True, True, False))
+        self.assertEqual((b['remote'], b['retranscribe']), (False, False))
+        self.assertTrue(plan['remote'])
+        self.assertFalse(plan['consent_required'], 'Recordings uploaded before need no new consent')
+        self.assertEqual(plan['retranscribe'], ['a'])
+        (self.root / 'c.wav').write_bytes(b'new')
+        fresh = preview_scribe(self.root, selected='c')
+        self.assertTrue(fresh['files'][0]['consent'])
+        self.assertTrue(fresh['consent_required'])
+
     def test_batch_runs_only_reviewed_files_that_need_work(self):
         import webui_scribe
         work = Path(webui_scribe.preview_scribe(self.root, selected='a')['files'][0]['work_dir'])

@@ -36,8 +36,27 @@ def local_config(source, work, diarization_model=''):
     return configure(config, source, work)
 
 
+def _named(choice, base):
+    """True for every recording, or a collection of basenames to redo."""
+    return choice is True or (not isinstance(choice, bool) and base in choice)
+
+
+def previously_uploaded(work):
+    """Whether this recording already went to SUNET, so a new upload needs no new consent."""
+    try:
+        state = json.loads((work / 'scribe-state.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        state = {}
+    from transcribe_scribe import REMOTE_JOB_KEYS
+    return (isinstance(state, dict) and any(state.get(key) for key in REMOTE_JOB_KEYS)
+            or (work / 'whisper-json-output' / 'audio.json').is_file()
+            or (work / 'superseded').is_dir())
+
+
 def preview_scribe(audio_dir, selected='', language=LANGUAGES[0], diarization_model='', retranscribe=False,
                    rediarize=False):
+    """Plan a Scribe run. *retranscribe* and *rediarize* are True for every
+    recording, or collections of basenames to redo in this run."""
     audio = Path(audio_dir).resolve()
     if language not in LANGUAGES:
         raise ValueError('Unsupported Scribe language')
@@ -70,25 +89,32 @@ def preview_scribe(audio_dir, selected='', language=LANGUAGES[0], diarization_mo
             # transcribe_scribe contacts SUNET only when no saved transcript exists,
             # or when this run explicitly retranscribes.
             saved = (work / 'whisper-json-output' / 'audio.json').is_file()
-            remote = retranscribe or not saved
+            again = _named(retranscribe, source.stem)
+            remote = again or not saved
             stamp = completion_marker(work)
             evidence.append((str(stamp), stamp.stat().st_mtime_ns if stamp.exists() else None))
             fingerprint = hashlib.sha256(json.dumps(evidence).encode()).hexdigest()
             # A new transcript always needs a new diarization.
             reuse_reason = diarization_reason(config, source, work)
-            diarize_reason = 'New Scribe transcript' if remote and saved else diarization_reason(config, source, work, rediarize)
-            transcription = ("Uploads again; the saved Scribe transcript moves to superseded/" if saved and retranscribe
+            diarize_reason = ('New Scribe transcript' if remote and saved
+                              else diarization_reason(config, source, work, _named(rediarize, source.stem)))
+            transcription = ("Uploads again; the saved Scribe transcript moves to superseded/" if saved and again
                              else "Resume or upload" if remote else "Reuses the saved Scribe transcript; no upload or SUNET login")
             diarization = (f'reuses the local {settings["pipeline_model"]} diarization' if diarize_reason is None
                            else f'diarization {settings["pipeline_model"]} ({diarize_reason})')
             rows.append(dict(local_settings=settings, file=source.name, base=source.stem, work_dir=str(work), fingerprint=fingerprint,
                              stage='Scribe + local diarization' if remote else 'Local diarization of saved Scribe transcript',
                              action='process' if remote or diarize_reason else 'skip', remote=remote,
+                             consent=remote and not previously_uploaded(work),
+                             retranscribe=again, rediarize=_named(rediarize, source.stem),
                              reusable=dict(transcription=saved, diarization=saved and reuse_reason is None),
                              reason=f'{transcription}; {diarization}; {recovery}; SenseVoice {"on" if settings["backfill_enable_sensevoice"] else "off"}; offset {settings["whisper_timestamp_offset"]:g}s; local exports in {work / "transcripts"}'))
+    listed = lambda choice: choice if isinstance(choice, bool) else sorted(choice)
     result = dict(audio_dir=str(audio), pipeline='scribe', language=language, selected=selected,
                   files=rows, notes=NOTES, remote=any(row['remote'] for row in rows),
-                  diarization_model=diarization_model, retranscribe=retranscribe, rediarize=rediarize)
+                  consent_required=any(row['consent'] for row in rows),
+                  diarization_model=diarization_model, retranscribe=listed(retranscribe),
+                  rediarize=listed(rediarize))
     result['token'] = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
     return result
 
@@ -117,8 +143,8 @@ def main(argv=None):
             '--work-dir', row['work_dir'], '--language', plan['language'],
             '--auth', 'browseros',
         ] + (['--diarization-model', plan['diarization_model']] if plan.get('diarization_model') else [])
-          + (['--retranscribe'] if plan.get('retranscribe') else [])
-          + (['--rediarize'] if plan.get('rediarize') else []))
+          + (['--retranscribe'] if row.get('retranscribe') else [])
+          + (['--rediarize'] if row.get('rediarize') else []))
         if code:
             return code
         print(f"Scribe completed: {row['file']}", flush=True)
