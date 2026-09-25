@@ -120,8 +120,8 @@ def preview_run(audio_dir, pipeline, tc, dc, only=None, reprocess=False, retrans
     if rows and all(row['action'] == 'skip' for row in rows) and any(
             row['reason'] == 'Existing output; no reprocessing requested' for row in rows):
         notes.insert(0, 'Run is disabled because existing outputs are being skipped. '
-                     'To run them again, cancel this preview, tick "Force reprocessing" under the '
-                     'transcription or diarization model, then select Run again. '
+                     'To run them again, cancel this preview, tick "Re-transcribe" or "Re-diarize" '
+                     'under the recording, then select Run again. '
                      'Selecting a recording alone does not enable reprocessing.')
     if pipeline == 'transcribe5':
         notes.append('Diarization-first selects files using transcription JSON and transcription reprocessing rules; a diarization-only override does not select an already transcribed file.')

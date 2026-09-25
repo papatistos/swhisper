@@ -70,7 +70,7 @@ class RunOptionTests(unittest.TestCase):
         plain = webui.api_run_preview('diarize4', ['a'], diarization_model='nemotron')
         self.assertEqual([r['action'] for r in plain['files']], ['skip'])
         self.assertIn('Run is disabled', plain['notes'][0])
-        self.assertIn('Force reprocessing', plain['notes'][0])
+        self.assertIn('Re-diarize', plain['notes'][0])
         forced = webui.api_run_preview('diarize4', ['a'], diarization_model='nemotron', reprocess=True)
         self.assertEqual([r['action'] for r in forced['files']], ['reprocess'])
         self.assertFalse(any('Run is disabled' in note for note in forced['notes']))

@@ -14,7 +14,8 @@ let audioDir = '/mock/audio', serverFolder = null, offline = false, failSave = f
 let status = {running:false, pipeline:null, returncode:null, run_id:null, progress:{completed:{}}};
 const saved = {a:{values:{SWHISPER_NUM_SPEAKERS:'2',SWHISPER_CONDITION_ON_PREVIOUS:'yes'},comment:'original'}, b:{values:{},comment:'B'}};
 const writes = [], launches = [], errors = [], exports = [];
-let globalValues={}, globalRevision="g1", exportCanceled=false, reusableFixture={transcription:2,diarization:1};
+let globalValues={}, globalRevision="g1", exportCanceled=false, consentFixture=false;
+let reusableFixture={a:{transcription:true,diarization:true},b:{transcription:true,diarization:false}};
 let previewAllSkipped=false;
 let legacyMetadata=false;
 let speakerNames={};
@@ -109,16 +110,21 @@ const server = http.createServer(async (req,res) => {
   if (u.pathname === '/api/audio-dir') {audioDir=data.path;return send({audio_dir:audioDir,audio_paths:['/mock/audio','/mock/other']});}
   if (u.pathname === '/api/audio-dir/pick') {await delay(pickDelay);return send({path:'/mock/picked'});}
   if (u.pathname === '/api/run/preview') {
-    const only=u.searchParams.getAll('only'), reprocess=u.searchParams.get('reprocess')==='true', rediarize=u.searchParams.get('rediarize')==='true';
-    const forced=reprocess||rediarize;
+    const only=u.searchParams.getAll('only'), reprocess=u.searchParams.get('reprocess')==='true';
+    const retranscribe=u.searchParams.getAll('retranscribe'), rediarize=u.searchParams.getAll('rediarize');
+    const forced=reprocess||retranscribe.length>0||rediarize.length>0, scribe=u.searchParams.get('pipeline')==='scribe';
     const files=previewAllSkipped
       ? [{file:'a.json',stage:'Diarization',action:forced?'reprocess':'skip',reason:forced?'Reprocessing requested for this run':'Existing output; no reprocessing requested'}]
       : [{file:'a.wav',stage:'Transcription',action:'process',reason:'No output'},{file:'b.wav',stage:'Transcription',action:'skip',reason:'Existing output'},{file:'c.wav',stage:'Transcription',action:'skip',reason:'Existing output'}];
     const notes=previewAllSkipped && !forced
-      ? ['Run is disabled because existing outputs are being skipped. To run them again, cancel this preview, tick "Force reprocessing" under the transcription or diarization model, then select Run again. Selecting a recording alone does not enable reprocessing.']
+      ? ['Run is disabled because existing outputs are being skipped. To run them again, cancel this preview, tick "Re-transcribe" or "Re-diarize" under the recording, then select Run again. Selecting a recording alone does not enable reprocessing.']
       : ['Folder scope'];
-    const reusable=previewAllSkipped?{transcription:0,diarization:1}:reusableFixture;
-    return send({audio_dir:audioDir,pipeline:u.searchParams.get('pipeline'),token:`preview-${reprocess}-${rediarize}`,diarization_model:u.searchParams.get('diarization_model'),reprocess,rediarize,reusable,only:only.length?only:null,notes,files});
+    const reusable=previewAllSkipped?{a:{transcription:false,diarization:true}}:reusableFixture;
+    const remote=scribe&&(retranscribe.length>0||consentFixture);
+    return send({audio_dir:audioDir,pipeline:u.searchParams.get('pipeline'),token:`preview-${reprocess}-${retranscribe}-${rediarize}`,
+                 diarization_model:u.searchParams.get('diarization_model'),reprocess,retranscribe,rediarize,reusable,remote,
+                 consent_required:scribe&&consentFixture,language:u.searchParams.get('language'),selected:u.searchParams.get('selected'),
+                 only:only.length?only:null,notes,files});
   }
   if (u.pathname === '/api/run' && req.method === 'POST') {launches.push(data);status={running:true,pipeline:'transcribe4',run_id:'run1',started_at:Date.now()/1000,audio_dir:audioDir,progress:{stage:'Transcription',current_file:'a.wav',file_index:1,total_files:2,completed:{Transcription:0}}};return send(status);}
   if (u.pathname === '/api/run/stop') {status={...status,running:false,stop_requested:true,returncode:0};return send(status);}
@@ -445,50 +451,78 @@ try {
   });
   await check('Skipped output disables Run until reprocessing is requested',async()=>{
     previewAllSkipped=true;
-    await evaluate('$("pipelineSel").value="transcribe4";$("runModel").value="nemotron";$("runReprocess").checked=false;$("runRediarize").checked=false;syncForce();updateRunControls()');
-    await wait('$("runReprocessRow").hidden && !$("runRediarizeRow").hidden');
+    await evaluate('$("pipelineSel").value="transcribe4";$("runModel").value="nemotron";retranscribeBases.clear();rediarizeBases.clear();reuseKey="";updateRunControls()');
+    await wait('document.querySelector(\'[data-base="a"] .fileForce input[aria-label="Re-diarize: a"]\') && !document.querySelector(\'[data-base="a"] .fileForce input[aria-label^="Re-transcribe"]\')');
     await click('startBtn');await wait('$("previewDialog").open');
     assert.equal(await evaluate('$("previewStart").disabled'),true);
-    assert.match(await evaluate('$("previewNotes").textContent'),/Force reprocessing/);
+    assert.match(await evaluate('$("previewNotes").textContent'),/Re-diarize/);
     if (process.env.SWHISPER_TEST_SCREENSHOT) {
       const screenshot=await cdp('Page.captureScreenshot',{format:'png'});
       await fs.writeFile(process.env.SWHISPER_TEST_SCREENSHOT,Buffer.from(screenshot.data,'base64'));
     }
-    await click('previewCancel');await click('runRediarize');
+    await click('previewCancel');await evaluate('document.querySelector(\'[data-base="a"] .fileForce input[aria-label="Re-diarize: a"]\').click()');
     await click('startBtn');await wait('$("previewDialog").open');
     assert.equal(await evaluate('$("previewStart").disabled'),false);
     assert.match(await evaluate('$("previewTable").textContent'),/Reprocessing requested/);
-    assert.equal(await evaluate('pendingPreview.reprocess'),false);
-    assert.equal(await evaluate('pendingPreview.rediarize'),true);
+    assert.deepEqual(await evaluate('[pendingPreview.retranscribe,pendingPreview.rediarize]'),[[],['a']]);
     assert.equal(await evaluate('pendingPreview.diarization_model'),'nemotron');
     await click('previewCancel');
-    await evaluate('$("runModel").value="community-1";$("runRediarize").checked=false');
+    await evaluate('$("runModel").value="community-1";rediarizeBases.clear()');
     previewAllSkipped=false;
     await evaluate('updateRunControls()');
   });
-  await check('Force options follow reusable results and a forced transcript forces diarization',async()=>{
-    reusableFixture={transcription:0,diarization:0};
+  await check('Files offer Re-transcribe and Re-diarize only for reusable results',async()=>{
+    reusableFixture={};
     await evaluate('reuseKey="";updateRunControls()');
-    await wait('$("runReprocessRow").hidden && $("runRediarizeRow").hidden');
-    reusableFixture={transcription:2,diarization:1};
+    await wait('!document.querySelector(".fileForce")');
+    reusableFixture={a:{transcription:true,diarization:true},b:{transcription:true,diarization:false}};
     await evaluate('reuseKey="";updateRunControls()');
-    await wait('!$("runReprocessRow").hidden && !$("runRediarizeRow").hidden');
-    assert.equal(await evaluate('$("runReprocessLabel").textContent'),'Force reprocessing (2 files)');
-    assert.equal(await evaluate('$("runRediarizeLabel").textContent'),'Force reprocessing');
-    await evaluate('$("runReprocess").checked=false;$("runRediarize").checked=false;syncForce()');
-    await click('runReprocess');
-    assert.equal(await evaluate('$("runRediarize").checked && $("runRediarize").disabled'),true);
+    await wait('document.querySelector(\'[data-base="a"] .fileForce input[aria-label^="Re-transcribe"]\') && document.querySelector(\'[data-base="a"] .fileForce input[aria-label="Re-diarize: a"]\') && document.querySelector(\'[data-base="b"] .fileForce input[aria-label^="Re-transcribe"]\') && !document.querySelector(\'[data-base="b"] .fileForce input[aria-label="Re-diarize: b"]\')');
+    assert.deepEqual(await evaluate('[...document.querySelectorAll(\'[data-base="a"] .fileForce span\')].map(s=>s.textContent)'),['Re-transcribe','Re-diarize']);
+    const editing=await evaluate('editorBase');
+    await evaluate('document.querySelector(\'[data-base="a"] .fileForce input[aria-label^="Re-transcribe"]\').click()');
+    assert.equal(await evaluate('editorBase'),editing,'Ticking an option does not open the recording');
+    assert.equal(await evaluate('document.querySelector(\'[data-base="a"] .fileForce input[aria-label="Re-diarize: a"]\').checked && document.querySelector(\'[data-base="a"] .fileForce input[aria-label="Re-diarize: a"]\').disabled'),true,'A new transcript means a new diarization');
     await click('startBtn');await wait('$("previewDialog").open');
-    assert.deepEqual(await evaluate('[pendingPreview.reprocess,pendingPreview.rediarize]'),[true,false]);
+    assert.deepEqual(await evaluate('[pendingPreview.retranscribe,pendingPreview.rediarize]'),[['a'],[]]);
     await click('previewCancel');
-    await click('runReprocess');
-    assert.equal(await evaluate('$("runRediarize").checked || $("runRediarize").disabled'),false);
+    await evaluate('document.querySelector(\'[data-base="a"] .fileForce input[aria-label^="Re-transcribe"]\').click()');
+    assert.equal(await evaluate('document.querySelector(\'[data-base="a"] .fileForce input[aria-label="Re-diarize: a"]\').checked || document.querySelector(\'[data-base="a"] .fileForce input[aria-label="Re-diarize: a"]\').disabled'),false);
+    reusableFixture={a:{transcription:false,diarization:true}};
+    await evaluate('document.querySelector(\'[data-base="b"] .fileForce input[aria-label^="Re-transcribe"]\').click()');
+    await evaluate('reuseKey="";updateRunControls()');
+    await wait('!document.querySelector(\'[data-base="b"] .fileForce input[aria-label^="Re-transcribe"]\')');
+    assert.equal(await evaluate('retranscribeBases.has("b")'),false,'A choice is dropped when its result is no longer reused');
+    reusableFixture={a:{transcription:true,diarization:true},b:{transcription:true,diarization:false}};
+    await evaluate('reuseKey="";updateRunControls()');
     await evaluate('$("runModel").value="precision";$("pipelineSel").value="scribe";$("pipelineSel").dispatchEvent(new Event("change"))');
     assert.equal(await evaluate('[...$("runModel").options].find(o=>o.value==="precision").disabled'),true);
     assert.equal(await evaluate('$("runModel").value'),'community-1','Scribe cannot use Precision');
     await evaluate('$("pipelineSel").value="transcribe4";$("pipelineSel").dispatchEvent(new Event("change"))');
     assert.deepEqual(await evaluate('[...$("pipelineSel").options].map(o=>o.textContent)'),
                      ['Transcription: Local Whisper','Transcription: SUNET Scribe (remote)']);
+  });
+  await check('Scribe uploads a recording again without new consent, but asks before a first upload',async()=>{
+    await evaluate('$("pipelineSel").value="scribe";$("pipelineSel").dispatchEvent(new Event("change"));$("scribeScope").value="folder";$("scribeScope").dispatchEvent(new Event("change"))');
+    await wait('document.querySelector(\'[data-base="a"] .fileForce span\')?.textContent===\'Re-transcribe (upload again)\'');
+    await evaluate('document.querySelector(\'[data-base="a"] .fileForce input[aria-label^="Re-transcribe"]\').click()');
+    await click('startBtn');await wait('$("previewDialog").open');
+    assert.equal(await evaluate('$("consentRow").hidden'),true,'A recording uploaded before needs no new consent');
+    assert.equal(await evaluate('$("previewTitle").textContent'),'Scribe remote upload preview');
+    const before=launches.length;
+    await click('previewStart');
+    for(let i=0;i<200 && launches.length===before;i++) await delay(20);
+    assert.deepEqual([launches.at(-1).retranscribe,launches.at(-1).remote_upload],[['a'],true]);
+    await wait('lastStatus && lastStatus.running');await click('stopBtn');await wait('lastStatus && !lastStatus.running');
+    assert.equal(await evaluate('retranscribeBases.size'),0,'A launched run spends its choices');
+    consentFixture=true;
+    await click('startBtn');await wait('$("previewDialog").open');
+    assert.equal(await evaluate('$("consentRow").hidden'),false);
+    await click('previewStart');
+    assert.match(await evaluate('$("previewSummary").textContent'),/Consent to the remote upload first/);
+    await click('previewCancel');
+    consentFixture=false;
+    await evaluate('$("scribeScope").value="selected";$("scribeScope").dispatchEvent(new Event("change"));$("pipelineSel").value="transcribe4";$("pipelineSel").dispatchEvent(new Event("change"))');
   });
   await check('Selected files narrow the run and reach the launch call',async()=>{
     assert.equal(await evaluate('$("startBtn").textContent'),'Run');
@@ -1028,7 +1062,7 @@ try {
     await click('tabTranscript');failSave=true;await click('startBtn');await wait('$("dirtyDialog").open');await click('dirtySave');
     await wait('!saving && !$("uiNotice").hidden');assert.equal(await evaluate('currentTab'),'transcript');assert.equal(launches.length,n);failSave=false;
   });
-  await check('Run asks to save, then previews folder before launch',async()=>{const launchedBefore=launches.length;await click('startBtn');await wait('$("dirtyDialog").open');await click('dirtySave');await wait('$("previewDialog").open');assert.equal(launches.length,launchedBefore);assert.equal(saved.b.comment,'folder draft');assert.equal(await evaluate('$("previewTable").querySelectorAll("tbody tr").length'),1);const shot=await cdp('Page.captureScreenshot',{format:'png'});await fs.writeFile('/private/tmp/swhisper-run-preview.png',Buffer.from(shot.data,'base64'));await click('previewStart');await wait('lastStatus?.running && !runBusy');assert.equal(launches.at(-1).preview_token,'preview-false-false');assert.equal(await evaluate('$("dirMenuBtn").disabled'),true);});
+  await check('Run asks to save, then previews folder before launch',async()=>{const launchedBefore=launches.length;await click('startBtn');await wait('$("dirtyDialog").open');await click('dirtySave');await wait('$("previewDialog").open');assert.equal(launches.length,launchedBefore);assert.equal(saved.b.comment,'folder draft');assert.equal(await evaluate('$("previewTable").querySelectorAll("tbody tr").length'),1);const shot=await cdp('Page.captureScreenshot',{format:'png'});await fs.writeFile('/private/tmp/swhisper-run-preview.png',Buffer.from(shot.data,'base64'));await click('previewStart');await wait('lastStatus?.running && !runBusy');assert.equal(launches.at(-1).preview_token,'preview-false--');assert.equal(await evaluate('$("dirMenuBtn").disabled'),true);});
   await check('Progress current file and stop outcome',async()=>{await evaluate('pollRun()');assert.match(await evaluate('$("progressStatus").textContent'),/a.wav.*file 1 of 2/);await click('stopBtn');await wait('lastStatus?.stop_requested && !runBusy');await evaluate('pollRun()');await wait('$("runStatus").textContent==="Stopped by you"');});
   await check('Disconnection disables launch and recovery restores it',async()=>{offline=true;await evaluate('pollRun()');await wait('!connected');assert.match(await evaluate('$("connectionStatus").textContent'),/Disconnected/);assert.equal(await evaluate('$("startBtn").disabled'),true);offline=false;await evaluate('pollRun()');await wait('connected');assert.equal(await evaluate('$("startBtn").disabled'),false);});
   await check('Exit zero with reported errors is not success',async()=>{status={...status,stop_requested:false,progress:{error_count:1,last_error:'Failed: 1',completed:{}}};await evaluate('pollRun()');await wait('$("runStatus").textContent.includes("reported errors")');});
@@ -1164,19 +1198,19 @@ try {
     for (const [id,value] of [['pipelineSel','scribe'],['runModel','nemotron'],['scribeScope','folder'],['scribeLanguage','Swedish']]) {
       await evaluate(`$(${JSON.stringify(id)}).value=${JSON.stringify(value)};$(${JSON.stringify(id)}).dispatchEvent(new Event('change'))`);
     }
-    await wait('!$("runReprocessRow").hidden');
-    if (!await evaluate('$("runReprocess").checked')) await click('runReprocess');
+    await wait('document.querySelector(\'[data-base="a"] .fileForce input[aria-label^="Re-transcribe"]\')');
+    await evaluate('document.querySelector(\'[data-base="a"] .fileForce input[aria-label^="Re-transcribe"]\').checked || document.querySelector(\'[data-base="a"] .fileForce input[aria-label^="Re-transcribe"]\').click()');
     await evaluate('loadMeta()');
     assert.equal(await evaluate('$("pipelineSel").value'),'scribe');
     await reopen();
     assert.deepEqual(await evaluate('["pipelineSel","runModel","scribeScope","scribeLanguage"].map(id=>$(id).value)'),['scribe','nemotron','folder','Swedish']);
-    assert.equal(await evaluate('$("runReprocess").checked'),true);
+    assert.equal(await evaluate('retranscribeBases.size'),0,'Re-transcribe belongs to one run and one session');
     assert.equal(await evaluate('$("scribeControls").hidden'),false);
     assert.equal(await evaluate('$("startBtn").disabled'),false,'Restored folder scope can run without selecting a recording');
-    await wait('!$("runReprocessRow").hidden');
+    consentFixture=true;
     await click('startBtn');await wait('$("previewDialog").open');
     assert.equal(await evaluate('pendingPreview.diarization_model'),'nemotron');
-    assert.equal(await evaluate('pendingPreview.reprocess'),true);
+    consentFixture=false;
     assert.equal(await evaluate('$("scribeConsent").checked'),false,'Upload consent still belongs to each individual run');
     await click('previewCancel');
   });
@@ -1190,11 +1224,10 @@ try {
     await evaluate('pollRun()');
     assert.equal(await evaluate('$("pipelineSel").value'),'scribe');
     assert.equal(await evaluate('$("pipelineSel").disabled'),false);
-    await evaluate('localStorage.setItem("swhisper_ui_preferences", JSON.stringify({pipelineSel:"removed-pipeline",runModel:"removed-model",runReprocess:"false"}))');
+    await evaluate('localStorage.setItem("swhisper_ui_preferences", JSON.stringify({pipelineSel:"removed-pipeline",runModel:"removed-model"}))');
     await reopen();
     assert.equal(await evaluate('$("pipelineSel").value'),'transcribe4');
     assert.equal(await evaluate('$("runModel").value'),'community-1','An unknown saved model falls back to the saved default');
-    assert.equal(await evaluate('$("runReprocess").checked'),false);
   });
   await check('File filters, view toggles, export format and active tab survive reopening',async()=>{
     for (const [id,value] of [['fileSearch','a'],['fileFilter','ready'],['fileSort','newest'],['exportFormat','rtf']]) {

@@ -73,7 +73,10 @@ let editorSeq = 0, folderSeq = 0, filesSeq = 0, transcriptSeq = 0, logSeq = 0, l
 let connected = false, lastStatus = null, runBusy = false, pollBusy = false, activeRunId = null, statusSeq = 0;
 let editorScope = "file", editorMeta = null, globalRevision = null, timelineSeq = 0, exportContext = null, exporting = false;
 let pendingPreview = null, dirtyChoice = null, initialized = false, pollTimer = null;
-let reuseKey = "", reuseSeq = 0, reuseTimer = null;
+let reuseKey = "", reuseSeq = 0, reuseTimer = null, reuseFolder = null;
+// Results the selected models would reuse, by recording, and the recordings to redo instead.
+let REUSABLE = {};
+const retranscribeBases = new Set(), rediarizeBases = new Set();
 const escapeHTML = value => String(value).replace(/[&<>"']/g, c => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"}[c]));
 
 function formValues() {
@@ -156,12 +159,22 @@ function runQuery() {
   query.set("diarization_model", $("runModel").value);
   return query;
 }
-function forced(id) { return !$(`${id}Row`).hidden && $(id).checked; }
-// Existing results are reused. Each force option appears only when this run
-// would reuse a result from the chosen model.
+// Existing results are reused. A recording offers "Re-transcribe" or
+// "Re-diarize" only when the selected models would reuse its result. The whole
+// folder is checked, so the options do not depend on the run selection.
+function reuseQuery() {
+  const query = new URLSearchParams({ pipeline: $("pipelineSel").value, diarization_model: $("runModel").value });
+  if (query.get("pipeline") === "scribe") { query.set("selected", ""); query.set("language", $("scribeLanguage").value); }
+  return query;
+}
 function scheduleReuseCheck() {
   if (!connected || !initialized || !META) return;
-  const query = runQuery();
+  if (reuseFolder !== folderSeq) {
+    reuseFolder = folderSeq; REUSABLE = {};
+    retranscribeBases.clear(); rediarizeBases.clear();
+    refreshForceOptions();
+  }
+  const query = reuseQuery();
   const key = `${folderSeq}|${filesSeq}|${query}`;
   if (key === reuseKey) return;
   reuseKey = key;
@@ -170,30 +183,53 @@ function scheduleReuseCheck() {
 }
 async function checkReuse(query, key) {
   const seq = ++reuseSeq;
-  let reusable = { transcription: 0, diarization: 0 };
-  if (query) {
-    try { reusable = (await api(`/api/run/preview?${query}`)).data.reusable || reusable; }
-    catch {}   // The Run preview reports the problem.
-  }
+  let reusable = {};
+  try { reusable = (await api(`/api/run/preview?${query}`)).data.reusable || {}; }
+  catch {}   // The Run preview reports the problem.
   if (seq !== reuseSeq || key !== reuseKey) return;
-  const scribe = query?.get("pipeline") === "scribe";
-  showForce("runReprocess", reusable.transcription,
-            scribe ? "a saved Scribe transcript; forcing uploads again" : "a transcript");
-  showForce("runRediarize", reusable.diarization, "a diarization from this model");
-  syncForce();
+  REUSABLE = reusable;
+  // A ticked option is dropped once its result is no longer reused.
+  for (const base of [...retranscribeBases]) if (!REUSABLE[base]?.transcription) retranscribeBases.delete(base);
+  for (const base of [...rediarizeBases]) if (!REUSABLE[base]?.diarization) rediarizeBases.delete(base);
+  refreshForceOptions();
 }
-function showForce(id, count, what) {
-  $(`${id}Row`).hidden = !count;
-  $(`${id}Label`).textContent = count > 1 ? `Force reprocessing (${count} files)` : "Force reprocessing";
-  $(`${id}Row`).title = `${count} file(s) already have ${what}. Tick to process them again instead of reusing the result.`;
+function forceOptions(base) {
+  const reusable = REUSABLE[base];
+  if (!reusable?.transcription && !reusable?.diarization) return null;
+  const box = document.createElement("div");
+  box.className = "fileForce";
+  box.addEventListener("click", ev => ev.stopPropagation());
+  const scribe = $("pipelineSel").value === "scribe";
+  const option = (set, text, title) => {
+    const label = document.createElement("label"), input = document.createElement("input"), span = document.createElement("span");
+    input.type = "checkbox"; input.checked = set.has(base);
+    span.textContent = text; label.title = title;
+    input.setAttribute("aria-label", `${text}: ${base}`);
+    label.append(input, span); box.appendChild(label);
+    return input;
+  };
+  const again = reusable.transcription && option(retranscribeBases, scribe ? "Re-transcribe (upload again)" : "Re-transcribe",
+    scribe ? "Upload this recording to Scribe again in this run instead of reusing its saved transcript."
+           : "Transcribe this recording again in this run instead of reusing its transcript.");
+  const rediarize = reusable.diarization && option(rediarizeBases, "Re-diarize",
+    "Diarize this recording again with the selected model in this run instead of reusing its result.");
+  // Diarization is aligned to the transcript, so a new transcript means a new diarization.
+  const sync = () => {
+    if (!rediarize) return;
+    rediarize.disabled = Boolean(again?.checked);
+    rediarize.checked = rediarize.disabled || rediarizeBases.has(base);
+  };
+  if (again) again.onchange = () => { again.checked ? retranscribeBases.add(base) : retranscribeBases.delete(base); sync(); };
+  if (rediarize) rediarize.onchange = () => { rediarize.checked ? rediarizeBases.add(base) : rediarizeBases.delete(base); };
+  sync();
+  return box;
 }
-// Diarization is aligned to the transcript, so forcing a new transcript forces
-// a new diarization too. The diarization choice returns when that is undone.
-function syncForce() {
-  const box = $("runRediarize"), implied = forced("runReprocess");
-  if (implied && !box.disabled) { box.dataset.chosen = String(box.checked); box.checked = true; }
-  if (!implied && box.disabled) box.checked = box.dataset.chosen === "true";
-  box.disabled = implied;
+function refreshForceOptions() {
+  for (const row of $("files").querySelectorAll(".file")) {
+    row.querySelector(".fileForce")?.remove();
+    const box = forceOptions(row.dataset.base);
+    if (box) row.insertBefore(box, row.querySelector(".fileTranscripts"));
+  }
 }
 function updateRunControls() {
   const running = !!(lastStatus && lastStatus.running);
@@ -570,6 +606,8 @@ function renderFiles() {
     };
     transcripts.addEventListener("click", ev => ev.stopPropagation());
     updateExpansion();
+    const force = forceOptions(f.base);
+    if (force) div.appendChild(force);
     div.appendChild(transcripts);
     const pick = div.querySelector(".runPick input");
     pick.checked = runSelection.has(f.base);
@@ -2169,25 +2207,26 @@ async function startRun() {
     }
     const pipeline = query.get("pipeline"), scribe = pipeline === "scribe", selected = query.get("selected") || "";
     // Per-run options; the preview token covers them, so the run matches the review.
-    query.set("reprocess", String(forced("runReprocess")));
-    query.set("rediarize", String(forced("runRediarize") && !forced("runReprocess")));
+    for (const base of retranscribeBases) query.append("retranscribe", base);
+    for (const base of rediarizeBases) if (!retranscribeBases.has(base)) query.append("rediarize", base);
     const { data } = await api(`/api/run/preview?${query}`);
     pendingPreview = data;
     const label = META.pipelines.find(p => p.id === pipeline).label;
-    // Consent is needed only when a recording has no saved Scribe transcript.
-    const remote = scribe && data.remote;
+    // Consent is needed only for recordings never uploaded to Scribe before.
+    const remote = scribe && data.remote, consent = scribe && data.consent_required;
     $("previewTitle").textContent = remote ? "Scribe remote upload preview"
       : scribe ? "Scribe rerun preview (no upload)" : "Run Preview";
-    $("previewConsent").hidden = !remote;
-    $("consentRow").hidden = !remote;
+    $("previewConsent").hidden = !consent;
+    $("consentRow").hidden = !consent;
     $("scribeConsent").checked = false;
     $("previewStart").textContent = remote ? "Upload to Scribe and run" : scribe ? "Rerun locally" : "Run";
     $("previewFolder").textContent = `${label} · ${data.audio_dir}`
       + (scribe && selected ? ` · ${selected}` : "")
       + (data.only ? ` · ${data.only.length} selected file(s)` : "")
       + (data.diarization_model ? ` · diarization ${data.diarization_model}` : "")
-      + (data.reprocess || data.retranscribe ? ` · ${scribe ? "transcribe again" : "reprocess existing outputs"}`
-         : data.rediarize ? " · diarize again" : "");
+      + (data.reprocess || data.retranscribe === true ? " · reprocess existing outputs" : "")
+      + (data.retranscribe?.length ? ` · ${data.retranscribe.length} to transcribe again` : "")
+      + (data.rediarize?.length ? ` · ${data.rediarize.length} to diarize again` : "");
     const counts = {};
     for (const row of data.files) counts[row.action] = (counts[row.action] || 0) + 1;
     $("previewSummary").textContent = data.files.length
@@ -2224,13 +2263,14 @@ async function launchPreview() {
   try {
     const body = { pipeline: pendingPreview.pipeline, preview_token: pendingPreview.token,
                    diarization_model: pendingPreview.diarization_model || "",
-                   reprocess: Boolean(pendingPreview.reprocess ?? pendingPreview.retranscribe),
-                   rediarize: Boolean(pendingPreview.rediarize) };
+                   reprocess: Boolean(pendingPreview.reprocess),
+                   retranscribe: Array.isArray(pendingPreview.retranscribe) ? pendingPreview.retranscribe : [],
+                   rediarize: Array.isArray(pendingPreview.rediarize) ? pendingPreview.rediarize : [] };
     if (pendingPreview.pipeline === "scribe") {
-      if (pendingPreview.remote) {
-        if (!$("scribeConsent").checked) { $("previewSummary").textContent = "Consent to the remote upload first, or cancel."; return; }
-        body.remote_upload = true;
+      if (pendingPreview.consent_required && !$("scribeConsent").checked) {
+        $("previewSummary").textContent = "Consent to the remote upload first, or cancel."; return;
       }
+      if (pendingPreview.remote) body.remote_upload = true;
       body.selected = pendingPreview.selected || "";
       body.language = pendingPreview.language;
     } else if (pendingPreview.only) {
@@ -2244,6 +2284,8 @@ async function launchPreview() {
     logOffset = 0; activeRunId = data.run_id;
     $("consoleLog").textContent = "";
     $("previewDialog").close(); pendingPreview = null;
+    // The launched run produces fresh results; its redo choices are spent.
+    retranscribeBases.clear(); rediarizeBases.clear(); refreshForceOptions();
     await pollLoop();   // re-poll now and switch to the running cadence
   } catch (e) { $("previewSummary").textContent = e.message + " Close this preview and try again."; }
   finally { runBusy = false; $("previewCancel").disabled = false; updateRunControls(); }
@@ -2553,14 +2595,13 @@ $("consoleResize").addEventListener("keydown", e => {
   setConsoleHeight($("consolePanel").getBoundingClientRect().height + (e.key === "ArrowUp" ? 20 : -20), true);
 });
 $("globalSettingsBtn").onclick=handle(openGlobalSettings);
-for (const id of ["pipelineSel", "runModel", "runReprocess", "runRediarize", "scribeScope", "scribeLanguage"]) rememberControl(id);
+for (const id of ["pipelineSel", "runModel", "scribeScope", "scribeLanguage"]) rememberControl(id);
 for (const id of ["fileSearch", "fileFilter", "fileSort", "reviewAudio", "compareSync", "compareReview", "compareFollow", "exportFormat"]) rememberControl(id);
 rememberDetails($("previewSkipped"), "previewSkipped");
 for (const id of ["audioPlayer", "compareAudio"]) rememberAudio(id);
 $("pipelineSel").addEventListener("change", () => { filterSettings(); updateRunControls(); });
 $("scribeScope").addEventListener("change", updateRunControls);
 for (const id of ["runModel", "scribeLanguage"]) $(id).addEventListener("change", updateRunControls);
-$("runReprocess").addEventListener("change", syncForce);
 for(const id of ["fileSearch","fileFilter","fileSort"]) $(id).addEventListener(id==="fileSearch"?"input":"change",renderFiles);
 $("exportConfirm").onclick=handle(confirmExport);
 $("exportCancel").onclick=()=>{$("exportDialog").close();exportContext=null;};
