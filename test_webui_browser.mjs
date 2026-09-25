@@ -224,7 +224,7 @@ try {
     assert.deepEqual(await evaluate('[...document.querySelectorAll("[data-base=a] .fileTranscript")].map(b=>b.textContent)'),
       ['2026-09-24 12:00:00 · Scribe','old Partial backfill','Raw JSON transcript']);
     assert.deepEqual(await evaluate('[...document.querySelectorAll("[data-base=a] .fileTranscript .badge.on-warn")].map(b=>b.title)'),
-      ['3 gap(s) in this transcript could not be recovered and are marked [-].']);
+      ['Backfill failed or was interrupted for 3 gap(s) in this transcript, marked [-].']);
     await evaluate('document.querySelector("[data-base=a] .fileExpand").focus()');
     await key('Enter','Enter');
     assert.equal(await evaluate('document.querySelector("[data-base=a] .fileTranscripts").hidden'),true);

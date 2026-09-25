@@ -1187,7 +1187,7 @@ def api_transcript_versions(basename: str) -> Dict[str, Any]:
     base = _safe_base(dirs["audio"], basename)
     versions = _transcript_versions(dirs, base)
     for version in versions:
-        version["backfill_gaps"] = backfill_gaps(version, dirs["audio"])
+        version["backfill_gaps"] = backfill_gaps(version, dirs)
     return {"base": base, "versions": versions}
 
 

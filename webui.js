@@ -525,7 +525,7 @@ async function renderFileTranscripts(list, file) {
         const tag = document.createElement("span");
         tag.className = "badge on-warn";
         tag.textContent = "Partial backfill";
-        tag.title = `${version.backfill_gaps} gap(s) in this transcript could not be recovered and are marked [-].`;
+        tag.title = `Backfill failed or was interrupted for ${version.backfill_gaps} gap(s) in this transcript, marked [-].`;
         button.append(" ", tag);
         button.setAttribute("aria-label", `${button.getAttribute("aria-label")}, partial backfill`);
       }
@@ -585,7 +585,7 @@ function renderFiles() {
     const badges = [];
     const primary = f.will_reprocess ? "Needs reprocessing" : f.has_transcript ? "Transcript ready" : f.transcribed ? "Awaiting diarization" : "Not transcribed";
     badges.push(`<span class="badge ${f.will_reprocess ? "on-warn" : f.has_transcript ? "on-ok" : ""}">${primary}</span>`);
-    if (f.backfill_incomplete) badges.push('<span class="badge on-warn" title="The transcript is complete, but some missing turns could not be recovered and are marked [-]. The next run retries them.">Partial backfill</span>');
+    if (f.backfill_incomplete) badges.push('<span class="badge on-warn" title="The transcript is complete, but backfill failed or was interrupted for some missing turns, marked [-]. The next run retries them.">Partial backfill</span>');
     if (f.duration) badges.push(`<span class="badge" title="Recording length">${escapeHTML(fmtDuration(f.duration))}</span>`);
     if (f.sidecar) badges.push('<span class="badge on-info">overrides</span>');
     if (f.comment) badges.push('<span class="badge">comment</span>');

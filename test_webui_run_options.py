@@ -165,6 +165,19 @@ class RunOptionTests(unittest.TestCase):
         versions = {v['timestamp']: v['backfill_gaps'] for v in webui.api_transcript_versions('a')['versions']}
         self.assertEqual(versions, {'20260925-100000': 2, '20260925-110000': 0})
 
+    def test_versions_do_not_count_gaps_rejected_for_low_confidence(self):
+        output = Path(self.state.dirs()['output'])
+        (output / 'txt').mkdir(parents=True)
+        (output / 'json').mkdir()
+        (output / 'txt' / 'a_20260925-100000.txt').write_text('INTERVIEWER: [--] [---]\n')
+        failure = {'is_backfill_failure': True, 'text': '[--]'}
+        words = [dict(failure, backfill_error='Backfill rejected: avg_logprob -1.4 below threshold -1'),
+                 dict(failure, backfill_error='Backfill worker timed out')]
+        (output / 'json' / 'a_20260925-100000_diarized.json').write_text(
+            json.dumps({'segments': [{'words': words}]}))
+        version = webui.api_transcript_versions('a')['versions'][0]
+        self.assertEqual(version['backfill_gaps'], 1)
+
     def test_meta_offers_local_whisper_and_scribe_as_transcription_choices(self):
         meta = webui.api_meta()
         self.assertEqual([p['id'] for p in meta['pipelines'] if p['choice']], ['transcribe4', 'scribe'])

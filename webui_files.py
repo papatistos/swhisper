@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 
 from sidecar import SIDECAR_SUFFIX
+from transcript_render.markers import is_low_confidence
 
 
 AUDIO_EXTENSIONS = {'.wav', '.m4a', '.mp3', '.mov', '.mp4', '.flac', '.aac', '.ogg'}
@@ -154,19 +155,34 @@ _BACKFILL_GAP_RE = re.compile(r"\[\s*-+\s*\]")
 _backfill_gap_cache: Dict[tuple, int] = {}
 
 
-def backfill_gaps(version: Dict[str, Any], audio_dir: str) -> int:
-    """How many unrecovered backfill gaps ([-] markers) a TXT version contains.
+def backfill_gaps(version: Dict[str, Any], dirs: Dict[str, str]) -> int:
+    """How many [-] gaps in a transcript version are failed backfill.
 
-    The count is cached by path, size and mtime, so each version is read once.
+    Gaps rejected for low confidence are not failures. Only the diarized JSON
+    records why a gap failed; without it, every [-] in the TXT counts. The
+    count is cached by path, size and mtime, so each version is read once.
     """
-    path = os.path.join(audio_dir, version["id"])
-    key = (path, version.get("size"), version.get("mtime"))
+    json_path = _diarized_json_for(dirs, version["id"])
+    path = json_path or os.path.join(dirs["audio"], version["id"])
+    try:
+        st = os.stat(path)
+    except OSError:
+        return 0
+    key = (path, st.st_size, st.st_mtime)
     if key not in _backfill_gap_cache:
         try:
-            text = Path(path).read_text(encoding="utf-8", errors="replace")
-        except OSError:
+            if json_path:
+                with open(json_path, encoding="utf-8") as fh:
+                    segments = json.load(fh).get("segments", [])
+                count = sum(bool(w.get("is_backfill_failure"))
+                            and not is_low_confidence(w.get("backfill_error"))
+                            for s in segments for w in s.get("words", []))
+            else:
+                text = Path(path).read_text(encoding="utf-8", errors="replace")
+                count = len(_BACKFILL_GAP_RE.findall(text))
+        except (OSError, ValueError, AttributeError):
             return 0
-        _backfill_gap_cache[key] = len(_BACKFILL_GAP_RE.findall(text))
+        _backfill_gap_cache[key] = count
     return _backfill_gap_cache[key]
 
 
