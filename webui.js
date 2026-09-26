@@ -586,15 +586,16 @@ function renderFiles() {
     const primary = f.will_reprocess ? "Needs reprocessing" : f.has_transcript ? "Transcript ready" : f.transcribed ? "Awaiting diarization" : "Not transcribed";
     badges.push(`<span class="badge ${f.will_reprocess ? "on-warn" : f.has_transcript ? "on-ok" : ""}">${primary}</span>`);
     if (f.backfill_incomplete) badges.push('<span class="badge on-warn" title="The transcript is complete, but backfill failed or was interrupted for some missing turns, marked [-]. The next run retries them.">Partial backfill</span>');
-    if (f.duration) badges.push(`<span class="badge" title="Recording length">${escapeHTML(fmtDuration(f.duration))}</span>`);
     if (f.sidecar) badges.push('<span class="badge on-info">overrides</span>');
     if (f.comment) badges.push('<span class="badge">comment</span>');
     if (f.has_transcript) badges.push('<span class="badge tbadge" title="Open transcript">Transcript</span>');
     if (f.transcribed) badges.push('<span class="badge jbadge" title="View raw JSON transcript">JSON</span>');
     if (f.has_logs) badges.push('<span class="badge lbadge" title="Open logs">Logs</span>');
     div.innerHTML = `<label class="runPick"><input type="checkbox"><span class="visuallyHidden">Select file</span></label>` +
-      `<button class="fileExpand" type="button"></button>` +
-      `<button class="name fileSelect">${escapeHTML(f.base)}</button><div class="badges">${badges.join("")}</div>`;
+      `<button class="fileExpand" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>` +
+      `<button class="name fileSelect">${escapeHTML(f.base)}</button>` +
+      (f.duration ? `<span class="badge fileLength" title="Recording length">${escapeHTML(fmtDuration(f.duration))}</span>` : "") +
+      `<div class="badges">${badges.join("")}</div>`;
     const expand = div.querySelector(".fileExpand");
     const transcripts = document.createElement("ul");
     transcripts.className = "fileTranscripts";
@@ -604,7 +605,6 @@ function renderFiles() {
     expand.setAttribute("aria-controls", transcripts.id);
     const updateExpansion = () => {
       const open = expandedFiles.has(f.base);
-      expand.textContent = open ? "▾" : "▸";
       expand.setAttribute("aria-expanded", String(open));
       expand.setAttribute("aria-label", `${open ? "Hide" : "Show"} transcripts for ${f.base}`);
       expand.title = open ? "Hide transcripts" : "Show transcripts";
@@ -2372,6 +2372,7 @@ async function pollRun() {
       $("folderNotice").hidden = true;
     }
     $("connectionStatus").textContent = "Connected";
+    $("connectionStatus").dataset.state = "ok";
     $("runDot").className = "dot" + (st.running ? " run" : (st.returncode || st.progress?.error_count || st.progress?.backfill_incomplete ? " err" : ""));
     $("runStatus").textContent = statusText(st);
     $("consoleMsg").textContent = statusText(st);
@@ -2390,6 +2391,7 @@ async function pollRun() {
   } catch (e) {
     connected = false;
     $("connectionStatus").textContent = initialized ? "Disconnected · retrying connection…" : "Could not load WebUI · retrying…";
+    $("connectionStatus").dataset.state = "err";
     $("runDot").className = "dot err";
     $("runStatus").textContent = initialized ? "Run status unavailable" : e.message;
     $("consoleMsg").textContent = initialized ? "Connection lost; transcription may still be running." : "Waiting for the WebUI to load.";
@@ -2418,8 +2420,7 @@ function setConsoleCollapsed(collapsed) {
 
 function setConsoleHeight(px, userResize = false) {
   const panel = $("consolePanel");
-  const rightHeight = $("right").clientHeight;
-  const max = Math.max(160, Math.min(rightHeight * 0.7, 900));
+  const max = Math.max(160, Math.min(window.innerHeight * 0.6, 900));
   px = Math.max(100, Math.min(max, px));
   panel.style.setProperty("--console-height", `${Math.round(px)}px`);
   if (userResize && window.innerWidth <= 760) {
@@ -2433,7 +2434,7 @@ function setConsoleHeight(px, userResize = false) {
 
 function initConsole() {
   let collapsed = false;
-  let height = 14 * parseFloat(getComputedStyle(document.documentElement).fontSize || "22");
+  let height = 9 * parseFloat(getComputedStyle(document.documentElement).fontSize || "22");
   try {
     collapsed = localStorage.getItem("swhisper_console_collapsed") === "1";
     const saved = parseInt(localStorage.getItem("swhisper_console_height"), 10);

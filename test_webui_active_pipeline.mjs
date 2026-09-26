@@ -7,7 +7,7 @@ const source = await fs.readFile(new URL('./webui.js', import.meta.url), 'utf8')
 const elements = new Map();
 const element = id => {
   if (!elements.has(id)) elements.set(id, {
-    value: '', textContent: '', disabled: false, hidden: false,
+    value: '', textContent: '', disabled: false, hidden: false, dataset: {},
     setAttribute() {},
     matches: () => false,
   });

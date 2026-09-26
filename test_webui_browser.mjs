@@ -596,7 +596,7 @@ try {
   });
   await check('Filename text is not interpreted as HTML',async()=>{assert.equal(await evaluate('document.querySelector("#files unsafe")'),null);assert.equal(await evaluate(`document.querySelector('[data-base="<unsafe>"] .fileSelect').textContent`),'<unsafe>');});
   await check('Settings remain hidden after load on transcript tab',async()=>{await select('b');await wait('editorBase==="b"');assert.equal(await evaluate('$("editorBar").style.display'),'none');});
-  await check('Keyboard tabs and field labels',async()=>{await evaluate('$("tabTranscript").focus()');await key('ArrowLeft','ArrowLeft');assert.equal(await evaluate('currentTab'),'settings');assert.equal(await evaluate('document.querySelector("label[for=setting-SWHISPER_NUM_SPEAKERS]").control.id'),'setting-SWHISPER_NUM_SPEAKERS');});
+  await check('Keyboard tabs and field labels',async()=>{await evaluate('$("tabLogs").focus()');await key('ArrowLeft','ArrowLeft');assert.equal(await evaluate('currentTab'),'settings');assert.equal(await evaluate('document.querySelector("label[for=setting-SWHISPER_NUM_SPEAKERS]").control.id'),'setting-SWHISPER_NUM_SPEAKERS');});
   await check('Keyboard file navigation',async()=>{await evaluate('document.querySelector("[data-base=a] .fileSelect").focus()');await key('ArrowDown','ArrowDown');assert.equal(await evaluate('document.activeElement.closest(".file").dataset.base'),'b');await key('Enter','Enter');await wait('editorBase==="b"');});
   await check('History modal Escape restores focus',async()=>{await evaluate('$("historyBtn").focus()');await click('historyBtn');await wait('$("historyPanel").open');await key('Escape','Escape');await wait('!$("historyPanel").open');assert.equal(await evaluate('document.activeElement.id'),'historyBtn');});
   await check('Keyboard console resize',async()=>{const before=await evaluate('Number($("consoleResize").getAttribute("aria-valuenow"))');await evaluate('$("consoleResize").focus()');await key('ArrowUp','ArrowUp');assert.equal(await evaluate('Number($("consoleResize").getAttribute("aria-valuenow"))'),before+20);});
@@ -1359,7 +1359,7 @@ try {
       assert.equal(await evaluate('currentTab'),tab);
       assert.equal(await evaluate(`$(${JSON.stringify(button)}).getAttribute('aria-selected')`),'true');
     }
-    await evaluate('$("tabSettings").focus()');await key('ArrowRight','ArrowRight');
+    await evaluate('$("tabLogs").focus()');await key('ArrowRight','ArrowRight');
     await reloadPage();assert.equal(await evaluate('currentTab'),'transcript');
   });
   await check('Tab persistence: unrelated writes keep the latest tab saved by another window',async()=>{

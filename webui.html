@@ -9,22 +9,24 @@
 </head>
 <body>
 <header>
-  <h1>swhisper</h1>
-  <button id="filesToggle" aria-expanded="true" aria-controls="filePanel">Files</button>
-  <button id="globalSettingsBtn" aria-pressed="false">Global settings</button>
+  <h1><svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h2M7 8v8M11 5v14M15 9v6M19 11v2"/></svg>swhisper</h1>
+  <button id="filesToggle" class="iconBtn" aria-expanded="true" aria-controls="filePanel" title="Show or hide the file list"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M9 5v14"/></svg><span class="visuallyHidden">Files</span></button>
   <div id="dirBox">
     <div id="dirCombo">
+      <svg class="icon dirIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
       <input id="dirInput" type="text" aria-label="Audio directory" placeholder="Enter an audio directory…" title="Audio directory — choose a saved path from the dropdown, or enter a new path and press Change (or Enter)">
-      <button id="dirMenuBtn" type="button" popovertarget="dirMenu" aria-haspopup="menu" aria-expanded="false" aria-controls="dirMenu" title="Show previously used audio directories">▾</button>
+      <button id="dirMenuBtn" type="button" popovertarget="dirMenu" aria-haspopup="menu" aria-expanded="false" aria-controls="dirMenu" title="Show previously used audio directories"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
       <div id="dirMenu" role="menu" popover aria-label="Previously used audio directories" hidden></div>
     </div>
     <button id="dirBtn" title="Switch to this audio directory">Change</button>
     <button id="dirBrowse" title="Choose a folder in the macOS dialog (on the machine running this server)">Browse…</button>
+    <button id="refreshBtn" class="iconBtn" title="Reload file list"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg><span class="visuallyHidden">Refresh</span></button>
   </div>
-  <button id="historyBtn" title="Show run history">🗂 History</button>
-  <button id="fontMinus" title="Smaller text">A−</button>
-  <button id="fontPlus" title="Larger text">A+</button>
-  <button id="refreshBtn" title="Reload file list">↻ Refresh</button>
+  <span id="connectionStatus" role="status">Connecting…</span>
+  <button id="historyBtn" class="iconBtn" title="Show run history"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg><span class="visuallyHidden">History</span></button>
+  <button id="fontMinus" class="iconBtn" title="Smaller text">A−</button>
+  <button id="fontPlus" class="iconBtn" title="Larger text">A+</button>
+  <button id="globalSettingsBtn" class="iconBtn" aria-pressed="false" title="Global settings"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg><span class="visuallyHidden">Global settings</span></button>
 </header>
 
 <main>
@@ -41,25 +43,15 @@
     <div id="files" role="region" aria-label="Audio files"></div>
   </aside>
   <div id="sidebarResize" role="separator" tabindex="0" aria-label="Resize file list" aria-orientation="vertical" aria-valuemin="220" aria-valuemax="700" aria-valuenow="340"></div>
+  <div id="workspace">
   <div id="right">
-    <div id="runControlBar">
-      <span class="dot" id="runDot"></span>
-      <select id="pipelineSel" aria-label="Transcription model"></select>
-      <select id="runModel" aria-label="Diarization model"></select>
-      <button class="primary" id="startBtn" disabled>Run</button>
-      <button id="clearRunSelection" title="Clear the file selection" hidden>Clear selection</button>
-      <button id="stopBtn" disabled>Stop</button>
-      <span class="status" id="runStatus" role="status">Idle</span>
-      <span id="connectionStatus" role="status">Connecting…</span>
-      <span id="progressStatus"></span>
-    </div>
     <div id="uiNotice" role="alert" hidden></div>
     <div id="folderNotice" role="alert" hidden><span id="folderNoticeText"></span>
       <button id="folderNoticeReload">Reload this folder</button></div>
     <div id="tabBar" role="tablist" aria-label="File views">
-      <button class="tab active" id="tabSettings" role="tab" aria-controls="editor" aria-selected="true">Settings</button>
       <button class="tab" id="tabTranscript" role="tab" aria-controls="transcriptView" aria-selected="false" tabindex="-1">Transcript</button>
       <button class="tab" id="tabCompare" role="tab" aria-controls="compareView" aria-selected="false" tabindex="-1">Comparison</button>
+      <button class="tab active" id="tabSettings" role="tab" aria-controls="editor" aria-selected="true">Settings</button>
       <button class="tab" id="tabLogs" role="tab" aria-controls="logsView" aria-selected="false" tabindex="-1">Logs</button>
     </div>
     <div id="editor" role="tabpanel" aria-labelledby="tabSettings" tabindex="0"><div class="placeholder">Select an audio file to edit its per-file settings.<br>
@@ -145,17 +137,34 @@
       <button class="danger" id="deleteBtn">Delete sidecar</button>
       <span class="msg" id="editorMsg" role="status"></span>
     </div>
-    <div id="consolePanel">
-      <div id="consoleResize" role="separator" tabindex="0" aria-orientation="horizontal" aria-valuemin="100" aria-valuemax="900" aria-valuenow="308" aria-label="Resize live console" title="Drag or use Up/Down arrows to resize the live console"></div>
-      <div id="consoleBar">
-        <button id="consoleToggle" title="Show/hide the live console">▾ Live console</button>
-        <span class="msg" id="consoleMsg">idle</span>
-        <button id="clearConsoleBtn" title="Clear live console">Clear</button>
+  </div>
+  <aside id="runPanel" aria-labelledby="runHeading">
+    <h2 id="runHeading" class="panelHead">Run</h2>
+    <div id="runControlBar">
+      <label class="runField" for="pipelineSel">Transcription</label>
+      <select id="pipelineSel" aria-label="Transcription model"></select>
+      <label class="runField" for="runModel">Diarization</label>
+      <select id="runModel" aria-label="Diarization model"></select>
+      <div class="runButtons">
+        <button class="primary" id="startBtn" disabled>Run</button>
+        <button id="stopBtn" disabled>Stop</button>
       </div>
-      <div id="consoleLog"></div>
+      <button id="clearRunSelection" title="Clear the file selection" hidden>Clear selection</button>
+      <div class="runState"><span class="dot" id="runDot"></span><span class="status" id="runStatus" role="status">Idle</span></div>
+      <span id="progressStatus"></span>
     </div>
+  </aside>
   </div>
 </main>
+  <div id="consolePanel">
+    <div id="consoleResize" role="separator" tabindex="0" aria-orientation="horizontal" aria-valuemin="100" aria-valuemax="900" aria-valuenow="308" aria-label="Resize live console" title="Drag or use Up/Down arrows to resize the live console"></div>
+    <div id="consoleBar">
+      <button id="consoleToggle" title="Show/hide the live console">▾ Live console</button>
+      <span class="msg" id="consoleMsg">idle</span>
+      <button id="clearConsoleBtn" title="Clear live console">Clear</button>
+    </div>
+    <div id="consoleLog"></div>
+  </div>
 
 <dialog id="historyPanel" aria-labelledby="historyTitle">
   <div id="historyHead">
