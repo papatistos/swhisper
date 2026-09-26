@@ -317,12 +317,12 @@ async function loadMeta() {
   for (const p of META.pipelines.filter(p => p.choice)) {
     const languages = p.id === "scribe" ? META.scribe_languages || [] : [""];
     languages.forEach((language, index) => sel.appendChild(new Option(
-      `Transcription: ${p.choice}${language ? `, ${language}` : ""}`, index ? `${p.id}|${language}` : p.id)));
+      `${p.choice}${language ? `, ${language}` : ""}`, index ? `${p.id}|${language}` : p.id)));
   }
   if ([...sel.options].some(o => o.value === previous)) sel.value = previous;
   else restoreControlPreference("pipelineSel");
   const model = $("runModel"), chosenModel = model.value;
-  model.replaceChildren(...META.diarization_models.map(m => new Option(`Diarization: ${m.label}`, m.id)));
+  model.replaceChildren(...META.diarization_models.map(m => new Option(m.label, m.id)));
   if ([...model.options].some(o => o.value === chosenModel)) model.value = chosenModel;
   else { model.value = META.diarization_default; restoreControlPreference("runModel"); }
   filterSettings();

@@ -514,8 +514,8 @@ try {
     assert.equal(await evaluate('$("runModel").value'),'community-1','Scribe cannot use Precision');
     await evaluate('$("pipelineSel").value="transcribe4";$("pipelineSel").dispatchEvent(new Event("change"))');
     assert.deepEqual(await evaluate('[...$("pipelineSel").options].map(o=>o.textContent)'),
-                     ['Transcription: Local Whisper','Transcription: SUNET Scribe (remote), Swedish (verbatim)',
-                      'Transcription: SUNET Scribe (remote), Swedish']);
+                     ['Local Whisper','SUNET Scribe (remote), Swedish (verbatim)',
+                      'SUNET Scribe (remote), Swedish']);
   });
   await check('Scribe uploads a recording again without new consent, but asks before a first upload',async()=>{
     await evaluate('$("pipelineSel").value="scribe";$("pipelineSel").dispatchEvent(new Event("change"))');
@@ -1162,9 +1162,9 @@ try {
     await evaluate('$("pipelineSel").value="scribe";$("pipelineSel").dispatchEvent(new Event("change"))');
     assert.equal(await evaluate('document.getElementById("scribeLanguage")'),null,'Languages are transcription choices');
     assert.deepEqual(await evaluate('[...$("pipelineSel").options].map(o=>[o.value,o.textContent])'),
-                     [['transcribe4','Transcription: Local Whisper'],
-                      ['scribe','Transcription: SUNET Scribe (remote), Swedish (verbatim)'],
-                      ['scribe|Swedish','Transcription: SUNET Scribe (remote), Swedish']]);
+                     [['transcribe4','Local Whisper'],
+                      ['scribe','SUNET Scribe (remote), Swedish (verbatim)'],
+                      ['scribe|Swedish','SUNET Scribe (remote), Swedish']]);
     assert.equal(await evaluate('runQuery().get("language")'),'Swedish (verbatim)');
     assert.equal(await evaluate('document.getElementById("scribeScope")'),null,'The ticked files decide the scope');
     await evaluate('currentBase=null;updateRunControls()');
