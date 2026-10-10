@@ -303,6 +303,7 @@ async function loadMeta() {
     throw new Error("The WebUI server is running older code. Run python webui.py --restart in your terminal. This page will retry automatically.");
   }
   META = meta;
+  if (lastStatus) renderRunStatus(lastStatus);
   $("dirInput").value = META.audio_dir;
   const paths = [...(META.audio_paths || [])];
   if (META.audio_dir && !paths.includes(META.audio_dir)) paths.push(META.audio_dir);
@@ -2341,6 +2342,26 @@ function statusText(st) {
   if (st.returncode !== 0) return `Run failed (exit ${st.returncode}). Check the console.`;
   return "Run finished successfully";
 }
+function runIsVisible(st) {
+  // Active jobs remain visible and controllable across windows. Completed
+  // results belong only to the directory in which that run took place.
+  return st.running || !META || !st.audio_dir || st.audio_dir === META.audio_dir;
+}
+function renderRunStatus(status) {
+  const st = runIsVisible(status) ? status : {};
+  if (st !== status) {
+    activeRunId = null;
+    logOffset = 0;
+    $("consoleLog").textContent = "";
+  }
+  $("runDot").className = "dot" + (st.running ? " run" : (st.returncode || st.progress?.error_count || st.progress?.backfill_incomplete ? " err" : ""));
+  $("runStatus").textContent = statusText(st);
+  $("consoleMsg").textContent = statusText(st);
+  const p = st.progress || {};
+  const counts = Object.entries(p.completed || {}).map(([stage, n]) => `${stage}: ${n} completed`).join(" · ");
+  $("progressStatus").textContent = st.pipeline
+    ? [st.audio_dir, p.stage, p.detail, p.current_file, p.total_files ? `file ${p.file_index} of ${p.total_files}` : "", counts, p.last_error].filter(Boolean).join(" · ") : "";
+}
 async function pollRun() {
   if (pollBusy || changingDir) return;
   pollBusy = true;
@@ -2351,16 +2372,20 @@ async function pollRun() {
       initialized = true;
     }
     const seq = ++statusSeq;
+    const folder = folderSeq;
     const st = (await api("/api/run/status")).data;
     // Starting or stopping a run applies its own authoritative status. A poll
     // that was already in flight must not overwrite it with the older state.
-    if (seq !== statusSeq) { connected = true; return; }
+    if (seq !== statusSeq || folder !== folderSeq || changingDir) { connected = true; return; }
     if (activeRunId !== st.run_id) {
       activeRunId = st.run_id; logOffset = 0; $("consoleLog").textContent = "";
     }
-    const { data } = await api(`/api/logs?file=live&offset=${logOffset}`);
-    if (data.next !== undefined) logOffset = data.next;
-    if (data.lines?.length) appendConsole(data.lines);
+    if (runIsVisible(st)) {
+      const { data } = await api(`/api/logs?file=live&offset=${logOffset}`);
+      if (seq !== statusSeq || folder !== folderSeq || changingDir) { connected = true; return; }
+      if (data.next !== undefined) logOffset = data.next;
+      if (data.lines?.length) appendConsole(data.lines);
+    }
     connected = true; lastStatus = st;
     // The folder is server-wide, so another tab can move it under this one.
     // Say so rather than silently answering for a different folder, and let
@@ -2373,13 +2398,7 @@ async function pollRun() {
     }
     $("connectionStatus").textContent = "Connected";
     $("connectionStatus").dataset.state = "ok";
-    $("runDot").className = "dot" + (st.running ? " run" : (st.returncode || st.progress?.error_count || st.progress?.backfill_incomplete ? " err" : ""));
-    $("runStatus").textContent = statusText(st);
-    $("consoleMsg").textContent = statusText(st);
-    const p = st.progress || {};
-    const counts = Object.entries(p.completed || {}).map(([stage, n]) => `${stage}: ${n} completed`).join(" · ");
-    $("progressStatus").textContent = st.pipeline
-      ? [st.audio_dir, p.stage, p.detail, p.current_file, p.total_files ? `file ${p.file_index} of ${p.total_files}` : "", counts, p.last_error].filter(Boolean).join(" · ") : "";
+    renderRunStatus(st);
     if (wasRunning && !st.running) {
       txtVersionsByBase = {};   // a finished run may have written new versions
       await loadFiles();
