@@ -61,7 +61,7 @@ class BrowserTokenProvider:
         r = self.rpc('tools/call', {'name': name, 'arguments': arguments})
         self.session = r.get('_meta', {}).get('com.browseros.neo/session', self.session)
         if r.get('isError'):
-            raise ScribeError('BrowserOS Neo could not inspect Scribe. Check its connection and login.')
+            raise ScribeError('BrowserOS Neo could not execute the Scribe authentication adapter. Check BrowserOS API compatibility; this does not establish that you are logged out.')
         return r
 
     def run(self, code):
@@ -87,12 +87,12 @@ class BrowserTokenProvider:
         self.session = self.headers.get('Mcp-Session-Id')
         self.call('name_session', {'name': 'scribe authentication', 'category': 'dev-tools',
                                   'summary': 'Obtain current API credentials from the existing login UI'})
-        self.page = self.run("return await browser.pages.newPage('https://scribe.sunet.se/user');")
+        self.page = self.run("const page = await browser.open('https://scribe.sunet.se/user'); return page.id;")
 
     def close(self):
         if self.page is not None:
             try:
-                self.run('await browser.pages.close(' + str(self.page) + '); return true;')
+                self.run('await browser.page(' + str(self.page) + ').close(); return true;')
             except ScribeError:
                 pass
             self.page = None
@@ -105,26 +105,26 @@ class BrowserTokenProvider:
             self.connect()
         # Reload lets the existing UI refresh its server-side authentication.
         result = self.run('''
-const page = PAGE;
-await browser.nav(page).goto('https://scribe.sunet.se/user');
-try { await browser.wait(page, {for:'text', value:'Username', timeout:15000}); } catch (_) {}
-const state = await browser.observe(page).snapshot();
+const page = browser.page(PAGE);
+await page.goto('https://scribe.sunet.se/user');
+const state = await page.snapshot();
 if (!state.url.startsWith('https://scribe.sunet.se/')) return {loginRequired:true};
-const text = await browser.read(page);
+const text = await page.read();
 if (!text.includes('Username') || !text.includes('User settings')) return {loginRequired:true};
-await browser.evaluate(page, {code: `
+await page.evaluateInPage(`
 const label = Array.from(document.querySelectorAll('div')).find(e => e.children.length === 0 && e.textContent.trim() === 'Username');
 const control = label?.nextElementSibling;
 if (!control || getComputedStyle(control).cursor !== 'pointer') throw new Error('Username control missing');
-control.click(); return true;`});
-await browser.wait(page, {for:'text', value:'Your user token is used to authenticate API requests.'});
-const token = await browser.evaluate(page, {code: `
+control.click(); return true;`);
+const ready = await page.waitForText('Your user token is used to authenticate API requests.');
+if (!ready.matched) throw new Error('Scribe token dialog did not open');
+const token = await page.evaluateInPage(`
 const dialog = Array.from(document.querySelectorAll('[role="dialog"]')).find(e => e.innerText.includes('User token'));
 const token = Array.from(dialog?.querySelectorAll('input,textarea') || []).map(e=>e.value).find(v=>/^eyJ[^.]+\\.[^.]+\\.[^.]+$/.test(v));
-return token || null;`});
-await browser.evaluate(page, {code: `
+return token || null;`);
+await page.evaluateInPage(`
 const dialog = Array.from(document.querySelectorAll('[role="dialog"]')).find(e=>e.innerText.includes('User token'));
-Array.from(dialog?.querySelectorAll('button') || []).find(e=>e.innerText.trim().toUpperCase()==='CLOSE')?.click(); return true;`});
+Array.from(dialog?.querySelectorAll('button') || []).find(e=>e.innerText.trim().toUpperCase()==='CLOSE')?.click(); return true;`);
 return {token:token.value};
 '''.replace('PAGE', str(self.page)))
         if result.get('loginRequired'):
