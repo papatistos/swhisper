@@ -102,3 +102,27 @@ def effective_settings(config):
     result['backfill_sensevoice_device'] = config.backfill_sensevoice_device or result['backfill_device']
     result['pipeline_parameters_requested'] = config.get_pipeline_config()
     return result
+
+
+def enforce_scribe_nemotron(config, work_dir):
+    """Pin the worker's promised engines after applying global/sidecar settings.
+
+    Return whether a previous result must be replaced because it used local
+    backfill or speaker truncation. The remote Scribe result remains reusable.
+    """
+    import json
+    import re
+    config.pipeline_model = 'nvidia/Nemotron-3-Diarization'
+    config.backfill_missing_turns = False
+    config.backfill_enable_sensevoice = False
+    config.max_speakers = None
+    marker = completion_marker(work_dir)
+    if not marker.exists():
+        return False
+    try:
+        stamp = re.search(r'^# Start: (\d{8}-\d{6})$', marker.read_text(), re.M)[1]
+        metadata = json.loads((marker.parent / 'json' / f'audio_{stamp}_diarized.json').read_text())['metadata']
+        settings = metadata['processing']['settings']
+        return settings.get('backfill_missing_turns') is not False or settings.get('max_speakers') is not None
+    except (OSError, ValueError, KeyError, TypeError):
+        return True

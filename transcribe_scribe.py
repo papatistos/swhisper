@@ -72,7 +72,7 @@ def restore_working_audio(source, wav_path, state, state_path):
     print("Local audio copy rebuilt. Continuing with the saved Scribe job.", flush=True)
 
 
-def local_diarization(source, work_dir, json_name, diarization_model=None, force=False):
+def local_diarization(source, work_dir, json_name, diarization_model=None, force=False, strict_scribe_nemotron=False):
     # Imports delayed until after remote transcription. Local Whisper loads only if backfill needs it.
     from diarize import DiarizationConfig
     from diarize4 import ensure_pyannote_v4, resolve_pyannote_token
@@ -99,6 +99,9 @@ def local_diarization(source, work_dir, json_name, diarization_model=None, force
     if diarization_model:
         config.pipeline_model = DIARIZATION_MODELS[diarization_model]
     config = configure(config, source, work_dir)
+    if strict_scribe_nemotron:
+        from scribe_processing import enforce_scribe_nemotron
+        force = enforce_scribe_nemotron(config, work_dir) or force
     reason = diarization_reason(config, source, work_dir, force)
     if reason is None:
         print("Reusing the local diarization of this Scribe transcript; "
@@ -286,7 +289,8 @@ def run_locked(args, source, work_dir):
     if not args.transcription_only:
         # Diarization is aligned to the transcript, so a new one needs a new run.
         local_diarization(source, work_dir, output_path.name, getattr(args, "diarization_model", None),
-                          force=new_transcript or getattr(args, "rediarize", False))
+                          force=new_transcript or getattr(args, "rediarize", False),
+                          strict_scribe_nemotron=getattr(args, "strict_scribe_nemotron", False))
     print(f"Prototype results: {work_dir}", flush=True)
 
 
@@ -303,6 +307,8 @@ def main(argv=None):
                         help="Get tokens from BrowserOS Neo (default), or use an environment token")
     parser.add_argument("--diarization-model", choices=sorted(DIARIZATION_MODELS),
                         help="Local diarization model for this run (default: SWHISPER_PIPELINE_MODEL, else community-1)")
+    parser.add_argument("--strict-scribe-nemotron", action="store_true",
+                        help="Require Nemotron and disable non-Scribe backfill, overriding sidecars")
     parser.add_argument("--retranscribe", action="store_true",
                         help="Upload again for a new SUNET transcript; the saved one moves to superseded/")
     parser.add_argument("--rediarize", action="store_true",
