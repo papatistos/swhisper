@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from scribe_api import ScribeClient, ScribeError, atomic_json, normalize_result
 from audio_integrity import pcm_checksum, checksum_without_jpr_metadata
 from run_scope import DIARIZATION_MODELS
+from scribe_processing import language_code, recording_language, scribe_language
 # State of the finished remote job; a retranscription starts a new one.
 REMOTE_JOB_KEYS = ("job_id", "upload_started", "queue_started", "adopted_job", "output_sha256")
 
@@ -72,7 +73,8 @@ def restore_working_audio(source, wav_path, state, state_path):
     print("Local audio copy rebuilt. Continuing with the saved Scribe job.", flush=True)
 
 
-def local_diarization(source, work_dir, json_name, diarization_model=None, force=False, strict_scribe_nemotron=False):
+def local_diarization(source, work_dir, json_name, diarization_model=None, force=False, strict_scribe_nemotron=False,
+                      language="sv"):
     # Imports delayed until after remote transcription. Local Whisper loads only if backfill needs it.
     from diarize import DiarizationConfig
     from diarize4 import ensure_pyannote_v4, resolve_pyannote_token
@@ -113,7 +115,7 @@ def local_diarization(source, work_dir, json_name, diarization_model=None, force
     whisper_settings = WhisperSettings()
     with sidecar_overrides(str(source.parent), source.stem, whisper_settings=whisper_settings):
         config.backfill_whisper_settings = whisper_settings.to_dict()
-    config.backfill_whisper_settings.update(language="sv", task="transcribe", vad=None, verbose=False)
+    config.backfill_whisper_settings.update(language=language, task="transcribe", vad=None, verbose=False)
     config.processing_metadata = {
         "backend": "sunet-scribe", "timing_source": "scribe",
         "backfill_backend": "local-whisper", "settings": effective_settings(config),
@@ -188,6 +190,11 @@ def run(args):
     source = args.audio.expanduser().resolve()
     if not source.is_file():
         raise ScribeError("Audio source does not exist or is not a file.")
+    # Like local Whisper, Scribe transcribes in the recording's SWHISPER_LANGUAGE
+    # unless --language names one; a Scribe name is used as it is.
+    args.language = scribe_language(args.language or recording_language(source),
+                                    getattr(args, "mode", "verbatim"))
+    print(f"Scribe language: {args.language}", flush=True)
     work_dir = (args.work_dir or source.parent / "scribe-prototype" / source.stem).expanduser().resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     # The directory belongs to one recording/settings combination. Never mix runs.
@@ -306,7 +313,7 @@ def run_locked(args, source, work_dir):
         # Outside whisper-json-output so diarize.py never treats raw data as input.
         atomic_json(work_dir / "scribe-transcript.json", transcript)
         atomic_json(work_dir / "scribe-words.json", words)
-        result = normalize_result(transcript, words, language="sv")
+        result = normalize_result(transcript, words, language=language_code(args.language))
         result["scribe"] = {
             "job_id": state["job_id"], "requested_language": args.language,
             "source_sha256": identity["sha256"], "audio_sha256": state["wav_sha256"],
@@ -324,7 +331,8 @@ def run_locked(args, source, work_dir):
         # Diarization is aligned to the transcript, so a new one needs a new run.
         local_diarization(source, work_dir, output_path.name, getattr(args, "diarization_model", None),
                           force=new_transcript or getattr(args, "rediarize", False),
-                          strict_scribe_nemotron=getattr(args, "strict_scribe_nemotron", False))
+                          strict_scribe_nemotron=getattr(args, "strict_scribe_nemotron", False),
+                          language=language_code(args.language))
     print(f"Prototype results: {work_dir}", flush=True)
 
 
@@ -335,8 +343,11 @@ def main(argv=None):
     parser.add_argument("audio", type=Path, help="One recording to upload to SUNET")
     parser.add_argument("--work-dir", type=Path, help="Isolated run directory; reused on restart")
     parser.add_argument("--transcription-only", action="store_true", help="Save JSON without local diarization")
-    parser.add_argument("--language", choices=["Swedish (verbatim)", "Swedish"],
-                        default="Swedish (verbatim)", help="Scribe language selector")
+    parser.add_argument("--language",
+                        help="Language code (en, sv, ...) or Scribe language name; default: the recording's "
+                             "SWHISPER_LANGUAGE from its .swhisper sidecar or the global settings, as for local Whisper")
+    parser.add_argument("--mode", choices=["verbatim", "standard"], default="verbatim",
+                        help="verbatim (default) uses the verbatim model where Scribe has one (sv, en, no)")
     parser.add_argument("--auth", choices=["auto", "oidc", "browseros"], default="auto",
                         help="auto (default): scribe-api with the login from `python -m scribe login` "
                              "or OIDC client credentials, falling back to BrowserOS Neo; "

@@ -129,7 +129,7 @@ def test_available_needs_all_oidc_variables(monkeypatch):
     assert not scribe_library.available()
 
 
-def run_cli(tmp_path, monkeypatch, auth, check_error=None, oidc=True, login=False):
+def run_cli(tmp_path, monkeypatch, auth, check_error=None, oidc=True, login=False, sidecar=None, extra=()):
     """Run transcribe_scribe up to the remote step; return which transport transcribed."""
     import transcribe_scribe
     import scribe_api
@@ -145,10 +145,14 @@ def run_cli(tmp_path, monkeypatch, auth, check_error=None, oidc=True, login=Fals
     monkeypatch.setenv("SUNET_SCRIBE_ENCRYPT_PWD", "pw")
     source = tmp_path / "interview.wav"
     source.write_bytes(b"original")
+    if sidecar:
+        source.with_suffix(".swhisper").write_text(sidecar)
     used = []
+    languages = []
 
     def remote(self, wav, state, state_path, language):
         used.append(type(self).__name__)
+        languages.append(language)
         state["job_id"] = "simulated"
         return ({"full_transcription": "Hej", "segments": [{"start": 0, "end": 1, "text": "Hej"}]},
                 {"version": 1, "words": [{"t": "Hej", "s": 0.1, "e": 0.5}]})
@@ -173,10 +177,11 @@ def run_cli(tmp_path, monkeypatch, auth, check_error=None, oidc=True, login=Fals
     monkeypatch.setattr(scribe_api.ScribeClient, "transcribe", remote)
     monkeypatch.setattr(scribe_browser_auth, "BrowserTokenProvider", Browser)
     code = transcribe_scribe.main([str(source), "--work-dir", str(tmp_path / "run"),
-                                   "--transcription-only", "--auth", auth])
+                                   "--transcription-only", "--auth", auth, *extra])
     output = tmp_path / "run/whisper-json-output/audio.json"
-    transport = json.loads(output.read_text())["scribe"]["transport"] if output.exists() else None
-    return code, used, transport
+    saved = json.loads(output.read_text()) if output.exists() else None
+    run_cli.last = dict(languages=languages, saved=saved)
+    return code, used, saved["scribe"]["transport"] if saved else None
 
 
 def test_auto_uses_scribe_api_when_oidc_is_configured(tmp_path, monkeypatch):
@@ -233,3 +238,21 @@ def test_an_expired_login_is_reported_and_counts_as_refused(tmp_path):
     # No job can exist, so a rerun after signing in may upload.
     assert error.value.status == 401
     assert "upload_started" not in state
+
+
+def test_scribe_uses_the_recording_language_like_local_whisper(tmp_path, monkeypatch):
+    monkeypatch.setenv("SWHISPER_LANGUAGE", "sv")
+    assert run_cli(tmp_path, monkeypatch, "auto", sidecar="SWHISPER_LANGUAGE=en\n")[0] == 0
+    assert run_cli.last["languages"] == ["English (verbatim)"]
+    assert run_cli.last["saved"]["language"] == "en"
+    assert run_cli.last["saved"]["scribe"]["requested_language"] == "English (verbatim)"
+
+
+def test_standard_mode_and_explicit_language(tmp_path, monkeypatch):
+    assert run_cli(tmp_path, monkeypatch, "auto", extra=("--language", "de", "--mode", "standard"))[0] == 0
+    assert run_cli.last["languages"] == ["German"]
+    assert run_cli.last["saved"]["language"] == "de"
+
+
+def test_a_language_scribe_cannot_run_stops_before_any_upload(tmp_path, monkeypatch):
+    assert run_cli(tmp_path, monkeypatch, "auto", sidecar="SWHISPER_LANGUAGE=ja\n") == (1, [], None)
