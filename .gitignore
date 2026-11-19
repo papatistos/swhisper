@@ -29,3 +29,7 @@ scribe-prototype-backup/SCRIBE_PROTOTYPE.md
 
 # Local working notes; never published.
 notes/
+# Agent instructions and context for this checkout; never published.
+AGENTS.md
+CLAUDE.md
+CONTEXT.md
