@@ -26,3 +26,6 @@ test_pyannote_vad_vs_diarization.py
 test_sensevoice_backfill_live.py
 test_sensevoice_live.py
 scribe-prototype-backup/SCRIBE_PROTOTYPE.md
+
+# Local working notes; never published.
+notes/
