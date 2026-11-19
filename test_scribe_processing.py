@@ -34,7 +34,7 @@ def _browser_auth():
 def test_capabilities_distinguish_remote_and_recovery():
     assert capability('SWHISPER_MIN_SPEAKERS')['scope'] == 'Local processing after Scribe'
     assert capability('SWHISPER_INITIAL_PROMPT')['scope'] == 'Local backfill only'
-    assert capability('SWHISPER_LANGUAGE')['scope'] == 'Unavailable for Scribe'
+    assert capability('SWHISPER_LANGUAGE')['scope'] == 'Scribe and local backfill'
     assert capability('SWHISPER_BACKFILL_ENABLED')['supported']
     assert capability('SWHISPER_INITIAL_PROMPT')['supported']
     assert 'backfill only' in capability('SWHISPER_INITIAL_PROMPT')['description']
@@ -283,3 +283,39 @@ def test_retranscribe_refuses_an_unfinished_job_and_job_adoption(tmp_path):
     assert json.loads((work / 'scribe-state.json').read_text())['job_id'] == 'pending-job'
     with pytest.raises(SystemExit):
         transcribe_scribe.main([str(source), '--work-dir', str(work), '--retranscribe', '--job-id', 'x'])
+
+
+def test_scribe_language_follows_the_local_whisper_codes():
+    from scribe_processing import language_code, scribe_language
+    assert scribe_language('en') == 'English (verbatim)'
+    assert scribe_language('en', 'standard') == 'English'
+    assert scribe_language('sv') == 'Swedish (verbatim)'
+    assert scribe_language('de') == 'German'  # no verbatim model
+    assert scribe_language('nb', 'standard') == 'Norwegian'
+    # Saved runs and the CLI may name the Scribe language directly.
+    assert scribe_language('Swedish (verbatim)', 'standard') == 'Swedish (verbatim)'
+    assert scribe_language('swedish', 'standard') == 'Swedish'
+    assert language_code('English (verbatim)') == 'en'
+    assert language_code('Northern Sámi (Experimental)') == 'no'
+
+
+def test_scribe_language_refuses_what_the_worker_cannot_run():
+    import pytest
+    from scribe_processing import scribe_language
+    for language in ('ja', '', 'Klingon'):
+        with pytest.raises(ValueError, match='SWHISPER_LANGUAGE'):
+            scribe_language(language)
+    with pytest.raises(ValueError):
+        scribe_language('sv', 'fast')
+
+
+def test_recording_language_prefers_the_sidecar(tmp_path, monkeypatch):
+    from scribe_processing import recording_language
+    source = tmp_path / 'talk.wav'
+    source.write_bytes(b'x')
+    monkeypatch.delenv('SWHISPER_LANGUAGE', raising=False)
+    assert recording_language(source) == 'sv'
+    monkeypatch.setenv('SWHISPER_LANGUAGE', 'fi')
+    assert recording_language(source) == 'fi'
+    source.with_suffix('.swhisper').write_text('SWHISPER_LANGUAGE=en\n')
+    assert recording_language(source) == 'en'

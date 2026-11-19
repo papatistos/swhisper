@@ -1,9 +1,71 @@
 """Scribe local-processing policy and UI capabilities, without model imports."""
+import os
 from pathlib import Path
 
 from diarization_status import model_run_reason
 from sidecar import (SIDECAR_PARAMS, STAGE_DIARIZE, apply_sidecar_to_diarization_config,
-                     sidecar_requests_reprocess)
+                     find_sidecar, parse_sidecar_file, sidecar_requests_reprocess)
+
+# Languages the Scribe worker has a model for (scribe-worker utils/settings.py),
+# by the ISO 639-1 code that SWHISPER_LANGUAGE uses for local Whisper.
+SCRIBE_LANGUAGES = {
+    'sv': 'Swedish', 'en': 'English', 'no': 'Norwegian', 'fi': 'Finnish', 'da': 'Danish',
+    'is': 'Icelandic', 'se': 'Northern Sámi (Experimental)', 'fr': 'French', 'de': 'German',
+    'es': 'Spanish', 'it': 'Italian', 'ru': 'Russian', 'uk': 'Ukrainian', 'pt': 'Portuguese',
+    'nl': 'Dutch',
+}
+# Bokmål and Nynorsk use the Norwegian model.
+LANGUAGE_ALIASES = {'nb': 'no', 'nn': 'no'}
+# Languages with a separate "<name> (verbatim)" model in the worker.
+VERBATIM_LANGUAGES = ('Swedish', 'English', 'Norwegian')
+VERBATIM = ' (verbatim)'
+SCRIBE_MODES = ('verbatim', 'standard')
+
+
+def recording_language(source):
+    """SWHISPER_LANGUAGE for one recording, as local Whisper resolves it:
+    the recording's .swhisper sidecar, else the global setting, else sv."""
+    source = Path(source)
+    sidecar = find_sidecar(str(source.parent), source.stem)
+    if sidecar:
+        value = parse_sidecar_file(sidecar).get('SWHISPER_LANGUAGE', '').strip()
+        if value:
+            return value
+    # An explicitly empty value asks local Whisper to detect the language;
+    # Scribe cannot, so scribe_language() refuses it instead of guessing.
+    value = os.getenv('SWHISPER_LANGUAGE')
+    return 'sv' if value is None else value.strip()
+
+
+def scribe_language(language, mode='verbatim'):
+    """The Scribe language for a SWHISPER_LANGUAGE code or a Scribe language name.
+
+    *mode* "verbatim" selects the verbatim model where Scribe has one. A name
+    that already ends in " (verbatim)" is kept. Raises ValueError for a
+    language Scribe cannot transcribe, because the worker would leave such a
+    job in_progress forever.
+    """
+    if mode not in SCRIBE_MODES:
+        raise ValueError(f'Unknown Scribe mode {mode!r}; use verbatim or standard.')
+    key = language.strip()
+    verbatim = mode == 'verbatim'
+    if key.lower().endswith(VERBATIM):
+        key, verbatim = key[:-len(VERBATIM)].strip(), True
+    code = LANGUAGE_ALIASES.get(key.lower(), key.lower())
+    name = SCRIBE_LANGUAGES.get(code) or next(
+        (n for n in SCRIBE_LANGUAGES.values() if n.lower() == key.lower()), None)
+    if name is None:
+        raise ValueError(f'Scribe cannot transcribe SWHISPER_LANGUAGE={language!r}. '
+                         f'Use one of: {", ".join(sorted(SCRIBE_LANGUAGES))}.')
+    return name + VERBATIM if verbatim and name in VERBATIM_LANGUAGES else name
+
+
+def language_code(scribe_name):
+    """The ISO 639-1 code for a Scribe language name, for local Whisper and exports."""
+    base = scribe_name.removesuffix(VERBATIM)
+    code = next(c for c, n in SCRIBE_LANGUAGES.items() if n == base)
+    # Whisper has no Northern Sámi; the worker also uses its Norwegian model.
+    return 'no' if code == 'se' else code
 
 
 UNSUPPORTED = {
@@ -28,16 +90,19 @@ def capability(key):
         return dict(supported=False, scope='Unavailable for Scribe', description=UNSUPPORTED[key])
     if key in LEGACY_TUNING:
         return dict(supported=False, scope='Unavailable for Scribe', description='Not applied by the community-1 path. Use VBx and community segmentation controls.')
+    if key == 'SWHISPER_LANGUAGE':
+        return dict(supported=True, scope='Scribe and local backfill',
+                    description='Selects the Scribe language and the language of local backfill, as for local Whisper.')
     param = SIDECAR_PARAMS.get(key)
     if (param and param.target == 'whisper' and key not in {'SWHISPER_LANGUAGE', 'SWHISPER_TASK', 'SWHISPER_VAD'}) or key in {'SWHISPER_ALIGNMENT_LAYERS', 'SWHISPER_FP16'}:
-        return dict(supported=True, scope='Local backfill only', description='Local Whisper backfill only; does not change the Scribe transcription. Recovery always uses Swedish transcription with VAD off.')
+        return dict(supported=True, scope='Local backfill only', description='Local Whisper backfill only; does not change the Scribe transcription. Recovery uses the language of the recording with VAD off.')
     if key.startswith('SWHISPER_BACKFILL_'):
         return dict(supported=True, scope='Local backfill only', description='Local Whisper recovery of missing turns only. SenseVoice analyzes recovery snippets only.')
     if (param and param.target == 'diarization') or key in {
         'SWHISPER_DIARIZE_DEVICE', 'RECORDING_TYPE', 'INTERVIEWER_NAME', 'INTERVIEWEE_NAME'
     }:
         return dict(supported=True, scope='Local processing after Scribe', description='Applies to local processing after Scribe transcription.')
-    return dict(supported=False, scope='Unavailable for Scribe', description='Does not control SUNET transcription or local recovery. Scribe uses its language selector; recovery uses its own Whisper defaults. Remote prompting, disfluency and alignment controls are unavailable.')
+    return dict(supported=False, scope='Unavailable for Scribe', description='Does not control SUNET transcription or local recovery. Scribe uses SWHISPER_LANGUAGE and the verbatim or standard choice; recovery uses its own Whisper defaults. Remote prompting, disfluency and alignment controls are unavailable.')
 
 
 def configure(config, source, work_dir):
