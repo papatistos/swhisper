@@ -14,7 +14,14 @@ from urllib.parse import quote, urlsplit
 
 
 class ScribeError(RuntimeError):
-    """An actionable remote-processing or result-validation error."""
+    """An actionable remote-processing or result-validation error.
+
+    ``status`` is the HTTP status when the service refused a request.
+    """
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
 
 
 def atomic_json(path, value):
@@ -29,7 +36,86 @@ def atomic_json(path, value):
     os.replace(temporary, path)
 
 
-class ScribeClient:
+def parse_payload(value):
+    """A transcript or word-data result as a dict; the API may JSON-encode it."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            raise ScribeError(
+                "Result is empty, encrypted, or invalid JSON. Check the Scribe encryption "
+                "password and word-data availability. No transcript was accepted."
+            ) from None
+    if not isinstance(value, dict):
+        raise ScribeError("Unexpected Scribe result payload.")
+    return value
+
+
+MISSING_PASSWORD = (
+    "Scribe job completed, but no encryption password is configured. "
+    "Set SWHISPER_SCRIBE_PASSWORD to the Scribe account's encryption password and rerun."
+)
+
+
+class RemoteJobs:
+    """Resumable upload, queue and poll of one Scribe job.
+
+    Subclasses provide the transport: ``upload``, ``status``, ``queue`` and
+    ``results``, plus ``poll_interval`` and ``wait_seconds``.
+    """
+
+    def transcribe(self, wav_path, state, state_path, language):
+        if not state.get("job_id"):
+            if state.get("upload_started"):
+                raise ScribeError(
+                    "A previous upload has an unknown outcome. Inspect Scribe and use --job-id "
+                    "to adopt that job; do not blindly submit the recording again."
+                )
+            state["upload_started"] = True
+            atomic_json(state_path, state)
+            try:
+                state["job_id"] = self.upload(wav_path)
+            except ScribeError as exc:
+                # Auth/quota rejection occurs before a job is created. Clear
+                # this marker so a refreshed credential can retry safely.
+                if exc.status in (401, 403):
+                    state.pop("upload_started", None)
+                    atomic_json(state_path, state)
+                raise
+            atomic_json(state_path, state)
+        job_id = state["job_id"]
+        print(f"Scribe job: {job_id}", flush=True)
+        deadline = time.monotonic() + self.wait_seconds
+        previous = None
+        while True:
+            status = self.status(job_id)
+            if status != previous:
+                print(f"Scribe status: {status}", flush=True)
+                previous = status
+            if status == "completed":
+                break
+            if status in ("failed", "deleted"):
+                raise ScribeError(f"Scribe job {status}; inspect it in Scribe.")
+            if status == "uploaded":
+                if state.get("queue_started"):
+                    raise ScribeError(
+                        "Queue request has an uncertain outcome and job still says uploaded. "
+                        "Check or queue it in Scribe, then rerun."
+                    )
+                state["queue_started"] = True
+                atomic_json(state_path, state)
+                self.queue(job_id, language)
+            elif status not in ("pending", "in_progress", "uploading"):
+                raise ScribeError(f"Unrecognized Scribe job status: {status!r}.")
+            if time.monotonic() >= deadline:
+                raise ScribeError("Stopped waiting for Scribe. Rerun to resume the same job.")
+            time.sleep(self.poll_interval)
+        return self.results(job_id)
+
+
+class ScribeClient(RemoteJobs):
+    """Hand-written HTTP transport, kept as the fallback to scribe_library."""
+
     def __init__(self, token, password, base_url="https://scribe.sunet.se",
                  session=None, poll_interval=10, wait_seconds=86400, token_provider=None):
         self.token_provider = token_provider
@@ -96,10 +182,11 @@ class ScribeClient:
         if response.status_code in (401, 403):
             raise ScribeError(
                 f"Scribe returned HTTP {response.status_code}. Check token, API access and quota; "
-                "refresh credentials locally and rerun to resume."
+                "refresh credentials locally and rerun to resume.", status=response.status_code
             )
         if not 200 <= response.status_code < 300:
-            raise ScribeError(f"Scribe returned HTTP {response.status_code}; job state was preserved.")
+            raise ScribeError(f"Scribe returned HTTP {response.status_code}; job state was preserved.",
+                              status=response.status_code)
         try:
             envelope = response.json()
         except ValueError:
@@ -154,71 +241,12 @@ class ScribeClient:
 
     def result(self, job_id, suffix):
         if not self.password:
-            raise ScribeError(
-                "Scribe job completed, but no encryption password is configured. "
-                "Set SWHISPER_SCRIBE_PASSWORD to the Scribe account's encryption password and rerun."
-            )
-        value = self._request("GET", "/" + quote(job_id, safe="") + suffix,
-                              json={"encryption_password": self.password})
-        if isinstance(value, str):
-            try:
-                value = json.loads(value)
-            except ValueError:
-                raise ScribeError(
-                    "Result is empty, encrypted, or invalid JSON. Check the Scribe encryption "
-                    "password and word-data availability. No transcript was accepted."
-                ) from None
-        if not isinstance(value, dict):
-            raise ScribeError("Unexpected Scribe result payload.")
-        return value
+            raise ScribeError(MISSING_PASSWORD)
+        return parse_payload(self._request("GET", "/" + quote(job_id, safe="") + suffix,
+                                           json={"encryption_password": self.password}))
 
-    def transcribe(self, wav_path, state, state_path, language):
-        if not state.get("job_id"):
-            if state.get("upload_started"):
-                raise ScribeError(
-                    "A previous upload has an unknown outcome. Inspect Scribe and use --job-id "
-                    "to adopt that job; do not blindly submit the recording again."
-                )
-            state["upload_started"] = True
-            atomic_json(state_path, state)
-            try:
-                state["job_id"] = self.upload(wav_path)
-            except ScribeError as exc:
-                # Auth/quota rejection occurs before a job is created. Clear
-                # this marker so a refreshed credential can retry safely.
-                if "HTTP 401" in str(exc) or "HTTP 403" in str(exc):
-                    state.pop("upload_started", None)
-                    atomic_json(state_path, state)
-                raise
-            atomic_json(state_path, state)
-        job_id = state["job_id"]
-        print(f"Scribe job: {job_id}", flush=True)
-        deadline = time.monotonic() + self.wait_seconds
-        previous = None
-        while True:
-            status = self.status(job_id)
-            if status != previous:
-                print(f"Scribe status: {status}", flush=True)
-                previous = status
-            if status == "completed":
-                break
-            if status in ("failed", "deleted"):
-                raise ScribeError(f"Scribe job {status}; inspect it in Scribe.")
-            if status == "uploaded":
-                if state.get("queue_started"):
-                    raise ScribeError(
-                        "Queue request has an uncertain outcome and job still says uploaded. "
-                        "Check or queue it in Scribe, then rerun."
-                    )
-                state["queue_started"] = True
-                atomic_json(state_path, state)
-                self.queue(job_id, language)
-            elif status not in ("pending", "in_progress", "uploading"):
-                raise ScribeError(f"Unrecognized Scribe job status: {status!r}.")
-            if time.monotonic() >= deadline:
-                raise ScribeError("Stopped waiting for Scribe. Rerun to resume the same job.")
-            time.sleep(self.poll_interval)
-        return (self.result(job_id, "/result/txt"), self.result(job_id, "/words"))
+    def results(self, job_id):
+        return self.result(job_id, "/result/txt"), self.result(job_id, "/words")
 
 
 def normalize_result(transcript, word_data, language="sv"):
