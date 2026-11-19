@@ -40,24 +40,26 @@ def recording_language(source):
 def scribe_language(language, mode='verbatim'):
     """The Scribe language for a SWHISPER_LANGUAGE code or a Scribe language name.
 
-    *mode* "verbatim" selects the verbatim model where Scribe has one. A name
-    that already ends in " (verbatim)" is kept. Raises ValueError for a
+    A code such as "sv" gets *mode*: "verbatim" selects the verbatim model
+    where Scribe has one. A Scribe name such as "Swedish" or
+    "Swedish (verbatim)" is used exactly as given. Raises ValueError for a
     language Scribe cannot transcribe, because the worker would leave such a
     job in_progress forever.
     """
     if mode not in SCRIBE_MODES:
         raise ValueError(f'Unknown Scribe mode {mode!r}; use verbatim or standard.')
     key = language.strip()
-    verbatim = mode == 'verbatim'
-    if key.lower().endswith(VERBATIM):
-        key, verbatim = key[:-len(VERBATIM)].strip(), True
-    code = LANGUAGE_ALIASES.get(key.lower(), key.lower())
-    name = SCRIBE_LANGUAGES.get(code) or next(
-        (n for n in SCRIBE_LANGUAGES.values() if n.lower() == key.lower()), None)
-    if name is None:
+    named_verbatim = key.lower().endswith(VERBATIM)
+    base = key[:-len(VERBATIM)].strip() if named_verbatim else key
+    code = LANGUAGE_ALIASES.get(base.lower(), base.lower())
+    if code in SCRIBE_LANGUAGES and not named_verbatim:
+        name = SCRIBE_LANGUAGES[code]
+        return name + VERBATIM if mode == 'verbatim' and name in VERBATIM_LANGUAGES else name
+    name = next((n for n in SCRIBE_LANGUAGES.values() if n.lower() == base.lower()), None)
+    if name is None or (named_verbatim and name not in VERBATIM_LANGUAGES):
         raise ValueError(f'Scribe cannot transcribe SWHISPER_LANGUAGE={language!r}. '
                          f'Use one of: {", ".join(sorted(SCRIBE_LANGUAGES))}.')
-    return name + VERBATIM if verbatim and name in VERBATIM_LANGUAGES else name
+    return name + VERBATIM if named_verbatim else name
 
 
 def language_code(scribe_name):

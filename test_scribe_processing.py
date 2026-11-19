@@ -295,6 +295,7 @@ def test_scribe_language_follows_the_local_whisper_codes():
     # Saved runs and the CLI may name the Scribe language directly.
     assert scribe_language('Swedish (verbatim)', 'standard') == 'Swedish (verbatim)'
     assert scribe_language('swedish', 'standard') == 'Swedish'
+    assert scribe_language('Swedish') == 'Swedish'  # a name is never changed by the mode
     assert language_code('English (verbatim)') == 'en'
     assert language_code('Northern Sámi (Experimental)') == 'no'
 
@@ -302,7 +303,7 @@ def test_scribe_language_follows_the_local_whisper_codes():
 def test_scribe_language_refuses_what_the_worker_cannot_run():
     import pytest
     from scribe_processing import scribe_language
-    for language in ('ja', '', 'Klingon'):
+    for language in ('ja', '', 'Klingon', 'German (verbatim)'):
         with pytest.raises(ValueError, match='SWHISPER_LANGUAGE'):
             scribe_language(language)
     with pytest.raises(ValueError):
