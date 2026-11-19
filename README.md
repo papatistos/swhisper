@@ -64,7 +64,7 @@ Or use the [web UI](#web-ui) for all of this.
 - **Sign in once** with SUNET's [scribe-api](https://github.com/SUNET/scribe-api) client:
   ```bash
   conda activate swhisper
-  pip install "git+https://github.com/SUNET/scribe-api@5e707e2579dfadf055272d847749fcbd17907c09"
+  pip install "git+https://github.com/SUNET/scribe-api@84db977f6a9ae062db09bebe19d76ffe1bab849d"
   python scribe_login.py login   # in the swhisper folder
   ```
   `login` prints a URL and a code. Check that the page shows the same code, and sign in with your SUNET login. It asks SUNET for an offline login, which outlasts the browser session. The login is saved in `~/.config/scribe/token.json` and renews itself while you use it. Run `login` again when a run reports that it has expired.
