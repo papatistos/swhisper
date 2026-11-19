@@ -71,7 +71,13 @@ Or use the [web UI](#web-ui) for all of this.
 - **Encryption password**: set `SUNET_SCRIBE_ENCRYPT_PWD` in `.swhisper.env` to your Scribe encryption password, because results are encrypted.
 - **Language**: Scribe uses each recording's `SWHISPER_LANGUAGE`, from its sidecar or the global settings, as local Whisper does. Scribe cannot detect the language, and with the wrong one it translates: English audio with `sv` comes back as Swedish text. Supported: `sv`, `en`, `no`, `fi`, `da`, `is`, `se`, `fr`, `de`, `es`, `it`, `ru`, `uk`, `pt`, `nl`. The run preview shows each recording's language and refuses anything else.
 - **Verbatim or standard**: verbatim (the default) uses KB-Whisper strict for Swedish and the verbatim models for English and Norwegian. Other languages use their normal model in both modes. On the command line, use `--mode standard`, or `--language` to override the recording's language.
-- More detail: [SCRIBE_WEBUI.md](SCRIBE_WEBUI.md) 
+- **In the web UI**:
+  - Choose "SUNET Scribe (remote), verbatim" or "…, standard" in the transcription selector, and a diarization model next to it.
+  - Tick recordings, or run the whole folder. The preview lists each recording's Scribe language and asks for upload consent before a recording's first upload.
+  - A recording with a saved Scribe transcript is diarized and exported locally again without an upload. Tick **Re-transcribe (upload again)** to send it to Scribe again; the previous transcript moves to `superseded/`.
+  - Stopping a run stops local processing only. The Scribe job continues, and the next run resumes it.
+- **Settings that apply**: local diarization, backfilling and export settings apply as usual. Local Whisper settings (model, VAD, chunking, prompts) only affect backfilling. `SWHISPER_SCRIBE_TIMESTAMP_OFFSET` shifts Scribe timestamps (default `0`).
+- **Results** stay in `scribe-webui/` in the audio folder, one folder per recording and Scribe language. Scribe transcripts appear in the web UI next to the local versions.
 
 ## Web UI
 
