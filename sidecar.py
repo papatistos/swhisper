@@ -8,7 +8,7 @@ variable names as the global ``.swhisper.env`` file::
 
     # interview1.swhisper
     SWHISPER_NUM_SPEAKERS=3            # shorthand: sets min AND max speakers
-    SWHISPER_INITIAL_PROMPT="Intervju om arbetet"
+    SWHISPER_INITIAL_PROMPT="Anna Lindqvist, Sahlgrenska, Teams."
     SWHISPER_BACKFILL_IGNORE_WORDS=Balans,Tack
 
 Only whitelisted parameters are honored (see ``SIDECAR_PARAMS`` below).

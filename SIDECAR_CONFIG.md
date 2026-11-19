@@ -20,7 +20,7 @@ The sidecar uses the same `KEY=value` syntax and the same variable names as `.sw
 ```bash
 # interview1.swhisper
 SWHISPER_NUM_SPEAKERS=3                       # shorthand: sets min AND max speakers
-SWHISPER_INITIAL_PROMPT="Intervju om arbetet"
+SWHISPER_INITIAL_PROMPT="Anna Lindqvist, Sahlgrenska, Teams."  # names and terms Whisper should spell right
 SWHISPER_BACKFILL_IGNORE_WORDS=Balans,Tack
 SWHISPER_BACKFILL_TRY_HARDER=false
 ```
