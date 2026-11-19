@@ -22,7 +22,8 @@ def oidc_credentials():
     return tuple(values) if all(values) else None
 
 
-LOGIN_COMMAND = "conda run -n swhisper python -m scribe login"
+# Not `conda run`: it holds back output until exit, hiding the sign-in URL.
+LOGIN_COMMAND = "conda activate swhisper && python -m scribe login"
 
 
 def saved_login():
