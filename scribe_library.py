@@ -12,9 +12,6 @@ from pathlib import Path
 
 from scribe_api import MISSING_PASSWORD, RemoteJobs, ScribeError, parse_payload
 
-VERBATIM = " (verbatim)"
-# Languages with a verbatim model in scribe-worker utils/settings.py.
-VERBATIM_LANGUAGES = ("Swedish", "English", "Norwegian")
 OIDC_VARIABLES = ("OIDC_TOKEN_ENDPOINT", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET")
 
 
@@ -147,24 +144,13 @@ class LibraryScribeClient(RemoteJobs):
         return status
 
     def queue(self, job_id, language):
-        import scribe
-        base = language.removesuffix(VERBATIM)
+        # scribe-api checks the language before sending anything, because the
+        # worker would leave a job with an unknown language in_progress forever.
+        # It accepts the worker's own names, such as "Swedish (verbatim)".
         try:
-            scribe.resolve_language(base)
+            self._call(self.client.start, job_id, language=language, speakers=0, output_format="TXT")
         except ValueError:
             raise ScribeError(f"Scribe does not support the language {language!r}.") from None
-        if base == language:
-            self._call(self.client.start, job_id, language=language, speakers=0, output_format="TXT")
-            return
-        # An unknown language leaves the job in_progress forever, so check here.
-        if base not in VERBATIM_LANGUAGES:
-            raise ScribeError(f"Scribe has no verbatim model for {base}.")
-        # scribe-api 1.0.0 rejects "<language> (verbatim)" although the worker
-        # accepts it, so send the same request through the client's request path.
-        self._call(self.client._request, "PUT", f"/transcriber/{job_id}", json={
-            "language": language, "speakers": 0, "output_format": "TXT",
-            "encryption_password": self.password,
-        })
 
     def results(self, job_id):
         if not self.password:

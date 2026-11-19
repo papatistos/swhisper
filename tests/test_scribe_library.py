@@ -78,7 +78,7 @@ def test_full_job_through_the_library(tmp_path):
     assert remote.transcribe(wav, state, tmp_path / "state.json", "Swedish (verbatim)") == (transcript, words)
     assert state["job_id"] == "job-1" and state["queue_started"]
     queued = session.requests[2][2]["json"]
-    # The worker's verbatim key is sent unchanged, which scribe-api's start() would refuse.
+    # The worker's verbatim key reaches the worker unchanged.
     assert queued == {"language": "Swedish (verbatim)", "speakers": 0, "output_format": "TXT",
                       "encryption_password": "pw"}
 
