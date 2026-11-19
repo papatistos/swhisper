@@ -65,9 +65,11 @@ Or use the [web UI](#web-ui) for all of this.
   ```bash
   conda activate swhisper
   pip install "git+https://github.com/SUNET/scribe-api@5e707e2579dfadf055272d847749fcbd17907c09"
-  python -m scribe login
+  python scribe_login.py login   # in the swhisper folder
   ```
-  `login` prints a URL and a code. Check that the page shows the same code, and sign in with your SUNET login. The login is saved in `~/.config/scribe/token.json` and renews itself while you use it. Run `login` again when a run reports that it has expired.
+  `login` prints a URL and a code. Check that the page shows the same code, and sign in with your SUNET login. It asks SUNET for an offline login, which outlasts the browser session. The login is saved in `~/.config/scribe/token.json` and renews itself while you use it. Run `login` again when a run reports that it has expired.
+  - `python scribe_login.py status` shows the kind of login and when it expires if unused.
+  - `python scribe_login.py logout` revokes the login at SUNET and deletes the saved file.
 - **Encryption password**: set `SUNET_SCRIBE_ENCRYPT_PWD` in `.swhisper.env` to your Scribe encryption password, because results are encrypted.
 - **Language**: Scribe uses each recording's `SWHISPER_LANGUAGE`, from its sidecar or the global settings, as local Whisper does. Scribe cannot detect the language, and with the wrong one it translates: English audio with `sv` comes back as Swedish text. Supported: `sv`, `en`, `no`, `fi`, `da`, `is`, `se`, `fr`, `de`, `es`, `it`, `ru`, `uk`, `pt`, `nl`. The run preview shows each recording's language and refuses anything else.
 - **Verbatim or standard**: verbatim (the default) uses KB-Whisper strict for Swedish and the verbatim models for English and Norwegian. Other languages use their normal model in both modes. On the command line, use `--mode standard`, or `--language` to override the recording's language.
