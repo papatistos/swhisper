@@ -153,6 +153,33 @@ def local_diarization(source, work_dir, json_name, diarization_model=None, force
         atomic_json(record_path, record)
 
 
+def library_client(args, password):
+    """A checked scribe-api client for --auth oidc or auto, else None for the fallback.
+
+    In auto mode, missing OIDC credentials or a refused GET /me select the
+    BrowserOS fallback. Nothing has been uploaded at that point.
+    """
+    if args.auth not in ("auto", "oidc"):
+        return None
+    import scribe_library
+    if args.auth == "auto" and not scribe_library.available():
+        print("scribe-api or its OIDC client credentials are not configured; "
+              "using the BrowserOS fallback.", flush=True)
+        return None
+    client = scribe_library.LibraryScribeClient(
+        password, args.base_url, poll_interval=args.poll_interval, wait_seconds=args.wait_seconds)
+    try:
+        client.check()
+    except ScribeError as exc:
+        client.close()
+        if args.auth == "oidc":
+            raise
+        print(f"scribe-api could not sign in ({exc}) Using the BrowserOS fallback.", flush=True)
+        return None
+    print("Using scribe-api with OIDC client credentials.", flush=True)
+    return client
+
+
 def run(args):
     source = args.audio.expanduser().resolve()
     if not source.is_file():
@@ -254,22 +281,29 @@ def run_locked(args, source, work_dir):
         if args.auth == "env" and not token and sys.stdin.isatty():
             token = getpass.getpass("SUNET API key or bearer token (hidden): ").strip()
         password = (os.getenv("SUNET_SCRIBE_ENCRYPT_PWD", "").strip()
-                    or os.getenv("SWHISPER_SCRIBE_PASSWORD", "").strip())
+                    or os.getenv("SWHISPER_SCRIBE_PASSWORD", "").strip()
+                    or os.getenv("SCRIBE_ENCRYPTION_PASSWORD", "").strip())
         if not password and sys.stdin.isatty():
             password = getpass.getpass("Scribe encryption password (hidden): ")
+        client = library_client(args, password)
+        # Without a scribe-api client, auto mode falls back to BrowserOS Neo.
+        browser = client is None and args.auth in ("auto", "browseros")
         provider = None
-        if args.auth == "browseros":
+        if browser:
             if args.base_url.rstrip("/") != "https://scribe.sunet.se":
                 raise ScribeError("BrowserOS authentication is restricted to https://scribe.sunet.se.")
             from scribe_browser_auth import BrowserTokenProvider
             provider = BrowserTokenProvider(interactive=sys.stdin.isatty())
         try:
-            client = ScribeClient(token, password, args.base_url, token_provider=provider,
-                                  poll_interval=args.poll_interval, wait_seconds=args.wait_seconds)
+            if client is None:
+                client = ScribeClient(token, password, args.base_url, token_provider=provider,
+                                      poll_interval=args.poll_interval, wait_seconds=args.wait_seconds)
             transcript, words = client.transcribe(wav_path, state, state_path, args.language)
         finally:
             if provider:
                 provider.close()
+            if hasattr(client, "close"):
+                client.close()
         # Outside whisper-json-output so diarize.py never treats raw data as input.
         atomic_json(work_dir / "scribe-transcript.json", transcript)
         atomic_json(work_dir / "scribe-words.json", words)
@@ -280,6 +314,7 @@ def run_locked(args, source, work_dir):
             "base_url": identity["base_url"], "adapter_version": 1,
             "speaker_labels_used": False, "processing_stage": "remote_transcription",
             "timestamp_offset": 0.0, "adopted_job": state.get("adopted_job", False),
+            "transport": getattr(client, "transport", "swhisper-http"),
         }
         atomic_json(output_path, result)
         state["output_sha256"] = sha256(output_path)
@@ -303,8 +338,10 @@ def main(argv=None):
     parser.add_argument("--transcription-only", action="store_true", help="Save JSON without local diarization")
     parser.add_argument("--language", choices=["Swedish (verbatim)", "Swedish"],
                         default="Swedish (verbatim)", help="Scribe language selector")
-    parser.add_argument("--auth", choices=["browseros", "env"], default="browseros",
-                        help="Get tokens from BrowserOS Neo (default), or use an environment token")
+    parser.add_argument("--auth", choices=["auto", "oidc", "browseros", "env"], default="auto",
+                        help="auto (default): scribe-api with OIDC client credentials, falling back to "
+                             "BrowserOS Neo; oidc: scribe-api only; browseros: BrowserOS Neo only; "
+                             "env: a bearer token from the environment")
     parser.add_argument("--diarization-model", choices=sorted(DIARIZATION_MODELS),
                         help="Local diarization model for this run (default: SWHISPER_PIPELINE_MODEL, else community-1)")
     parser.add_argument("--strict-scribe-nemotron", action="store_true",

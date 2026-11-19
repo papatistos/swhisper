@@ -113,3 +113,69 @@ def test_available_needs_all_oidc_variables(monkeypatch):
     assert scribe_library.available()
     monkeypatch.delenv("OIDC_CLIENT_SECRET")
     assert not scribe_library.available()
+
+
+def run_cli(tmp_path, monkeypatch, auth, check_error=None, oidc=True):
+    """Run transcribe_scribe up to the remote step; return which transport transcribed."""
+    import transcribe_scribe
+    import scribe_api
+    import scribe_browser_auth
+
+    for name in scribe_library.OIDC_VARIABLES:
+        if oidc:
+            monkeypatch.setenv(name, "x")
+        else:
+            monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("SUNET_SCRIBE_ENCRYPT_PWD", "pw")
+    source = tmp_path / "interview.wav"
+    source.write_bytes(b"original")
+    used = []
+
+    def remote(self, wav, state, state_path, language):
+        used.append(type(self).__name__)
+        state["job_id"] = "simulated"
+        return ({"full_transcription": "Hej", "segments": [{"start": 0, "end": 1, "text": "Hej"}]},
+                {"version": 1, "words": [{"t": "Hej", "s": 0.1, "e": 0.5}]})
+
+    def check(self):
+        if check_error:
+            raise check_error
+
+    class Browser:
+        def __init__(self, interactive):
+            used.append("browser")
+
+        def get_token(self, force=False):
+            return "token"
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(transcribe_scribe, "prepare_audio", lambda src, dst: dst.write_bytes(b"staged"))
+    monkeypatch.setattr(LibraryScribeClient, "check", check)
+    monkeypatch.setattr(LibraryScribeClient, "transcribe", remote)
+    monkeypatch.setattr(scribe_api.ScribeClient, "transcribe", remote)
+    monkeypatch.setattr(scribe_browser_auth, "BrowserTokenProvider", Browser)
+    code = transcribe_scribe.main([str(source), "--work-dir", str(tmp_path / "run"),
+                                   "--transcription-only", "--auth", auth])
+    output = tmp_path / "run/whisper-json-output/audio.json"
+    transport = json.loads(output.read_text())["scribe"]["transport"] if output.exists() else None
+    return code, used, transport
+
+
+def test_auto_uses_scribe_api_when_oidc_is_configured(tmp_path, monkeypatch):
+    assert run_cli(tmp_path, monkeypatch, "auto") == (0, ["LibraryScribeClient"], "scribe-api")
+
+
+def test_auto_falls_back_to_browseros_without_oidc(tmp_path, monkeypatch):
+    assert run_cli(tmp_path, monkeypatch, "auto", oidc=False) == (0, ["browser", "ScribeClient"], "swhisper-http")
+
+
+def test_auto_falls_back_to_browseros_when_oidc_is_refused(tmp_path, monkeypatch):
+    refused = ScribeError("Scribe returned HTTP 401.", status=401)
+    assert run_cli(tmp_path, monkeypatch, "auto", check_error=refused) == (0, ["browser", "ScribeClient"], "swhisper-http")
+
+
+def test_oidc_mode_has_no_fallback(tmp_path, monkeypatch):
+    refused = ScribeError("Scribe returned HTTP 401.", status=401)
+    assert run_cli(tmp_path, monkeypatch, "oidc", check_error=refused) == (1, [], None)

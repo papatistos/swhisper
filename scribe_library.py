@@ -33,6 +33,8 @@ def available():
 class LibraryScribeClient(RemoteJobs):
     """Scribe jobs through scribe-api; the same interface as scribe_api.ScribeClient."""
 
+    transport = "scribe-api"
+
     def __init__(self, password, base_url="https://scribe.sunet.se", poll_interval=10,
                  wait_seconds=86400, client=None):
         if poll_interval <= 0 or wait_seconds <= 0:
