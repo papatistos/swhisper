@@ -1,6 +1,6 @@
 # swhisper - Swedish Whisper Transcription and Diarization
 
-swhisper transcribes and diarizes recordings, with a focus on Swedish research interviews. It uses the Swedish Whisper model [KBLab/kb-whisper-large](https://huggingface.co/KBLab/kb-whisper-large) (the `strict`, more verbatim version) with [whisper-timestamped](https://github.com/linto-ai/whisper-timestamped) for word timestamps, and [pyannote](https://github.com/pyannote/pyannote-audio) or [Nemotron 3](https://huggingface.co/nvidia/Nemotron-3-Diarization) for speaker diarization. [SUNET Scribe](https://scribe.sunet.se) can do the transcription instead of local Whisper.
+swhisper transcribes and diarizes recordings using the Swedish Whisper model [KBLab/kb-whisper-large](https://huggingface.co/KBLab/kb-whisper-large) (the `strict`, more verbatim version) with [whisper-timestamped](https://github.com/linto-ai/whisper-timestamped) for word timestamps, and [pyannote](https://github.com/pyannote/pyannote-audio) or [Nemotron 3](https://huggingface.co/nvidia/Nemotron-3-Diarization) for speaker diarization. [SUNET Scribe](https://scribe.sunet.se) can do the transcription instead of local Whisper.
 
 Until proven otherwise (and please do!), I believe this is the best available open-source solution for Swedish speech recognition and diarization. It is work in progress; PRs and suggestions are welcome.
 
@@ -71,7 +71,7 @@ Or use the [web UI](#web-ui) for all of this.
 - **Encryption password**: set `SUNET_SCRIBE_ENCRYPT_PWD` in `.swhisper.env` to your Scribe encryption password, because results are encrypted.
 - **Language**: Scribe uses each recording's `SWHISPER_LANGUAGE`, from its sidecar or the global settings, as local Whisper does. Scribe cannot detect the language, and with the wrong one it translates: English audio with `sv` comes back as Swedish text. Supported: `sv`, `en`, `no`, `fi`, `da`, `is`, `se`, `fr`, `de`, `es`, `it`, `ru`, `uk`, `pt`, `nl`. The run preview shows each recording's language and refuses anything else.
 - **Verbatim or standard**: verbatim (the default) uses KB-Whisper strict for Swedish and the verbatim models for English and Norwegian. Other languages use their normal model in both modes. On the command line, use `--mode standard`, or `--language` to override the recording's language.
-- More detail: [SCRIBE_WEBUI.md](SCRIBE_WEBUI.md) and [SCRIBE_PROTOTYPE.md](SCRIBE_PROTOTYPE.md).
+- More detail: [SCRIBE_WEBUI.md](SCRIBE_WEBUI.md) 
 
 ## Web UI
 
