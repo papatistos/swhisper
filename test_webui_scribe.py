@@ -137,7 +137,7 @@ sys.exit(webui_scribe.main())
 ''')
         with patch.dict(webui.PIPELINES, scribe={'script': str(fixture), 'label': 'Simulated Scribe'}), TestClient(webui.app, base_url="http://127.0.0.1:8722") as client:
             preview = client.get('/api/run/preview', params={'pipeline': 'scribe', 'selected': 'a'}).json()
-            result = client.post('/api/run', json=dict(pipeline='scribe', selected='a', language=preview['language'], remote_upload=True, preview_token=preview['token']))
+            result = client.post('/api/run', json=dict(pipeline='scribe', selected='a', mode=preview['mode'], remote_upload=True, preview_token=preview['token']))
             self.assertEqual(result.status_code, 200, result.text)
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
@@ -151,7 +151,8 @@ sys.exit(webui_scribe.main())
             self.assertIn(str(self.root / 'a.wav'), log)
             self.assertNotIn(str(self.root / 'b.wav'), log)
             history = json.loads((self.root / webui.HISTORY_FILENAME).read_text())
-            self.assertEqual(history['scribe']['language'], 'Swedish (verbatim)')
+            self.assertEqual(history['scribe']['mode'], 'verbatim')
+            self.assertEqual(len(history['scribe']['languages']), 1)
             self.assertEqual(history['scribe']['files'], ['a.wav'])
             self.assertTrue(any('scribe-state.json' in f for f in history['files_produced']))
             self.assertEqual((self.root / 'a.wav').read_bytes(), b'original')
@@ -187,7 +188,7 @@ assert 'diarize.utils' not in sys.modules
             for body in ({'pipeline': 'scribe'}, {'pipeline': 'scribe', 'preview_token': preview['token']}):
                 with self.assertRaises(webui.HTTPException):
                     webui.api_run(body)
-            body = dict(pipeline='scribe', selected='a', language=preview['language'],
+            body = dict(pipeline='scribe', selected='a', mode=preview['mode'],
                         preview_token=preview['token'], remote_upload=True)
             webui.api_run(body)
             self.assertEqual(start.call_args.args[0], 'scribe')
@@ -206,7 +207,7 @@ assert 'diarize.utils' not in sys.modules
         self.assertFalse(preview['files'][0]['remote'])
         self.assertIn('no upload', preview['files'][0]['reason'])
         with patch.object(self.state, 'start') as start:
-            webui.api_run(dict(pipeline='scribe', selected='a', language=preview['language'],
+            webui.api_run(dict(pipeline='scribe', selected='a', mode=preview['mode'],
                                preview_token=preview['token']))
             start.assert_called_once()
         # Without a saved transcript the same request needs consent again.
@@ -214,7 +215,7 @@ assert 'diarize.utils' not in sys.modules
         preview = webui.api_run_preview('scribe', selected='a')
         self.assertTrue(preview['remote'])
         with patch.object(self.state, 'start') as start, self.assertRaises(webui.HTTPException):
-            webui.api_run(dict(pipeline='scribe', selected='a', language=preview['language'],
+            webui.api_run(dict(pipeline='scribe', selected='a', mode=preview['mode'],
                                preview_token=preview['token']))
         start.assert_not_called()
 
@@ -299,30 +300,54 @@ assert 'diarize.utils' not in sys.modules
         self.assertIn('--rediarize', adapter.call_args.args[0])
 
     def test_selected_scope_validates_identity_before_remote_start(self):
-        selected = webui.api_run_preview('scribe', selected='a', language='Swedish')
+        selected = webui.api_run_preview('scribe', selected='a', mode='standard')
         self.assertEqual([r['file'] for r in selected['files']], ['a.wav'])
-        self.assertEqual(selected['language'], 'Swedish')
+        self.assertEqual(selected['mode'], 'standard')
         token = selected['token']
         (self.root / 'a.wav').write_bytes(b'changed')
-        self.assertNotEqual(token, webui.api_run_preview('scribe', selected='a', language='Swedish')['token'])
+        self.assertNotEqual(token, webui.api_run_preview('scribe', selected='a', mode='standard')['token'])
         (self.root / 'a.mp3').write_bytes(b'ambiguous')
         (self.root / 'a.m4a').write_bytes(b'another source')
         for selected in ('a', '../a', 'missing'):
             with self.assertRaises(webui.HTTPException):
                 webui.api_run_preview('scribe', selected=selected)
         with self.assertRaises(webui.HTTPException):
-            webui.api_run_preview('scribe', language='English')
+            webui.api_run_preview('scribe', mode='English')
         (self.root / 'outside.wav').symlink_to('/etc/hosts')
         with self.assertRaises(webui.HTTPException):
             webui.api_run_preview('scribe')
 
     def test_scribe_preview_is_explicit_and_isolated(self):
-        result = webui.api_run_preview('scribe')
-        self.assertEqual(result['language'], 'Swedish (verbatim)')
+        with patch.dict('os.environ', {'SWHISPER_LANGUAGE': 'sv'}):
+            result = webui.api_run_preview('scribe')
+        self.assertEqual(result['mode'], 'verbatim')
+        self.assertEqual([r['language'] for r in result['files']], ['Swedish (verbatim)'] * 2)
         self.assertEqual([r['file'] for r in result['files']], ['a.wav', 'b.wav'])
         self.assertTrue(all(r['work_dir'].startswith(str(self.root / 'scribe-webui')) for r in result['files']))
         self.assertIn('upload', ' '.join(result['notes']))
         self.assertEqual(list(self.root.iterdir()).__len__(), 2)
+
+    def test_each_recording_is_planned_in_its_own_language(self):
+        import webui_scribe
+        (self.root / 'b.swhisper').write_text('SWHISPER_LANGUAGE=en\n')
+        with patch.dict('os.environ', {'SWHISPER_LANGUAGE': 'sv'}):
+            plan = webui.api_run_preview('scribe', mode='standard')
+        rows = {r['file']: r for r in plan['files']}
+        self.assertEqual(rows['a.wav']['language'], 'Swedish')
+        self.assertEqual(rows['b.wav']['language'], 'English')
+        self.assertIn('Scribe language English', rows['b.wav']['reason'])
+        # The CLI receives the reviewed Scribe name for each recording.
+        with patch('transcribe_scribe.main', return_value=0) as adapter, \
+                patch.dict('os.environ', {'SWHISPER_LANGUAGE': 'sv'}):
+            self.assertEqual(webui_scribe.main([json.dumps(plan)]), 0)
+        sent = [call.args[0][call.args[0].index('--language') + 1] for call in adapter.call_args_list]
+        self.assertEqual(sent, ['Swedish', 'English'])
+
+    def test_a_language_scribe_cannot_run_is_refused_in_the_preview(self):
+        (self.root / 'b.swhisper').write_text('SWHISPER_LANGUAGE=ja\n')
+        with self.assertRaises(webui.HTTPException) as error:
+            webui.api_run_preview('scribe')
+        self.assertIn('b.wav', str(error.exception.detail))
 
 
 if __name__ == '__main__':

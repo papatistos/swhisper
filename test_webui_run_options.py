@@ -181,7 +181,7 @@ class RunOptionTests(unittest.TestCase):
     def test_meta_offers_local_whisper_and_scribe_as_transcription_choices(self):
         meta = webui.api_meta()
         self.assertEqual([p['id'] for p in meta['pipelines'] if p['choice']], ['transcribe4', 'scribe'])
-        self.assertEqual(meta['scribe_languages'], ['Swedish (verbatim)', 'Swedish'])
+        self.assertEqual(meta['scribe_modes'], ['verbatim', 'standard'])
 
     def test_model_change_in_standard_pipeline_reuses_transcription(self):
         self.transcribed()
@@ -220,7 +220,7 @@ class RunOptionTests(unittest.TestCase):
         self.assertFalse(again['consent_required'])
         self.assertIn('Uploads again', again['files'][0]['reason'])
         with patch.object(self.state, 'start') as start:
-            webui.api_run(dict(pipeline='scribe', selected='a', language=again['language'],
+            webui.api_run(dict(pipeline='scribe', selected='a', mode=again['mode'],
                                preview_token=again['token'], diarization_model='nemotron', retranscribe=['a']))
         start.assert_called_once()
         with patch('transcribe_scribe.main', return_value=0) as adapter:

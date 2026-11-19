@@ -6,16 +6,16 @@ from pathlib import Path
 from run_scope import DIARIZATION_MODELS
 from webui_run import FORMATS
 from audio_sources import source_audio_files
-from scribe_processing import completion_marker, diarization_reason, effective_settings
+from scribe_processing import (SCRIBE_MODES, completion_marker, diarization_reason, effective_settings,
+                               recording_language, scribe_language)
 
-LANGUAGES = ('Swedish (verbatim)', 'Swedish')
 NOTES = [
     'Scribe may upload the listed recordings to https://scribe.sunet.se. Confirm only if remote processing is permitted.',
     'Scribe signs in through scribe-api with the login saved by `python -m scribe login` (run it once as the user who runs the WebUI), or with OIDC client credentials from the server environment. Without either, or if Scribe refuses them, BrowserOS Neo must be logged into Scribe. The server environment must supply the encryption password. Noninteractive authentication failures appear in the run log.',
-    'SUNET controls the initial transcription. Whisper decoding and prompt settings affect local backfill only; language, task and VAD are fixed for recovery. Choose the Scribe language in the transcription selector.',
+    'SUNET controls the initial transcription in the language of each recording (SWHISPER_LANGUAGE, as for local Whisper). The transcription selector chooses verbatim or standard models; verbatim applies to Swedish, English and Norwegian. Whisper decoding and prompt settings affect local backfill only; task and VAD are fixed for recovery.',
     'Local diarization (community-1, or Nemotron when selected), Whisper backfill and exports use saved settings. SenseVoice is optional for backfill snippets only. Scribe timestamp offset defaults to zero. Precision and parameter testing remain unavailable.',
     'Each start resumes validated remote transcription. Local diarization runs when it has no result from the selected model, when a new Scribe transcript arrives, or when forced. Uncertain uploads or queue requests are never automatically replayed.',
-    'Stop cancels local waiting and processing only. Remote jobs continue. Start with the same selection and language to resume.',
+    'Stop cancels local waiting and processing only. Remote jobs continue. Start with the same selection, language and mode to resume.',
     'Original recordings and local results are preserved. Scribe output, state and cache stay in scribe-webui.',
 ]
 
@@ -53,14 +53,16 @@ def previously_uploaded(work):
             or (work / 'superseded').is_dir())
 
 
-def preview_scribe(audio_dir, selected='', language=LANGUAGES[0], diarization_model='', retranscribe=False,
+def preview_scribe(audio_dir, selected='', mode=SCRIBE_MODES[0], diarization_model='', retranscribe=False,
                    rediarize=False, only=None):
     """Plan a Scribe run for the whole folder, one *selected* recording, or the
     basenames in *only*. *retranscribe* and *rediarize* are True for every
-    recording, or collections of basenames to redo in this run."""
+    recording, or collections of basenames to redo in this run. Each
+    recording is transcribed in its own SWHISPER_LANGUAGE; *mode* chooses
+    verbatim or standard models."""
     audio = Path(audio_dir).resolve()
-    if language not in LANGUAGES:
-        raise ValueError('Unsupported Scribe language')
+    if mode not in SCRIBE_MODES:
+        raise ValueError('Unsupported Scribe mode')
     if diarization_model and diarization_model not in DIARIZATION_MODELS:
         raise ValueError('Unsupported diarization model')
     sources = [audio / name for name in sorted(source_audio_files(audio))]
@@ -78,6 +80,11 @@ def preview_scribe(audio_dir, selected='', language=LANGUAGES[0], diarization_mo
         if source.is_file() and source.suffix.lower() in FORMATS:
             if source.is_symlink():
                 raise ValueError('Scribe does not upload symlinked recordings')
+            try:
+                language = scribe_language(recording_language(source), mode)
+            except ValueError as exc:
+                raise ValueError(f'{source.name}: {exc}') from None
+            # The work directory belongs to one recording and Scribe language.
             key = hashlib.sha256((source.name + language).encode()).hexdigest()[:16]
             work = audio / 'scribe-webui' / key
             if work.resolve() != work:
@@ -108,15 +115,16 @@ def preview_scribe(audio_dir, selected='', language=LANGUAGES[0], diarization_mo
                              else "Resume or upload" if remote else "Reuses the saved Scribe transcript; no upload or SUNET login")
             diarization = (f'reuses the local {settings["pipeline_model"]} diarization' if diarize_reason is None
                            else f'diarization {settings["pipeline_model"]} ({diarize_reason})')
-            rows.append(dict(local_settings=settings, file=source.name, base=source.stem, work_dir=str(work), fingerprint=fingerprint,
+            rows.append(dict(local_settings=settings, file=source.name, base=source.stem, language=language,
+                             work_dir=str(work), fingerprint=fingerprint,
                              stage='Scribe + local diarization' if remote else 'Local diarization of saved Scribe transcript',
                              action='process' if remote or diarize_reason else 'skip', remote=remote,
                              consent=remote and not previously_uploaded(work),
                              retranscribe=again, rediarize=_named(rediarize, source.stem),
                              reusable=dict(transcription=saved, diarization=saved and reuse_reason is None),
-                             reason=f'{transcription}; {diarization}; {recovery}; SenseVoice {"on" if settings["backfill_enable_sensevoice"] else "off"}; offset {settings["whisper_timestamp_offset"]:g}s; local exports in {work / "transcripts"}'))
+                             reason=f'Scribe language {language}; {transcription}; {diarization}; {recovery}; SenseVoice {"on" if settings["backfill_enable_sensevoice"] else "off"}; offset {settings["whisper_timestamp_offset"]:g}s; local exports in {work / "transcripts"}'))
     listed = lambda choice: choice if isinstance(choice, bool) else sorted(choice)
-    result = dict(audio_dir=str(audio), pipeline='scribe', language=language, selected=selected,
+    result = dict(audio_dir=str(audio), pipeline='scribe', mode=mode, selected=selected,
                   only=sorted(only) if only is not None else None,
                   files=rows, notes=NOTES, remote=any(row['remote'] for row in rows),
                   consent_required=any(row['consent'] for row in rows),
@@ -134,7 +142,7 @@ def main(argv=None):
     files = [row for row in plan['files'] if row['action'] != 'skip']
     for index, row in enumerate(files, 1):
         try:
-            current = preview_scribe(plan['audio_dir'], language=plan['language'], only=plan.get('only'),
+            current = preview_scribe(plan['audio_dir'], mode=plan['mode'], only=plan.get('only'),
                                      diarization_model=plan.get('diarization_model', ''),
                                      retranscribe=plan.get('retranscribe', False),
                                      rediarize=plan.get('rediarize', False))
@@ -147,7 +155,8 @@ def main(argv=None):
         print(f"Scribe file {index}/{len(files)}: {row['file']}", flush=True)
         code = transcribe_scribe.main([
             str(Path(plan['audio_dir']) / row['file']),
-            '--work-dir', row['work_dir'], '--language', plan['language'],
+            # The reviewed Scribe name, used exactly as given.
+            '--work-dir', row['work_dir'], '--language', row['language'],
             '--auth', 'auto',
         ] + (['--diarization-model', plan['diarization_model']] if plan.get('diarization_model') else [])
           + (['--retranscribe'] if row.get('retranscribe') else [])

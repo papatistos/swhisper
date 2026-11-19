@@ -65,7 +65,7 @@ from sidecar import (
 )
 from webui_run import preview_run, ProgressTracker
 from diarization_status import backfill_incomplete, effective_v4_model
-from webui_scribe import LANGUAGES as SCRIBE_LANGUAGES
+from scribe_processing import SCRIBE_MODES
 from run_scope import (DIARIZATION_MODELS, ENV_VAR as ONLY_FILES_ENV, REPROCESS_ENV_VAR as REPROCESS_ENV,
                        RETRANSCRIBE_ENV_VAR as RETRANSCRIBE_ENV, REDIARIZE_ENV_VAR as REDIARIZE_ENV)
 import webui_durations
@@ -647,8 +647,9 @@ class AppState:
             }
             started_at = self.started_at
         if self.scribe_plan:
-            entry['scribe'] = dict(language=self.scribe_plan['language'],
+            entry['scribe'] = dict(mode=self.scribe_plan['mode'],
                                    files=[r['file'] for r in self.scribe_plan['files']],
+                                   languages=[r['language'] for r in self.scribe_plan['files']],
                                    work_dirs=[r['work_dir'] for r in self.scribe_plan['files']],
                                    diarization_model=self.scribe_plan.get('diarization_model', ''),
                                    retranscribe=self.scribe_plan.get('retranscribe', False))
@@ -840,7 +841,7 @@ def api_meta() -> Dict[str, Any]:
         "audio_dir": dirs["audio"],
         "audio_paths": get_commented_audio_dirs(),
         "pipelines": [{"id": k, "label": v["label"], "choice": v.get("choice")} for k, v in PIPELINES.items()],
-        "scribe_languages": list(SCRIBE_LANGUAGES),
+        "scribe_modes": list(SCRIBE_MODES),
         **_diarization_choices(),
         "groups": groups,
         "params": params,
@@ -1975,7 +1976,7 @@ def _check_diarization_model(model: Any, pipeline: str) -> None:
 
 @app.get("/api/run/preview")
 def api_run_preview(pipeline: str, only: Optional[List[str]] = Query(None),
-                    selected: str = '', language: str = 'Swedish (verbatim)',
+                    selected: str = '', mode: str = 'verbatim',
                     diarization_model: str = '', reprocess: bool = False,
                     retranscribe: Optional[List[str]] = Query(None),
                     rediarize: Optional[List[str]] = Query(None)) -> Dict[str, Any]:
@@ -1991,7 +1992,7 @@ def api_run_preview(pipeline: str, only: Optional[List[str]] = Query(None),
     if pipeline == 'scribe':
         from webui_scribe import preview_scribe
         try:
-            preview = preview_scribe(state.audio_dir(), selected, language, diarization_model,
+            preview = preview_scribe(state.audio_dir(), selected, mode, diarization_model,
                                      reprocess or retranscribe, rediarize,
                                      _validated_selection(state.audio_dir(), only))
         except (ValueError, OSError) as exc:
@@ -2043,11 +2044,11 @@ def api_run(body: Dict[str, Any]) -> Dict[str, Any]:
     if pipeline == 'scribe':
         if not body.get('preview_token'):
             raise HTTPException(400, 'Scribe requires a reviewed preview.')
-        selected, language = body.get('selected', ''), body.get('language', 'Swedish (verbatim)')
+        selected, mode = body.get('selected', ''), body.get('mode', 'verbatim')
         only = body.get('only')
-        if not isinstance(selected, str) or not isinstance(language, str) or not isinstance(only, (list, type(None))):
-            raise HTTPException(400, 'Invalid Scribe selection or language')
-        preview = api_run_preview(pipeline, only, selected=selected, language=language, **_run_options(body, pipeline))
+        if not isinstance(selected, str) or not isinstance(mode, str) or not isinstance(only, (list, type(None))):
+            raise HTTPException(400, 'Invalid Scribe selection or mode')
+        preview = api_run_preview(pipeline, only, selected=selected, mode=mode, **_run_options(body, pipeline))
         if preview['token'] != body['preview_token']:
             raise HTTPException(409, 'Folder or settings changed. Review a new run preview before starting.')
         # Consent covers a recording's first upload. Reruns that reuse saved Scribe

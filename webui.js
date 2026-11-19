@@ -145,18 +145,19 @@ function runScope() {
   for (const base of [...runSelection]) if (!known.includes(base)) runSelection.delete(base);
   return [...runSelection];
 }
-// The transcription choice names a pipeline and, for Scribe, a language:
-// "scribe" is its first language and "scribe|Swedish" another one.
+// The transcription choice names a pipeline and, for Scribe, a mode:
+// "scribe" is its first mode (verbatim) and "scribe|standard" the other one.
+// Scribe takes each recording's language from SWHISPER_LANGUAGE.
 function transcription(value = $("pipelineSel").value) {
-  const [pipeline, language] = value.split("|");
-  return { pipeline, language: pipeline === "scribe" ? language || META?.scribe_languages?.[0] || "" : "" };
+  const [pipeline, mode] = value.split("|");
+  return { pipeline, mode: pipeline === "scribe" ? mode || META?.scribe_modes?.[0] || "" : "" };
 }
 // The run preview query for the chosen models. Every pipeline runs the ticked
 // files, or the whole folder when none is ticked.
 function runQuery() {
-  const { pipeline, language } = transcription();
+  const { pipeline, mode } = transcription();
   const query = new URLSearchParams({ pipeline });
-  if (pipeline === "scribe") query.set("language", language);
+  if (pipeline === "scribe") query.set("mode", mode);
   for (const base of runScope()) query.append("only", base);
   query.set("diarization_model", $("runModel").value);
   return query;
@@ -165,9 +166,9 @@ function runQuery() {
 // "Re-diarize" only when the selected models would reuse its result. The whole
 // folder is checked, so the options do not depend on the run selection.
 function reuseQuery() {
-  const { pipeline, language } = transcription();
+  const { pipeline, mode } = transcription();
   const query = new URLSearchParams({ pipeline, diarization_model: $("runModel").value });
-  if (pipeline === "scribe") { query.set("selected", ""); query.set("language", language); }
+  if (pipeline === "scribe") { query.set("selected", ""); query.set("mode", mode); }
   return query;
 }
 function scheduleReuseCheck() {
@@ -314,11 +315,11 @@ async function loadMeta() {
   sel.innerHTML = "";
   // Only the transcription models are offered; the other pipelines stay
   // available to the API and run history.
-  // Scribe is offered once per language.
+  // Scribe is offered once per mode.
   for (const p of META.pipelines.filter(p => p.choice)) {
-    const languages = p.id === "scribe" ? META.scribe_languages || [] : [""];
-    languages.forEach((language, index) => sel.appendChild(new Option(
-      `${p.choice}${language ? `, ${language}` : ""}`, index ? `${p.id}|${language}` : p.id)));
+    const modes = p.id === "scribe" ? META.scribe_modes || [] : [""];
+    modes.forEach((mode, index) => sel.appendChild(new Option(
+      `${p.choice}${mode ? `, ${mode}` : ""}`, index ? `${p.id}|${mode}` : p.id)));
   }
   if ([...sel.options].some(o => o.value === previous)) sel.value = previous;
   else restoreControlPreference("pipelineSel");
@@ -824,7 +825,7 @@ function renderSettings(data, base, scope) {
     note.textContent = "Defaults for future runs. Per-file overrides take precedence. Changes are saved to " + data.path + ". Credentials are not shown."; editor.appendChild(note);
   }
   const applicabilityNote = document.createElement("p"); applicabilityNote.id = "settingsApplicability"; applicabilityNote.className = "settingsNote";
-  applicabilityNote.textContent = "Scribe: these settings control local processing. Backfill-only settings take effect when backfill is enabled. SUNET transcription is controlled by the Scribe language/model selector. Values marked as inherited are editable; greyed-out controls are unavailable.";
+  applicabilityNote.textContent = "Scribe: these settings control local processing. Backfill-only settings take effect when backfill is enabled. SUNET transcription uses SWHISPER_LANGUAGE and the verbatim or standard choice in the transcription selector. Values marked as inherited are editable; greyed-out controls are unavailable.";
   editor.appendChild(applicabilityNote);
   const common = ["RECORDING_TYPE", "INTERVIEWER_NAME", "INTERVIEWEE_NAME", "SWHISPER_LANGUAGE", "SWHISPER_NUM_SPEAKERS", "SWHISPER_MIN_SPEAKERS", "SWHISPER_MAX_SPEAKERS", "SWHISPER_INITIAL_PROMPT", "SWHISPER_FORCE_REPROCESS", "SWHISPER_DIARIZE_FORCE_REPROCESS"];
   const groups = [{name:"Common settings",keys:common.filter(k=>editorMeta.params[k])}, ...editorMeta.groups.map(g=>({...g,keys:g.keys.filter(k=>!common.includes(k))}))];
@@ -2305,7 +2306,7 @@ async function launchPreview() {
         $("previewSummary").textContent = "Consent to the remote upload first, or cancel."; return;
       }
       if (pendingPreview.remote) body.remote_upload = true;
-      body.language = pendingPreview.language;
+      body.mode = pendingPreview.mode;
     }
     if (pendingPreview.only) body.only = pendingPreview.only;
     const { data } = await api("/api/run", {
