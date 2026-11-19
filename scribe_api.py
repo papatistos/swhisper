@@ -122,7 +122,7 @@ class ScribeClient(RemoteJobs):
         if token_provider:
             token = token_provider.get_token()
         if not token:
-            raise ScribeError("Set SUNET_SCRIBE_API_KEY or SWHISPER_SCRIBE_TOKEN to a valid bearer credential.")
+            raise ScribeError("A bearer credential or a token provider is required.")
         # The current SUNET credential is an OIDC JWT. Give a useful local
         # error for an expired token before starting an upload. Opaque bearer
         # credentials remain supported and are checked by the server.

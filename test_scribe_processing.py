@@ -6,11 +6,29 @@ from unittest.mock import patch
 
 from pyannote.core import Annotation, Segment
 
+import scribe_browser_auth
 import transcribe_scribe
 from diarize.pipeline import DiarizationPipeline
 from diarize.utils import BackfillCache, BackfillTranscriber
 from scribe_api import ScribeClient
 from scribe_processing import capability
+
+
+class _BrowserProvider:
+    """Stands in for the BrowserOS Neo sign-in so no browser is opened."""
+
+    def __init__(self, interactive):
+        pass
+
+    def get_token(self, force=False):
+        return 'token'
+
+    def close(self):
+        pass
+
+
+def _browser_auth():
+    return patch.object(scribe_browser_auth, 'BrowserTokenProvider', _BrowserProvider)
 
 
 def test_capabilities_distinguish_remote_and_recovery():
@@ -61,8 +79,8 @@ def test_saved_scribe_result_local_recovery_exports_and_resume(tmp_path):
     def remote(self, wav, state, state_path, language):
         state['job_id'] = 'simulated'
         return copy.deepcopy(transcript), copy.deepcopy(words)
-    argv = [str(source), '--work-dir', str(work), '--auth', 'env']
-    with patch.dict('os.environ', {'SUNET_SCRIBE_API_KEY': 'test-key', 'SUNET_SCRIBE_ENCRYPT_PWD': 'test-password'}), \
+    argv = [str(source), '--work-dir', str(work), '--auth', 'browseros']
+    with patch.dict('os.environ', {'SUNET_SCRIBE_ENCRYPT_PWD': 'test-password'}), _browser_auth(), \
             patch.object(transcribe_scribe, 'prepare_audio', side_effect=lambda src, dst: dst.write_bytes(b'staged')), \
             patch.object(ScribeClient, 'transcribe', autospec=True, side_effect=remote) as service, \
             patch('diarize4.ensure_pyannote_v4'), \
@@ -116,7 +134,6 @@ def test_saved_scribe_result_local_recovery_exports_and_resume(tmp_path):
 
 
 def test_rerun_with_saved_transcript_needs_no_credentials_or_browser(tmp_path, monkeypatch):
-    import scribe_browser_auth
 
     source = tmp_path / 'interview.wav'
     source.write_bytes(b'original')
@@ -131,11 +148,11 @@ def test_rerun_with_saved_transcript_needs_no_credentials_or_browser(tmp_path, m
         return copy.deepcopy(transcript), copy.deepcopy(words)
     staged = patch.object(transcribe_scribe, 'prepare_audio', side_effect=lambda src, dst: dst.write_bytes(b'staged'))
     with staged, patch('diarize4.ensure_pyannote_v4'), patch.object(DiarizationPipeline, 'diarize', return_value=annotation):
-        with patch.dict('os.environ', {'SUNET_SCRIBE_API_KEY': 'test-key', 'SUNET_SCRIBE_ENCRYPT_PWD': 'test-password'}), \
+        with patch.dict('os.environ', {'SUNET_SCRIBE_ENCRYPT_PWD': 'test-password'}), _browser_auth(), \
                 patch.object(ScribeClient, 'transcribe', autospec=True, side_effect=remote):
-            assert transcribe_scribe.main([str(source), '--work-dir', str(work), '--auth', 'env']) == 0
-        # Rerun as the web UI does: BrowserOS auth, no credentials, no SUNET access.
-        for name in ('SUNET_SCRIBE_API_KEY', 'SWHISPER_SCRIBE_TOKEN', 'SUNET_SCRIBE_ENCRYPT_PWD', 'SWHISPER_SCRIBE_PASSWORD'):
+            assert transcribe_scribe.main([str(source), '--work-dir', str(work), '--auth', 'browseros']) == 0
+        # Rerun as the web UI does: no password, no SUNET access, no browser.
+        for name in ('SUNET_SCRIBE_ENCRYPT_PWD', 'SWHISPER_SCRIBE_PASSWORD'):
             monkeypatch.delenv(name, raising=False)
         with patch.object(ScribeClient, '__init__', side_effect=AssertionError('SUNET contacted')), \
                 patch.object(scribe_browser_auth, 'BrowserTokenProvider', side_effect=AssertionError('BrowserOS opened')):
@@ -180,8 +197,8 @@ def test_scribe_run_diarizes_with_nemotron_when_selected(tmp_path):
     def remote(self, wav, state, state_path, language):
         state['job_id'] = 'simulated'
         return copy.deepcopy(transcript), copy.deepcopy(words)
-    argv = [str(source), '--work-dir', str(work), '--auth', 'env']
-    with patch.dict('os.environ', {'SUNET_SCRIBE_API_KEY': 'test-key', 'SUNET_SCRIBE_ENCRYPT_PWD': 'test-password'}), \
+    argv = [str(source), '--work-dir', str(work), '--auth', 'browseros']
+    with patch.dict('os.environ', {'SUNET_SCRIBE_ENCRYPT_PWD': 'test-password'}), _browser_auth(), \
             patch('diarize.DiarizationConfig', NemotronConfig), \
             patch.object(transcribe_scribe, 'prepare_audio', side_effect=lambda src, dst: dst.write_bytes(b'staged')), \
             patch.object(ScribeClient, 'transcribe', autospec=True, side_effect=remote), \
@@ -215,8 +232,8 @@ def test_diarization_model_option_selects_nemotron_for_one_run(tmp_path):
 
     source, annotation, _, remote = _scribe_fixture(tmp_path)
     work = tmp_path / 'run'
-    argv = [str(source), '--work-dir', str(work), '--auth', 'env', '--diarization-model', 'nemotron']
-    with patch.dict('os.environ', {'SUNET_SCRIBE_API_KEY': 'k', 'SUNET_SCRIBE_ENCRYPT_PWD': 'p'}), \
+    argv = [str(source), '--work-dir', str(work), '--auth', 'browseros', '--diarization-model', 'nemotron']
+    with patch.dict('os.environ', {'SUNET_SCRIBE_ENCRYPT_PWD': 'p'}), _browser_auth(), \
             patch.object(transcribe_scribe, 'prepare_audio', side_effect=lambda src, dst: dst.write_bytes(b'staged')), \
             patch.object(ScribeClient, 'transcribe', autospec=True, side_effect=remote), \
             patch('diarize4.ensure_pyannote_v4'), \
@@ -230,8 +247,8 @@ def test_diarization_model_option_selects_nemotron_for_one_run(tmp_path):
 def test_retranscribe_uploads_again_and_keeps_the_previous_transcript(tmp_path):
     source, annotation, calls, remote = _scribe_fixture(tmp_path)
     work = tmp_path / 'run'
-    argv = [str(source), '--work-dir', str(work), '--auth', 'env']
-    with patch.dict('os.environ', {'SUNET_SCRIBE_API_KEY': 'k', 'SUNET_SCRIBE_ENCRYPT_PWD': 'p'}), \
+    argv = [str(source), '--work-dir', str(work), '--auth', 'browseros']
+    with patch.dict('os.environ', {'SUNET_SCRIBE_ENCRYPT_PWD': 'p'}), _browser_auth(), \
             patch.object(transcribe_scribe, 'prepare_audio', side_effect=lambda src, dst: dst.write_bytes(b'staged')), \
             patch.object(ScribeClient, 'transcribe', autospec=True, side_effect=remote), \
             patch('diarize4.ensure_pyannote_v4'), \
@@ -262,7 +279,7 @@ def test_retranscribe_refuses_an_unfinished_job_and_job_adoption(tmp_path):
                 'base_url': 'https://scribe.sunet.se', 'adapter_version': 1, 'audio_format': 'pcm_s16le/16000/mono'}
     (work / 'scribe-state.json').write_text(json.dumps({
         'identity': identity, 'job_id': 'pending-job', 'wav_sha256': transcribe_scribe.sha256(work / 'audio.wav')}))
-    assert transcribe_scribe.main([str(source), '--work-dir', str(work), '--auth', 'env', '--retranscribe']) == 1
+    assert transcribe_scribe.main([str(source), '--work-dir', str(work), '--auth', 'browseros', '--retranscribe']) == 1
     assert json.loads((work / 'scribe-state.json').read_text())['job_id'] == 'pending-job'
     with pytest.raises(SystemExit):
         transcribe_scribe.main([str(source), '--work-dir', str(work), '--retranscribe', '--job-id', 'x'])

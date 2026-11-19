@@ -276,27 +276,22 @@ def run_locked(args, source, work_dir):
                 "The saved transcript has changed and must be restored before this run can continue.")
         print(f"Reusing saved Scribe transcription: {output_path}", flush=True)
     else:
-        token = (os.getenv("SUNET_SCRIBE_API_KEY", "").strip()
-                 or os.getenv("SWHISPER_SCRIBE_TOKEN", "").strip())
-        if args.auth == "env" and not token and sys.stdin.isatty():
-            token = getpass.getpass("SUNET API key or bearer token (hidden): ").strip()
         password = (os.getenv("SUNET_SCRIBE_ENCRYPT_PWD", "").strip()
                     or os.getenv("SWHISPER_SCRIBE_PASSWORD", "").strip()
                     or os.getenv("SCRIBE_ENCRYPTION_PASSWORD", "").strip())
         if not password and sys.stdin.isatty():
             password = getpass.getpass("Scribe encryption password (hidden): ")
         client = library_client(args, password)
-        # Without a scribe-api client, auto mode falls back to BrowserOS Neo.
-        browser = client is None and args.auth in ("auto", "browseros")
+        # Without a scribe-api client, the run signs in through BrowserOS Neo.
         provider = None
-        if browser:
+        if client is None:
             if args.base_url.rstrip("/") != "https://scribe.sunet.se":
                 raise ScribeError("BrowserOS authentication is restricted to https://scribe.sunet.se.")
             from scribe_browser_auth import BrowserTokenProvider
             provider = BrowserTokenProvider(interactive=sys.stdin.isatty())
         try:
             if client is None:
-                client = ScribeClient(token, password, args.base_url, token_provider=provider,
+                client = ScribeClient("", password, args.base_url, token_provider=provider,
                                       poll_interval=args.poll_interval, wait_seconds=args.wait_seconds)
             transcript, words = client.transcribe(wav_path, state, state_path, args.language)
         finally:
@@ -338,10 +333,9 @@ def main(argv=None):
     parser.add_argument("--transcription-only", action="store_true", help="Save JSON without local diarization")
     parser.add_argument("--language", choices=["Swedish (verbatim)", "Swedish"],
                         default="Swedish (verbatim)", help="Scribe language selector")
-    parser.add_argument("--auth", choices=["auto", "oidc", "browseros", "env"], default="auto",
+    parser.add_argument("--auth", choices=["auto", "oidc", "browseros"], default="auto",
                         help="auto (default): scribe-api with OIDC client credentials, falling back to "
-                             "BrowserOS Neo; oidc: scribe-api only; browseros: BrowserOS Neo only; "
-                             "env: a bearer token from the environment")
+                             "BrowserOS Neo; oidc: scribe-api only; browseros: BrowserOS Neo only")
     parser.add_argument("--diarization-model", choices=sorted(DIARIZATION_MODELS),
                         help="Local diarization model for this run (default: SWHISPER_PIPELINE_MODEL, else community-1)")
     parser.add_argument("--strict-scribe-nemotron", action="store_true",

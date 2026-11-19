@@ -9,6 +9,7 @@ from unittest.mock import patch, Mock
 from types import SimpleNamespace
 
 from scribe_api import ScribeClient, ScribeError, normalize_result
+import scribe_browser_auth
 import transcribe_scribe
 
 
@@ -200,15 +201,18 @@ class PrototypeChecks(unittest.TestCase):
             def transcribe(client, wav, state, state_path, language):
                 state["job_id"] = "abc"
                 return TRANSCRIPT, WORDS
-            argv = [str(source), "--work-dir", str(work), "--transcription-only", "--auth", "env"]
-            with patch.dict("os.environ", {"SUNET_SCRIBE_API_KEY": "api-key", "SWHISPER_SCRIBE_TOKEN": "token", "SWHISPER_SCRIBE_PASSWORD": "password"}), \
+            argv = [str(source), "--work-dir", str(work), "--transcription-only", "--auth", "browseros"]
+            provider = Mock()
+            provider.get_token.return_value = "browser-token"
+            with patch.dict("os.environ", {"SWHISPER_SCRIBE_PASSWORD": "password"}), \
+                    patch.object(scribe_browser_auth, "BrowserTokenProvider", return_value=provider), \
                     patch.object(transcribe_scribe, "prepare_audio", side_effect=prepare), \
                     patch.object(ScribeClient, "transcribe", autospec=True, side_effect=transcribe) as remote, \
                     patch.object(transcribe_scribe, "local_diarization") as local:
                 self.assertEqual(transcribe_scribe.main(argv), 0)
                 self.assertEqual(transcribe_scribe.main(argv), 0)
                 self.assertEqual(remote.call_count, 1)
-                self.assertEqual(remote.call_args.args[0].token, "api-key")
+                self.assertEqual(remote.call_args.args[0].token, "browser-token")
                 local.assert_not_called()
                 self.assertEqual(source.read_bytes(), b"original audio")
                 source.write_bytes(b"changed")
