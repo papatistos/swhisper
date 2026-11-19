@@ -17,7 +17,7 @@ NEMOTRON = 'nvidia/Nemotron-3-Diarization'
 @pytest.fixture(scope='module')
 def pipeline():
     spec = importlib.util.spec_from_file_location(
-        'diarize_logging_test', Path(__file__).with_name('diarize.py'))
+        'diarize_logging_test', Path(__file__).resolve().parents[1] / 'diarize.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

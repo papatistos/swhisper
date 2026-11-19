@@ -59,7 +59,7 @@ def test_v4_resolves_actual_default_and_precision_override():
 
 @pytest.fixture(scope='module')
 def pipeline():
-    spec = importlib.util.spec_from_file_location('diarize_status_test', Path(__file__).with_name('diarize.py'))
+    spec = importlib.util.spec_from_file_location('diarize_status_test', Path(__file__).resolve().parents[1] / 'diarize.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

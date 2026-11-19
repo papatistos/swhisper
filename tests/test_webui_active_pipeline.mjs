@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
 
-const source = await fs.readFile(new URL('./webui.js', import.meta.url), 'utf8');
+const source = await fs.readFile(new URL('../webui.js', import.meta.url), 'utf8');
 const elements = new Map();
 const element = id => {
   if (!elements.has(id)) elements.set(id, {

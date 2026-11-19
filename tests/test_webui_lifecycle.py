@@ -15,7 +15,7 @@ from urllib.request import ProxyHandler, build_opener
 import webui_lifecycle as lifecycle
 
 
-SCRIPT = Path(__file__).resolve().with_name("webui.py")
+SCRIPT = Path(__file__).resolve().parents[1] / "webui.py"
 
 
 class ProcessSafetyTests(unittest.TestCase):

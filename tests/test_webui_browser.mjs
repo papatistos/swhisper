@@ -5,11 +5,11 @@ import fs from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {setTimeout as delay} from 'node:timers/promises';
 
-const html = await fs.readFile(new URL('./webui.html', import.meta.url), 'utf8');
-const css = await fs.readFile(new URL('./webui.css', import.meta.url), 'utf8');
-const js = await fs.readFile(new URL('./webui.js', import.meta.url), 'utf8');
-const speakerJS = await fs.readFile(new URL('./webui_waveform_speakers.js', import.meta.url), 'utf8');
-const speakerCSS = await fs.readFile(new URL('./webui_waveform_speakers.css', import.meta.url), 'utf8');
+const html = await fs.readFile(new URL('../webui.html', import.meta.url), 'utf8');
+const css = await fs.readFile(new URL('../webui.css', import.meta.url), 'utf8');
+const js = await fs.readFile(new URL('../webui.js', import.meta.url), 'utf8');
+const speakerJS = await fs.readFile(new URL('../webui_waveform_speakers.js', import.meta.url), 'utf8');
+const speakerCSS = await fs.readFile(new URL('../webui_waveform_speakers.css', import.meta.url), 'utf8');
 let audioDir = '/mock/audio', serverFolder = null, offline = false, failSave = false, sidecarDelay = {}, versionDelay = {}, renderDelay = {}, logDelay = {}, pickDelay = 0;
 let status = {running:false, pipeline:null, returncode:null, run_id:null, progress:{completed:{}}};
 const saved = {a:{values:{SWHISPER_NUM_SPEAKERS:'2',SWHISPER_CONDITION_ON_PREVIOUS:'yes'},comment:'original'}, b:{values:{},comment:'B'}};

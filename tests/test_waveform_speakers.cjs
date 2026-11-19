@@ -15,7 +15,7 @@ class Node {
   setAttribute(key, value) {this.attributes[key] = value;}
 }
 const context = {window: {}, document: {createElement: tag => new Node(tag), createDocumentFragment: () => new Node('fragment')}};
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'webui_waveform_speakers.js'), 'utf8'), context);
+vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'webui_waveform_speakers.js'), 'utf8'), context);
 const host = new Node('div');
 const strips = new context.window.WaveformSpeakers(host);
 assert.equal(host.hidden, true);
