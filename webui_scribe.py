@@ -11,7 +11,7 @@ from scribe_processing import completion_marker, diarization_reason, effective_s
 LANGUAGES = ('Swedish (verbatim)', 'Swedish')
 NOTES = [
     'Scribe may upload the listed recordings to https://scribe.sunet.se. Confirm only if remote processing is permitted.',
-    'BrowserOS Neo must be logged into Scribe. The server environment must supply the encryption password. Noninteractive authentication failures appear in the run log.',
+    'Scribe signs in with the OIDC client credentials from the server environment (scribe-api). Without them, or if they are refused, BrowserOS Neo must be logged into Scribe. The server environment must supply the encryption password. Noninteractive authentication failures appear in the run log.',
     'SUNET controls the initial transcription. Whisper decoding and prompt settings affect local backfill only; language, task and VAD are fixed for recovery. Choose the Scribe language in the transcription selector.',
     'Local diarization (community-1, or Nemotron when selected), Whisper backfill and exports use saved settings. SenseVoice is optional for backfill snippets only. Scribe timestamp offset defaults to zero. Precision and parameter testing remain unavailable.',
     'Each start resumes validated remote transcription. Local diarization runs when it has no result from the selected model, when a new Scribe transcript arrives, or when forced. Uncertain uploads or queue requests are never automatically replayed.',
@@ -148,7 +148,7 @@ def main(argv=None):
         code = transcribe_scribe.main([
             str(Path(plan['audio_dir']) / row['file']),
             '--work-dir', row['work_dir'], '--language', plan['language'],
-            '--auth', 'browseros',
+            '--auth', 'auto',
         ] + (['--diarization-model', plan['diarization_model']] if plan.get('diarization_model') else [])
           + (['--retranscribe'] if row.get('retranscribe') else [])
           + (['--rediarize'] if row.get('rediarize') else []))
