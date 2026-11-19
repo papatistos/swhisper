@@ -7,6 +7,8 @@ credentials. The job loop, state file and normalization stay in scribe_api.
 """
 
 import os
+import shlex
+from pathlib import Path
 
 from scribe_api import MISSING_PASSWORD, RemoteJobs, ScribeError, parse_payload
 
@@ -23,7 +25,9 @@ def oidc_credentials():
 
 
 # Not `conda run`: it holds back output until exit, hiding the sign-in URL.
-LOGIN_COMMAND = "conda activate swhisper && python scribe_login.py login"
+# The full path, so the command works from any folder.
+LOGIN_COMMAND = ("conda activate swhisper && python "
+                 + shlex.quote(str(Path(__file__).resolve().with_name("scribe_login.py"))) + " login")
 
 
 def saved_login():
@@ -109,7 +113,7 @@ class LibraryScribeClient(RemoteJobs):
             if exc.status is None:
                 # Token-side messages are written to be shown and never echo
                 # the request, e.g. "Your login has expired. Run ...".
-                message = str(exc).replace("python -m scribe login", "python scribe_login.py login")
+                message = str(exc).replace("`python -m scribe login`", LOGIN_COMMAND).replace("python -m scribe login", LOGIN_COMMAND)
                 raise ScribeError(f"scribe-api could not sign in: {message}", status=401) from None
             raise ScribeError(f"Scribe returned HTTP {exc.status}. Check the scribe-api login "
                               f"({LOGIN_COMMAND}) and API access, then rerun to resume.",
