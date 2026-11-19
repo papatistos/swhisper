@@ -171,7 +171,7 @@ Starting an already running WebUI opens that instance and prints the restart and
 
 It shows your audio files with per-file status (transcribed / diarized / per-file settings / will-reprocess) and recording length, edits the `.swhisper` sidecar files through a grouped form (empty fields = global settings, shown as placeholders), and starts/stops runs with live log output. The directory selector remembers your last folder across restarts in the local `.swhisper-webui.json` file and adds it to the saved-folder history in `.swhisper.env`. If that folder is unavailable, the UI falls back to `SWHISPER_AUDIO_DIR`. `--audio-dir` overrides both for the session. Reconnecting to an existing run can select that run's folder.
 
-The run controls have two selectors. The transcription selector chooses **Local Whisper** (`transcribe4.py`) or **SUNET Scribe (remote)**. The diarization selector chooses **pyannote community-1** or **Nemotron 3**, and it also offers **pyannote Precision-2** when `SWHISPER_USE_PRECISION=true`. A run reuses existing results: a recording that already has a transcript is not transcribed again, and a recording that already has a diarization from the selected model is not diarized again. To add or change speakers without redoing the transcription, choose a different diarization model and select Run. When a recording already has a result from the selected model, **Re-transcribe** or **Re-diarize** appears under its name in the file list; tick it to redo that result in the next run. Re-transcribing also re-diarizes, because diarization is aligned to the transcript. The ticks apply to the next run only. The diarization-first pipeline `transcribe5.py` is not offered in the web UI; run it from the command line. Local Whisper runs each Whisper chunk in a separate process so its model and native GPU allocations are released on exit. This prevents allocations from accumulating across chunks; it does not cap an individual chunk's peak memory.
+The run controls have two selectors. The transcription selector chooses **Local Whisper** (`transcribe4.py`) or **SUNET Scribe (remote)**, which is offered as **verbatim** or **standard** (see [SUNET Scribe](#sunet-scribe-remote-transcription) below). The diarization selector chooses **pyannote community-1** or **Nemotron 3**, and it also offers **pyannote Precision-2** when `SWHISPER_USE_PRECISION=true`. A run reuses existing results: a recording that already has a transcript is not transcribed again, and a recording that already has a diarization from the selected model is not diarized again. To add or change speakers without redoing the transcription, choose a different diarization model and select Run. When a recording already has a result from the selected model, **Re-transcribe** or **Re-diarize** appears under its name in the file list; tick it to redo that result in the next run. Re-transcribing also re-diarizes, because diarization is aligned to the transcript. The ticks apply to the next run only. The diarization-first pipeline `transcribe5.py` is not offered in the web UI; run it from the command line. Local Whisper runs each Whisper chunk in a separate process so its model and native GPU allocations are released on exit. This prevents allocations from accumulating across chunks; it does not cap an individual chunk's peak memory.
 
 Tick files or click **Select all shown** to select the files matching the current search and filter. The Settings tab applies to all checked files: shared values are shown normally, differing values are marked **Mixed values**, and **Save to N files** applies only fields you edit. Each file keeps its other settings and comments. Selections remain checked when filtered out, with a count of hidden selections beside the button. **Clear selection** returns to settings for the open file. Changing the selection prompts you to save or discard any draft. The same selection also controls which files run.
 
@@ -181,6 +181,26 @@ Tick files or click **Select all shown** to select the files matching the curren
 - **Theme.** The interface follows the operating system's light or dark setting.
 
 The server binds to localhost only and additionally refuses requests whose `Host` is not a loopback name and cross-origin requests, which closes DNS rebinding and stops another page in your browser from driving the API.
+
+### SUNET Scribe (remote transcription)
+
+[SUNET Scribe](https://scribe.sunet.se) can do the initial transcription instead of local Whisper. swhisper uploads the recording, waits for the job, and then runs local diarization, backfilling and the usual exports on the returned words. Only confirm the upload if remote processing is permitted for the recording. Run it from the web UI, or for one recording with `python transcribe_scribe.py recording.m4a`.
+
+**Sign in once.** swhisper talks to Scribe through SUNET's [scribe-api](https://github.com/SUNET/scribe-api) client. Install it in the `swhisper` environment and sign in:
+
+```bash
+conda activate swhisper
+pip install "git+https://github.com/SUNET/scribe-api@5e707e2579dfadf055272d847749fcbd17907c09"
+python -m scribe login
+```
+
+`login` prints a URL and a code. Open the URL, check that the page shows the same code, and sign in with your usual SUNET login. The login is saved in `~/.config/scribe/token.json` and renews itself while you use it; run `login` again when a run reports that it has expired. Results are encrypted, so also set `SUNET_SCRIBE_ENCRYPT_PWD` in `.swhisper.env` to your Scribe encryption password.
+
+**Language.** Scribe transcribes each recording in its `SWHISPER_LANGUAGE`, from the recording's `.swhisper` sidecar or the global settings, exactly as local Whisper does. Set the language before the run: Scribe does not detect it, and with the wrong language it translates, so English audio with `sv` comes back as Swedish text. Scribe supports `sv`, `en`, `no`, `fi`, `da`, `is`, `se`, `fr`, `de`, `es`, `it`, `ru`, `uk`, `pt` and `nl`; the run preview shows each recording's Scribe language and refuses any other value before uploading.
+
+**Verbatim or standard.** Verbatim (the default) uses the verbatim model where Scribe has one: KB-Whisper strict for Swedish, and verbatim variants for English and Norwegian. Standard uses the ordinary model. Other languages use their ordinary model in both modes. On the command line, use `--mode standard`, or `--language` to override the recording's language.
+
+More detail is in [SCRIBE_WEBUI.md](SCRIBE_WEBUI.md) and [SCRIBE_PROTOTYPE.md](SCRIBE_PROTOTYPE.md).
 
 ### Quick start
 
@@ -263,7 +283,7 @@ Settings are loaded in this order (highest to lowest priority):
 | **Transcription** | | |
 | `SWHISPER_MODEL` | Whisper model from HuggingFace | `"KBLab/kb-whisper-large"` |
 | `SWHISPER_DEVICE` | Processing device | `"mps"` |
-| `SWHISPER_LANGUAGE` | Transcription language | `"sv"` |
+| `SWHISPER_LANGUAGE` | Transcription language, for local Whisper and Scribe | `"sv"` |
 | `SWHISPER_FILE_LIMIT` | Max files to process | *unlimited* |
 | **Diarization** | | |
 | `SWHISPER_MIN_SPEAKERS` | Minimum speakers | `1` |
