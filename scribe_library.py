@@ -2,7 +2,7 @@
 
 https://github.com/SUNET/scribe-api renews its token itself, so no browser
 tab is needed during a run. It signs in with the login saved by
-``python -m scribe login`` (the user's own account), or else with OIDC client
+``python scribe_login.py login`` (the user's own account), or else with OIDC client
 credentials. The job loop, state file and normalization stay in scribe_api.
 """
 
@@ -23,11 +23,11 @@ def oidc_credentials():
 
 
 # Not `conda run`: it holds back output until exit, hiding the sign-in URL.
-LOGIN_COMMAND = "conda activate swhisper && python -m scribe login"
+LOGIN_COMMAND = "conda activate swhisper && python scribe_login.py login"
 
 
 def saved_login():
-    """True when ``python -m scribe login`` has saved a login for this user."""
+    """True when ``python scribe_login.py login`` has saved a login for this user."""
     try:
         from scribe.signin import load_login
     except ImportError:  # scribe-api before device login, or not installed
@@ -109,7 +109,8 @@ class LibraryScribeClient(RemoteJobs):
             if exc.status is None:
                 # Token-side messages are written to be shown and never echo
                 # the request, e.g. "Your login has expired. Run ...".
-                raise ScribeError(f"scribe-api could not sign in: {exc}", status=401) from None
+                message = str(exc).replace("python -m scribe login", "python scribe_login.py login")
+                raise ScribeError(f"scribe-api could not sign in: {message}", status=401) from None
             raise ScribeError(f"Scribe returned HTTP {exc.status}. Check the scribe-api login "
                               f"({LOGIN_COMMAND}) and API access, then rerun to resume.",
                               status=exc.status) from None

@@ -221,7 +221,7 @@ def test_no_login_at_all_names_the_login_command(monkeypatch):
     for name in scribe_library.OIDC_VARIABLES:
         monkeypatch.delenv(name, raising=False)
     assert not scribe_library.available()
-    with pytest.raises(ScribeError, match="python -m scribe login"):
+    with pytest.raises(ScribeError, match=r"python scribe_login\.py login"):
         LibraryScribeClient("pw")
 
 
@@ -237,6 +237,8 @@ def test_an_expired_login_is_reported_and_counts_as_refused(tmp_path):
         remote.transcribe(wav, state, tmp_path / "state.json", "Swedish")
     # No job can exist, so a rerun after signing in may upload.
     assert error.value.status == 401
+    assert "python scribe_login.py login" in str(error.value)
+    assert "python -m scribe login" not in str(error.value)
     assert "upload_started" not in state
 
 

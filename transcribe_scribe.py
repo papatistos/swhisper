@@ -158,7 +158,7 @@ def local_diarization(source, work_dir, json_name, diarization_model=None, force
 def library_client(args, password):
     """A checked scribe-api client for --auth oidc or auto, else None for the fallback.
 
-    scribe-api signs in with the login saved by ``python -m scribe login``, or
+    scribe-api signs in with the login saved by ``python scribe_login.py login``, or
     else with OIDC client credentials. In auto mode, no scribe-api login or a
     refused GET /me selects the BrowserOS fallback. Nothing has been uploaded
     at that point.
@@ -349,7 +349,7 @@ def main(argv=None):
     parser.add_argument("--mode", choices=["verbatim", "standard"], default="verbatim",
                         help="verbatim (default) uses the verbatim model where Scribe has one (sv, en, no)")
     parser.add_argument("--auth", choices=["auto", "oidc", "browseros"], default="auto",
-                        help="auto (default): scribe-api with the login from `python -m scribe login` "
+                        help="auto (default): scribe-api with the login from `python scribe_login.py login` "
                              "or OIDC client credentials, falling back to BrowserOS Neo; "
                              "oidc: scribe-api only; browseros: BrowserOS Neo only")
     parser.add_argument("--diarization-model", choices=sorted(DIARIZATION_MODELS),
