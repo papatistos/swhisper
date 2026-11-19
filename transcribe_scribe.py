@@ -156,15 +156,17 @@ def local_diarization(source, work_dir, json_name, diarization_model=None, force
 def library_client(args, password):
     """A checked scribe-api client for --auth oidc or auto, else None for the fallback.
 
-    In auto mode, missing OIDC credentials or a refused GET /me select the
-    BrowserOS fallback. Nothing has been uploaded at that point.
+    scribe-api signs in with the login saved by ``python -m scribe login``, or
+    else with OIDC client credentials. In auto mode, no scribe-api login or a
+    refused GET /me selects the BrowserOS fallback. Nothing has been uploaded
+    at that point.
     """
     if args.auth not in ("auto", "oidc"):
         return None
     import scribe_library
     if args.auth == "auto" and not scribe_library.available():
-        print("scribe-api or its OIDC client credentials are not configured; "
-              "using the BrowserOS fallback.", flush=True)
+        print("scribe-api has no login; using the BrowserOS fallback. "
+              f"Sign in once with: {scribe_library.LOGIN_COMMAND}", flush=True)
         return None
     client = scribe_library.LibraryScribeClient(
         password, args.base_url, poll_interval=args.poll_interval, wait_seconds=args.wait_seconds)
@@ -176,7 +178,9 @@ def library_client(args, password):
             raise
         print(f"scribe-api could not sign in ({exc}) Using the BrowserOS fallback.", flush=True)
         return None
-    print("Using scribe-api with OIDC client credentials.", flush=True)
+    how = {"saved-login": "the saved scribe-api login",
+           "client-credentials": "OIDC client credentials"}.get(client.sign_in, "scribe-api")
+    print(f"Using scribe-api with {how}.", flush=True)
     return client
 
 
@@ -334,8 +338,9 @@ def main(argv=None):
     parser.add_argument("--language", choices=["Swedish (verbatim)", "Swedish"],
                         default="Swedish (verbatim)", help="Scribe language selector")
     parser.add_argument("--auth", choices=["auto", "oidc", "browseros"], default="auto",
-                        help="auto (default): scribe-api with OIDC client credentials, falling back to "
-                             "BrowserOS Neo; oidc: scribe-api only; browseros: BrowserOS Neo only")
+                        help="auto (default): scribe-api with the login from `python -m scribe login` "
+                             "or OIDC client credentials, falling back to BrowserOS Neo; "
+                             "oidc: scribe-api only; browseros: BrowserOS Neo only")
     parser.add_argument("--diarization-model", choices=sorted(DIARIZATION_MODELS),
                         help="Local diarization model for this run (default: SWHISPER_PIPELINE_MODEL, else community-1)")
     parser.add_argument("--strict-scribe-nemotron", action="store_true",

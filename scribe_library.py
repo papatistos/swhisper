@@ -1,8 +1,9 @@
 """SUNET Scribe transport through the official scribe-api client.
 
-https://github.com/SUNET/scribe-api authenticates with an OIDC
-client-credentials grant and renews the token itself, so no browser is
-involved. The job loop, state file and normalization stay in scribe_api.
+https://github.com/SUNET/scribe-api renews its token itself, so no browser
+tab is needed during a run. It signs in with the login saved by
+``python -m scribe login`` (the user's own account), or else with OIDC client
+credentials. The job loop, state file and normalization stay in scribe_api.
 """
 
 import os
@@ -21,13 +22,38 @@ def oidc_credentials():
     return tuple(values) if all(values) else None
 
 
-def available():
-    """True when scribe-api is installed and OIDC client credentials are set."""
+LOGIN_COMMAND = "conda run -n swhisper python -m scribe login"
+
+
+def saved_login():
+    """True when ``python -m scribe login`` has saved a login for this user."""
+    try:
+        from scribe.signin import load_login
+    except ImportError:  # scribe-api before device login, or not installed
+        return False
+    return load_login() is not None
+
+
+def sign_in_method():
+    """"saved-login", "client-credentials", or None when scribe-api cannot sign in.
+
+    The saved login comes first because it is the user's own Scribe account,
+    with their jobs, quota and encryption key.
+    """
     try:
         import scribe  # noqa: F401
     except ImportError:
-        return False
-    return oidc_credentials() is not None
+        return None
+    if saved_login():
+        return "saved-login"
+    if oidc_credentials() is not None:
+        return "client-credentials"
+    return None
+
+
+def available():
+    """True when scribe-api is installed and has a way to sign in."""
+    return sign_in_method() is not None
 
 
 class LibraryScribeClient(RemoteJobs):
@@ -39,17 +65,24 @@ class LibraryScribeClient(RemoteJobs):
                  wait_seconds=86400, client=None):
         if poll_interval <= 0 or wait_seconds <= 0:
             raise ScribeError("Polling interval and maximum wait must be positive.")
+        self.sign_in = None
         if client is None:
             try:
                 import scribe
             except ImportError:
                 raise ScribeError("scribe-api is not installed. Install it with "
                                   "pip install git+https://github.com/SUNET/scribe-api") from None
-            credentials = oidc_credentials()
-            if credentials is None:
-                raise ScribeError("Set " + ", ".join(OIDC_VARIABLES) + " to use scribe-api.")
+            self.sign_in = sign_in_method()
+            if self.sign_in == "saved-login":
+                from scribe.signin import saved_login_token_source
+                token = saved_login_token_source()
+            elif self.sign_in == "client-credentials":
+                credentials = oidc_credentials()
+                token = lambda: scribe.get_token(*credentials)  # noqa: E731
+            else:
+                raise ScribeError(f"scribe-api has no login. Sign in once with: {LOGIN_COMMAND}")
             client = scribe.ScribeClient(
-                token=lambda: scribe.get_token(*credentials),
+                token=token,
                 base_url=base_url.rstrip("/") + "/api/v1",
                 encryption_password=password or None,
             )
@@ -70,9 +103,15 @@ class LibraryScribeClient(RemoteJobs):
             raise ScribeError("Scribe returned HTTP 403: the transcription quota is used up. "
                               "Job state was preserved.", status=403) from None
         except scribe.AuthError as exc:
-            # A token that cannot be fetched is refused before any job exists.
-            raise ScribeError(f"Scribe returned HTTP {exc.status or 401}. Check the OIDC client "
-                              "credentials and API access, then rerun to resume.", status=exc.status or 401) from None
+            # A token that cannot be fetched is refused before any job exists,
+            # so both cases count as 401 for the upload marker.
+            if exc.status is None:
+                # Token-side messages are written to be shown and never echo
+                # the request, e.g. "Your login has expired. Run ...".
+                raise ScribeError(f"scribe-api could not sign in: {exc}", status=401) from None
+            raise ScribeError(f"Scribe returned HTTP {exc.status}. Check the scribe-api login "
+                              f"({LOGIN_COMMAND}) and API access, then rerun to resume.",
+                              status=exc.status) from None
         except scribe.NotFound:
             raise ScribeError("Scribe returned HTTP 404: the job does not exist or is not yours.",
                               status=404) from None

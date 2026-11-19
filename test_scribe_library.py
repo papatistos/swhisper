@@ -10,6 +10,20 @@ from scribe_api import ScribeError
 from scribe_library import LibraryScribeClient
 
 
+@pytest.fixture(autouse=True)
+def no_saved_login(tmp_path, monkeypatch):
+    """Never read the developer's real ~/.config/scribe/token.json."""
+    monkeypatch.setenv("SCRIBE_TOKEN_FILE", str(tmp_path / "no-login.json"))
+
+
+def save_test_login(tmp_path, monkeypatch):
+    path = tmp_path / "login.json"
+    path.write_text(json.dumps({"issuer": "https://idp.example/realms/r", "client_id": "automations",
+                                "refresh_token": "refresh"}))
+    path.chmod(0o600)
+    monkeypatch.setenv("SCRIBE_TOKEN_FILE", str(path))
+
+
 class Response:
     def __init__(self, status, result=None):
         self.status_code = status
@@ -115,7 +129,7 @@ def test_available_needs_all_oidc_variables(monkeypatch):
     assert not scribe_library.available()
 
 
-def run_cli(tmp_path, monkeypatch, auth, check_error=None, oidc=True):
+def run_cli(tmp_path, monkeypatch, auth, check_error=None, oidc=True, login=False):
     """Run transcribe_scribe up to the remote step; return which transport transcribed."""
     import transcribe_scribe
     import scribe_api
@@ -126,6 +140,8 @@ def run_cli(tmp_path, monkeypatch, auth, check_error=None, oidc=True):
             monkeypatch.setenv(name, "x")
         else:
             monkeypatch.delenv(name, raising=False)
+    if login:
+        save_test_login(tmp_path, monkeypatch)
     monkeypatch.setenv("SUNET_SCRIBE_ENCRYPT_PWD", "pw")
     source = tmp_path / "interview.wav"
     source.write_bytes(b"original")
@@ -179,3 +195,41 @@ def test_auto_falls_back_to_browseros_when_oidc_is_refused(tmp_path, monkeypatch
 def test_oidc_mode_has_no_fallback(tmp_path, monkeypatch):
     refused = ScribeError("Scribe returned HTTP 401.", status=401)
     assert run_cli(tmp_path, monkeypatch, "oidc", check_error=refused) == (1, [], None)
+
+
+def test_auto_uses_the_saved_login_without_oidc(tmp_path, monkeypatch):
+    assert run_cli(tmp_path, monkeypatch, "auto", oidc=False, login=True) == (0, ["LibraryScribeClient"], "scribe-api")
+
+
+def test_saved_login_comes_before_client_credentials(tmp_path, monkeypatch):
+    for name in scribe_library.OIDC_VARIABLES:
+        monkeypatch.setenv(name, "x")
+    assert scribe_library.sign_in_method() == "client-credentials"
+    save_test_login(tmp_path, monkeypatch)
+    assert scribe_library.sign_in_method() == "saved-login"
+    remote = LibraryScribeClient("pw")
+    assert remote.sign_in == "saved-login"
+    remote.close()
+
+
+def test_no_login_at_all_names_the_login_command(monkeypatch):
+    for name in scribe_library.OIDC_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+    assert not scribe_library.available()
+    with pytest.raises(ScribeError, match="python -m scribe login"):
+        LibraryScribeClient("pw")
+
+
+def test_an_expired_login_is_reported_and_counts_as_refused(tmp_path):
+    def expired():
+        raise scribe.AuthError("Your login has expired. Run `python -m scribe login` to sign in.")
+    library = scribe.ScribeClient(expired, requests_per_second=None)
+    remote = LibraryScribeClient("pw", client=library)
+    wav = tmp_path / "audio.wav"
+    wav.write_bytes(b"RIFF")
+    state = {}
+    with pytest.raises(ScribeError, match="Your login has expired") as error:
+        remote.transcribe(wav, state, tmp_path / "state.json", "Swedish")
+    # No job can exist, so a rerun after signing in may upload.
+    assert error.value.status == 401
+    assert "upload_started" not in state
