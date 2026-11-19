@@ -218,6 +218,7 @@ This project builds upon the excellent work of:
 - **[KBLab](https://huggingface.co/KBLab)** for the [kb-whisper-large](https://huggingface.co/KBLab/kb-whisper-large) Swedish Whisper model (which is based on **OpenAI**'s original [Whisper](https://github.com/openai/whisper) speech recognition model).
 - **[whisper-timestamped](https://github.com/linto-ai/whisper-timestamped)** by Jérôme Louradour for precise word-level timestamps
 - **[pyannote-audio](https://github.com/pyannote/pyannote-audio)** by Hervé Bredin for speaker diarization capabilities
+- **[scribe-api](https://github.com/SUNET/scribe-api)** by Kristofer Hallin at [SUNET](https://www.sunet.se) for access to SUNET Scribe
 
 ## Citations
 
