@@ -132,7 +132,7 @@ Total       506 (100.0%)  2707 (100.0%)        5.3  737.0 (100.0%)  220 wpm  306
 - **Preamble**: `SWHISPER_OUTPUT_PREAMBLE` sets the text at the top of transcript files (`\n` for line breaks).
 - **Interview speaker names**: with `RECORDING_TYPE=interview`, the speaker with the most words becomes `INTERVIEWEE_NAME` (default `INTERVIEWEE`) and the second `INTERVIEWER_NAME` (default `INTERVIEWER`). Set it globally or per recording. The names appear in new text exports and the web UI; JSON and RTTM keep the speaker IDs. Names you save yourself take precedence.
 - **Statistics tool**: `diarize/` has a tool for comparing diarization results across settings. See `diarize/STATS_ANALYSIS_README.md`.
-- **SenseVoice** (optional): emotion and audio-event detection (laughter, applause, …) on backfilled segments. Enable with `SWHISPER_BACKFILL_ENABLE_SENSEVOICE=true`. See [SENSEVOICE_INTEGRATION.md](SENSEVOICE_INTEGRATION.md).
+- **SenseVoice** (optional): emotion and audio-event detection (laughter, applause, …) on backfilled segments. Enable with `SWHISPER_BACKFILL_ENABLE_SENSEVOICE=true`.
 
 ### Changing the view without re-running anything
 
